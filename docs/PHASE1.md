@@ -137,12 +137,16 @@ explain what each piece does, why it exists, and what broke during build.
 
 ---
 
-**[Date] — Sprint 1**
-Goal:
-Built:
-Broke:
-Fixed:
-End state:
+**[June 20, 2026] — Sprint 1**
+Goal: Get a minimal FastAPI app running inside Docker, confirm it's reachable.
+Built: backend/main.py with a single /health route, Dockerfile (python:3.12-slim base),
+docker-compose.yml exposing port 8000, requirements.txt pinned to fastapi==0.137.2 and
+uvicorn[standard]==0.48.0.
+Broke: Nothing in the build itself. My own mistake was checking the docker compose
+terminal log for the {"status":"ok"} response instead of actually hitting the route
+in the browser — the terminal log only shows the server starting, not the route response.
+Fixed: Opened http://localhost:8000/health directly, confirmed {"status":"ok"}.
+End state: docker compose up --build successfully serves /health on localhost:8000.
 
 ---
 
