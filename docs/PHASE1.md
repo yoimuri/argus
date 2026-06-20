@@ -150,6 +150,29 @@ End state: docker compose up --build successfully serves /health on localhost:80
 
 ---
 
+**[June 20, 2026] — Sprint 2**
+Goal: 5 core tables live with pgvector + RLS, confirm RLS actually blocks unauthenticated access.
+Built: supabase/migrations/001_core_schema.sql — 5 tables, vector(384) column with IVFFlat index,
+RLS policies on all 5 tables scoped to auth.uid() = user_id.
+Broke: First attempt sa SQL editor failed because I pasted the create table along with the terminal command (cat > ... << EOF)
+on SQL editor, not just the contents of the file. Also learned SQL runs at superuser,
+so it's not a valid RLS test by default.
+Fixed: Pasted file contents only. Used "set role anon" technique to simulate no JWT request and confirm 0 rows will show even if there's a data.
+End state: 5 tables live, RLS confirmed blocking anon access via role simulation.
+
+### ADR-001: Database-Level RLS as Primary Authorization Boundary
+Date: June 20, 2026
+Decision: Authorization enforced at the Postgres RLS layer (auth.uid() = user_id), not in
+FastAPI application code.
+Context: Application-level checks can be skipped if a developer forgets a guard on one route.
+RLS evaluates on every single query at the database itself, regardless of which code path
+reaches it.
+Consequence: Every user-scoped table must carry a user_id column and a matching policy from
+day one. Forgetting this on a new table means that table is wide open via the API.
+Status: Accepted. Verified by simulating an anon (no-JWT) request and confirming 0 rows
+returned against a table containing data.
+
+---
 *(Add a new block for each session)*
 
 ---
