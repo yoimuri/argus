@@ -299,3 +299,4 @@ touching Phase 2 code:
 - [ ] Supabase connection stable from the deployed backend (not just localhost)
 - [ ] PDF upload → embedding → retrieval confirmed working with a real document
 - [ ] Render redeploy tested: Supabase and Groq API keys survive the redeploy without being reset
+| Upload progress/loading indicator | Deferred to a UI polish pass after core pipeline (Sprint 5/6) is feature-complete |
