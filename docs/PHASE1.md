@@ -206,6 +206,24 @@ Status: Accepted. Verified end-to-end: 401 with no token, 200 with a real signed
 JWT.
 
 ---
+
+**[June 21, 2026] — Sprint 3 (frontend half)**
+Goal: Working login/logout flow in Next.js, gated by session state.
+Built: app/login/page.tsx (signInWithPassword), app/dashboard/page.tsx (server component,
+redirects if no user), app/auth/signout/route.ts, proxy.ts (Next.js 16's replacement for
+middleware.ts) refreshing sessions and redirecting logged-out users to /login.
+Broke: Nothing this time, first clean end-to-end run. Followed Supabase's official Next.js 16
+bootstrap pattern exactly (getAll/setAll cookies, proxy.ts naming) instead of older tutorials
+that still reference middleware.ts and get/set/remove, which would have broken silently.
+Fixed: N/A.
+End state: Full login → dashboard → logout flow confirmed working against the real Supabase
+Auth backend, same test@argus.dev user created in Sprint 2.
+
+---
+
+
+
+---
 *(Add a new block for each session)*
 
 ---
