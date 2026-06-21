@@ -173,6 +173,39 @@ Status: Accepted. Verified by simulating an anon (no-JWT) request and confirming
 returned against a table containing data.
 
 ---
+
+**[June 21, 2026] — Sprint 3 (backend half)**
+Goal: FastAPI middleware validates Supabase JWT (ES256/JWKS) on all routes except /health.
+Built: app/middleware/auth.py using PyJWT's PyJWKClient against the project's JWKS endpoint.
+Broke: Three layered bugs, found one at a time.
+  1. JWKS fetch returned 401 — Supabase's API gateway requires an `apikey` header on every
+     request through it, even endpoints serving public keys. PyJWKClient has no apikey by
+     default, so it was rejected before reaching the actual verification logic.
+  2. After adding the apikey header, fetch returned 404 — wasted time testing the wrong path
+     (/auth/v1/jwks vs the correct /auth/v1/.well-known/jwks.json) before confirming both via
+     direct curl.
+  3. Even with the correct path in code, still 404 — SUPABASE_URL in .env had a leftover
+     /rest/v1/ suffix from when I was looking at the Data API page, so the code was building
+     .../rest/v1/auth/v1/.well-known/jwks.json, a path that doesn't exist.
+Fixed: Added apikey header to PyJWKClient, confirmed correct JWKS path via curl against the
+live project before touching code again, corrected SUPABASE_URL to the bare project URL.
+End state: Unauthenticated POST /collections → 401. Authenticated request with a real
+Supabase-issued JWT → 200 with verified user_id attached via request.state.
+
+### ADR-002: JWKS-Based Verification, No Shared Secret in Backend
+Date: June 21, 2026
+Decision: Verify Supabase JWTs using the project's public JWKS endpoint (ES256), not a
+shared HS256 secret stored in the backend.
+Context: This project was created after Supabase's shift to asymmetric signing by default
+(Oct 2025+). A shared secret, if leaked, lets an attacker forge valid tokens. A public key
+used only for verification cannot be used to forge anything.
+Consequence: Backend has one less secret to protect entirely (no SUPABASE_JWT_SECRET in
+.env). Tradeoff: backend now depends on network access to the JWKS endpoint, with PyJWKClient
+caching it locally to reduce repeated calls.
+Status: Accepted. Verified end-to-end: 401 with no token, 200 with a real signed-in user's
+JWT.
+
+---
 *(Add a new block for each session)*
 
 ---
