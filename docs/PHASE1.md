@@ -242,6 +242,15 @@ End state: Successfully processed a real 2025 Verizon DBIR PDF end-to-end. 35 ch
 with populated embedding vectors, confirmed in document_chunks via Table Editor. Sprint 2's
 leftover RLS test fixture cleaned out via cascade delete.
 
+**[June 21, 2026] — Sprint 4 (frontend half)**
+Goal: Upload UI wired to the real backend endpoint.
+Built: UploadPanel.tsx (create collection, pick file, upload), CORS middleware added to
+FastAPI (different ports = different origins, needed explicit allow_origins).
+Broke: Nothing this round.
+Fixed: N/A.
+End state: Full browser flow confirmed working end-to-end: login → create collection →
+upload PDF → 36 chunks created, against a real Verizon DBIR 2025 PDF.
+
 ---
 
 ### ADR-003: Explicit Parent-Ownership Check Before Cross-Table Inserts
@@ -254,6 +263,9 @@ Context: A cross-table WITH CHECK is possible but adds complexity not worth it a
 Consequence: One extra round trip per upload. Acceptable for an MVP; revisit if upload
 volume ever becomes a bottleneck.
 Status: Accepted.
+
+
+
 
 ---
 *(Add a new block for each session)*

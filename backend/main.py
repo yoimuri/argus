@@ -2,16 +2,29 @@ import os
 
 import httpx
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.middleware.auth import JWTAuthMiddleware
 from app.services.document_processor import process_pdf
 
 SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_PUBLISHABLE_KEY = os.environ["SUPABASE_PUBLISHABLE_KEY"]
-MAX_UPLOAD_BYTES = 20 * 1024 * 1024  # 20 MB
+MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB
 
 app = FastAPI()
+
+# Order matters: middleware added later wraps the ones added earlier, so adding
+# CORS after the auth middleware makes CORS the outer layer. That way browser
+# preflight (OPTIONS) requests get handled before they'd otherwise hit the 401
+# from JWTAuthMiddleware, which has no way to attach an Authorization header
+# to a preflight request anyway.
 app.add_middleware(JWTAuthMiddleware)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],
+    allow_methods=["*"],
+    allow_headers=["Authorization", "Content-Type"],
+)
 
 
 @app.get("/health")
@@ -30,8 +43,6 @@ async def supabase_request(method: str, path: str, access_token: str, json_body=
     async with httpx.AsyncClient() as client:
         response = await client.request(method, url, json=json_body, headers=headers)
         if response.status_code >= 400:
-            # Full detail stays server-side. The caller only gets a generic message,
-            # same reasoning as the JWT error logging in auth.py.
             print(f"Supabase request failed: {method} {path} -> {response.status_code}: {response.text}")
             raise HTTPException(status_code=502, detail="Database request failed.")
         return response.json() if response.text else []
@@ -50,9 +61,6 @@ async def create_collection(request: Request):
 
 @app.post("/collections/{collection_id}/documents")
 async def upload_document(collection_id: str, request: Request, file: UploadFile = File(...)):
-    # Ownership check: this query runs as the caller's own JWT, so RLS already
-    # filters out collections that aren't theirs. Empty result covers both
-    # "doesn't exist" and "exists but isn't yours" with the same 404.
     owned = await supabase_request(
         "GET", f"collections?id=eq.{collection_id}&select=id", request.state.access_token
     )
@@ -64,7 +72,7 @@ async def upload_document(collection_id: str, request: Request, file: UploadFile
     if not file_bytes.startswith(b"%PDF"):
         raise HTTPException(status_code=400, detail="File does not appear to be a valid PDF.")
     if len(file_bytes) > MAX_UPLOAD_BYTES:
-        raise HTTPException(status_code=400, detail="File too large (20MB limit).")
+        raise HTTPException(status_code=400, detail="File too large (50MB limit).")
 
     doc_rows = await supabase_request(
         "POST", "documents", request.state.access_token,
