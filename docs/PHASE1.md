@@ -221,7 +221,39 @@ Auth backend, same test@argus.dev user created in Sprint 2.
 
 ---
 
+**[June 21, 2026] — Sprint 4 (backend half)**
+Goal: Upload a PDF, extract text, chunk it, embed it, store rows in document_chunks.
+Built: document_processor.py (pdfplumber extraction, fixed-size chunking with overlap,
+all-MiniLM-L6-v2 local embedding via sentence-transformers), POST /collections, POST
+/collections/{id}/documents. All writes go through Supabase's REST API using the caller's
+own JWT, not the secret key, so RLS still applies to every insert, consistent with ADR-001.
+Broke:
+  1. Container crashed on startup: "python-multipart" missing, FastAPI's File()/UploadFile
+     support depends on it even though nothing imports it directly by name.
+  2. First real upload returned chunks_created: 0. Added temporary debug prints to isolate
+     extraction vs chunking, confirmed the test PDF had no real text layer, a known
+     pdfplumber limitation already listed in this doc's Known Limitations, not a code bug.
+  3. Caught a real authorization gap before shipping: the documents INSERT policy only
+     checks the new row's own user_id, not whether collection_id (from the URL) actually
+     belongs to the caller. Fixed with an explicit ownership check, RLS-filtered, 404 either
+     way if it's missing or not theirs, so existence isn't leaked.
+Fixed: see above.
+End state: Successfully processed a real 2025 Verizon DBIR PDF end-to-end. 35 chunks created
+with populated embedding vectors, confirmed in document_chunks via Table Editor. Sprint 2's
+leftover RLS test fixture cleaned out via cascade delete.
 
+---
+
+### ADR-003: Explicit Parent-Ownership Check Before Cross-Table Inserts
+Date: June 21, 2026
+Decision: Before accepting a file upload, the backend queries the target collection under
+the caller's own JWT and rejects with 404 if it isn't found.
+Context: RLS on documents only validates the new row's own user_id, it has no visibility
+into whether a referenced collection_id in another table actually belongs to the same user.
+Context: A cross-table WITH CHECK is possible but adds complexity not worth it at this scale.
+Consequence: One extra round trip per upload. Acceptable for an MVP; revisit if upload
+volume ever becomes a bottleneck.
+Status: Accepted.
 
 ---
 *(Add a new block for each session)*

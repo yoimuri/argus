@@ -37,4 +37,5 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
             return JSONResponse(status_code=401, content={"detail": "Invalid or expired token"})
 
         request.state.user_id = payload["sub"]
+        request.state.access_token = token
         return await call_next(request)
