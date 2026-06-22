@@ -53,3 +53,7 @@ def process_pdf(file_bytes: bytes) -> list[dict]:
         {"content": chunk, "embedding": embedding, "chunk_index": i}
         for i, (chunk, embedding) in enumerate(zip(chunks, embeddings))
     ]
+
+
+def embed_query(text: str) -> list[float]:
+    return _model.encode([text], convert_to_numpy=True)[0].tolist()

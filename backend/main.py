@@ -1,23 +1,14 @@
-import os
-
-import httpx
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.middleware.auth import JWTAuthMiddleware
 from app.services.document_processor import process_pdf
+from app.services.supabase_client import supabase_request
+from app.agents.graph import research_graph
 
-SUPABASE_URL = os.environ["SUPABASE_URL"]
-SUPABASE_PUBLISHABLE_KEY = os.environ["SUPABASE_PUBLISHABLE_KEY"]
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB
 
 app = FastAPI()
-
-# Order matters: middleware added later wraps the ones added earlier, so adding
-# CORS after the auth middleware makes CORS the outer layer. That way browser
-# preflight (OPTIONS) requests get handled before they'd otherwise hit the 401
-# from JWTAuthMiddleware, which has no way to attach an Authorization header
-# to a preflight request anyway.
 app.add_middleware(JWTAuthMiddleware)
 app.add_middleware(
     CORSMiddleware,
@@ -30,22 +21,6 @@ app.add_middleware(
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
-
-
-async def supabase_request(method: str, path: str, access_token: str, json_body=None):
-    url = f"{SUPABASE_URL}/rest/v1/{path}"
-    headers = {
-        "apikey": SUPABASE_PUBLISHABLE_KEY,
-        "Authorization": f"Bearer {access_token}",
-        "Content-Type": "application/json",
-        "Prefer": "return=representation",
-    }
-    async with httpx.AsyncClient() as client:
-        response = await client.request(method, url, json=json_body, headers=headers)
-        if response.status_code >= 400:
-            print(f"Supabase request failed: {method} {path} -> {response.status_code}: {response.text}")
-            raise HTTPException(status_code=502, detail="Database request failed.")
-        return response.json() if response.text else []
 
 
 @app.post("/collections")
@@ -68,7 +43,6 @@ async def upload_document(collection_id: str, request: Request, file: UploadFile
         raise HTTPException(status_code=404, detail="Collection not found.")
 
     file_bytes = await file.read()
-
     if not file_bytes.startswith(b"%PDF"):
         raise HTTPException(status_code=400, detail="File does not appear to be a valid PDF.")
     if len(file_bytes) > MAX_UPLOAD_BYTES:
@@ -106,3 +80,29 @@ async def upload_document(collection_id: str, request: Request, file: UploadFile
     )
 
     return {"document_id": document["id"], "chunks_created": len(chunk_rows)}
+
+
+@app.post("/research")
+async def research(request: Request):
+    body = await request.json()
+    query = body.get("query")
+    collection_id = body.get("collection_id")
+    if not query or not collection_id:
+        raise HTTPException(status_code=400, detail="query and collection_id are required.")
+
+    owned = await supabase_request(
+        "GET", f"collections?id=eq.{collection_id}&select=id", request.state.access_token
+    )
+    if not owned:
+        raise HTTPException(status_code=404, detail="Collection not found.")
+
+    result = await research_graph.ainvoke({
+        "query": query,
+        "collection_id": collection_id,
+        "access_token": request.state.access_token,
+        "chunks": [],
+        "answer": None,
+        "report": None,
+    })
+
+    return {"report": result["report"], "chunks_used": result["chunks"]}
