@@ -1,9 +1,7 @@
 import os
 import re
-import tempfile
-
 import httpx
-import pdfplumber
+import fitz  # PyMuPDF
 
 HF_TOKEN = os.environ["HF_TOKEN"]
 HF_EMBEDDING_URL = "https://router.huggingface.co/hf-inference/models/sentence-transformers/all-MiniLM-L6-v2/pipeline/feature-extraction"
@@ -31,16 +29,17 @@ def chunk_text(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVE
     return [c for c in chunks if c]
 
 
-def extract_chunks_from_pdf_bytes(file_bytes: bytes) -> list[str]:
-    """Parse PDF via a temp file so we don't hold bytes + pdfplumber buffers in memory."""
-    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=True) as tmp:
-        tmp.write(file_bytes)
-        tmp.flush()
-        text_parts: list[str] = []
-        with pdfplumber.open(tmp.name) as pdf:
-            for page in pdf.pages:
-                text_parts.append(page.extract_text() or "")
-    return chunk_text("\n\n".join(text_parts))
+def extract_chunks_from_pdf_file(file_path: str) -> list[str]:
+    """Parse PDF page-by-page using PyMuPDF to keep memory strictly on disk and C-level."""
+    doc = fitz.open(file_path)
+    full_text = ""
+    
+    for page in doc:
+        # Extract text natively (uses C-level memory, extremely efficient)
+        full_text += page.get_text("text") + "\n\n"
+    doc.close()
+    
+    return chunk_text(full_text)
 
 
 async def _call_hf_embedding(inputs):

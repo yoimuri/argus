@@ -1,11 +1,15 @@
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+import os
+import uuid
+import httpx
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 from app.middleware.auth import JWTAuthMiddleware
-from app.services.document_processor import extract_chunks_from_pdf_bytes, iter_embedded_chunk_batches
+from app.services.document_processor import extract_chunks_from_pdf_file, iter_embedded_chunk_batches
 from app.services.supabase_client import supabase_request
 
-# Render free tier is 512 MB RAM; large PDFs can OOM during parse + embed.
+SUPABASE_URL = os.getenv("SUPABASE_URL")
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # 25 MB
 
 app = FastAPI()
@@ -16,6 +20,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["Authorization", "Content-Type"],
 )
+
+class DocumentUploadRequest(BaseModel):
+    file_path: str
+    file_name: str
 
 
 @app.get("/health")
@@ -35,57 +43,72 @@ async def create_collection(request: Request):
 
 
 @app.post("/collections/{collection_id}/documents")
-async def upload_document(collection_id: str, request: Request, file: UploadFile = File(...)):
+async def upload_document(collection_id: str, req: DocumentUploadRequest, request: Request):
     owned = await supabase_request(
         "GET", f"collections?id=eq.{collection_id}&select=id", request.state.access_token
     )
     if not owned:
         raise HTTPException(status_code=404, detail="Collection not found.")
 
-    file_bytes = await file.read()
-    if not file_bytes.startswith(b"%PDF"):
-        raise HTTPException(status_code=400, detail="File does not appear to be a valid PDF.")
-    if len(file_bytes) > MAX_UPLOAD_BYTES:
-        raise HTTPException(
-            status_code=400,
-            detail="File too large (25MB limit). Use a smaller PDF export for free-tier hosting.",
-        )
-
-    doc_rows = await supabase_request(
-        "POST", "documents", request.state.access_token,
-        json_body={
-            "collection_id": collection_id,
-            "user_id": request.state.user_id,
-            "filename": file.filename,
-            "status": "processing",
-        },
-    )
-    document = doc_rows[0]
-
-    chunk_strings = extract_chunks_from_pdf_bytes(file_bytes)
-    del file_bytes
-
-    chunks_created = 0
-    async for embedded_batch in iter_embedded_chunk_batches(chunk_strings):
-        chunk_rows = [
-            {
-                "document_id": document["id"],
+    token = request.state.access_token
+    storage_url = f"{SUPABASE_URL}/storage/v1/object/{req.file_path}"
+    headers = {"Authorization": f"Bearer {token}"}
+    
+    temp_path = f"temp_{uuid.uuid4()}.pdf"
+    
+    try:
+        # 1. Stream download from Supabase Storage directly to disk (0 memory buffer)
+        async with httpx.AsyncClient() as client:
+            async with client.stream("GET", storage_url, headers=headers) as resp:
+                if resp.status_code != 200:
+                    raise HTTPException(status_code=400, detail="Failed to fetch file from storage.")
+                
+                with open(temp_path, "wb") as f:
+                    async for chunk in resp.aiter_bytes():
+                        f.write(chunk)
+        
+        # 2. Create document record
+        doc_rows = await supabase_request(
+            "POST", "documents", request.state.access_token,
+            json_body={
+                "collection_id": collection_id,
                 "user_id": request.state.user_id,
-                "content": c["content"],
-                "embedding": c["embedding"],
-                "chunk_index": c["chunk_index"],
-            }
-            for c in embedded_batch
-        ]
-        await supabase_request(
-            "POST", "document_chunks", request.state.access_token, json_body=chunk_rows
+                "filename": req.file_name,
+                "status": "processing",
+            },
         )
-        chunks_created += len(chunk_rows)
+        document = doc_rows[0]
 
-    await supabase_request(
-        "PATCH", f"documents?id=eq.{document['id']}", request.state.access_token,
-        json_body={"status": "ready"},
-    )
+        # 3. Extract chunks using PyMuPDF
+        chunk_strings = extract_chunks_from_pdf_file(temp_path)
+
+        # 4. Batch embed + insert
+        chunks_created = 0
+        async for embedded_batch in iter_embedded_chunk_batches(chunk_strings):
+            chunk_rows = [
+                {
+                    "document_id": document["id"],
+                    "user_id": request.state.user_id,
+                    "content": c["content"],
+                    "embedding": c["embedding"],
+                    "chunk_index": c["chunk_index"],
+                }
+                for c in embedded_batch
+            ]
+            await supabase_request(
+                "POST", "document_chunks", request.state.access_token, json_body=chunk_rows
+            )
+            chunks_created += len(chunk_rows)
+
+        await supabase_request(
+            "PATCH", f"documents?id=eq.{document['id']}", request.state.access_token,
+            json_body={"status": "ready"},
+        )
+
+    finally:
+        # 5. Always clean up the temp file
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
 
     return {"document_id": document["id"], "chunks_created": chunks_created}
 
