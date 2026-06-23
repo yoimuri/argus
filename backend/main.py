@@ -59,7 +59,7 @@ async def upload_document(collection_id: str, request: Request, file: UploadFile
     )
     document = doc_rows[0]
 
-    chunks = process_pdf(file_bytes)
+    chunks = await process_pdf(file_bytes)
     chunk_rows = [
         {
             "document_id": document["id"],

@@ -4,7 +4,7 @@ from app.agents.state import ResearchState
 
 
 async def retriever_node(state: ResearchState) -> dict:
-    query_embedding = embed_query(state["query"])
+    query_embedding = await embed_query(state["query"])
 
     rows = await supabase_request(
         "POST",

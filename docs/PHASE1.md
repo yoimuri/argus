@@ -300,3 +300,16 @@ touching Phase 2 code:
 - [ ] PDF upload → embedding → retrieval confirmed working with a real document
 - [ ] Render redeploy tested: Supabase and Groq API keys survive the redeploy without being reset
 | Upload progress/loading indicator | Deferred to a UI polish pass after core pipeline (Sprint 5/6) is feature-complete |
+
+**[June 23, 2026] — Sprint 6 (mid-deploy fix)**
+Goal: Deploy backend to Render's free tier.
+Broke: Render killed the container with "Out of memory (used over 512Mi)". Root cause:
+sentence-transformers pulls in torch, whose footprint alone exceeded the entire free-tier
+RAM ceiling before the app even finished starting.
+Fixed: Replaced local embedding (sentence-transformers + torch) with calls to Hugging
+Face's hosted Inference API for the same model (all-MiniLM-L6-v2), removing torch from
+the backend entirely. Hit a second issue along the way: HF's fine-grained tokens default
+to no Inference Providers permission, causing 403s until the token was regenerated with
+that scope explicitly enabled.
+End state: Local re-test confirmed full pipeline (upload, 36 chunks, embeddings, research
+query with citations) still works correctly through the new hosted embedding path.
