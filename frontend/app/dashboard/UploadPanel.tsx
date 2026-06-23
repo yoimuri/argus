@@ -4,7 +4,7 @@ import { useState, type FormEvent } from 'react'
 import { createClient } from '@/utils/supabase/client'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
-const MAX_UPLOAD_BYTES = 25 * 1024 * 1024 // matches backend; Render free tier is 512 MB RAM
+const MAX_UPLOAD_BYTES = 25 * 1024 * 1024 // matches backend; Render free tier is 512 MB RAM.
 
 export default function UploadPanel() {
   const [collectionName, setCollectionName] = useState('')
@@ -73,14 +73,38 @@ export default function UploadPanel() {
 
     setUploading(true)
     try {
-      const token = await getToken()
-      const formData = new FormData()
-      formData.append('file', file)
+      const supabase = createClient()
+      const { data: { session } } = await supabase.auth.getSession()
+      const token = session?.access_token
+      const userId = session?.user?.id
 
+      if (!token || !userId) throw new Error('User not authenticated')
+
+      // 1. Upload the file directly to Supabase Storage
+      const filePath = `${userId}/${Date.now()}-${file.name}`
+      setStatus('Uploading file to storage...')
+      
+      const { error: uploadError } = await supabase.storage
+        .from('documents')
+        .upload(filePath, file, {
+          cacheControl: '3600',
+          upsert: false
+        })
+
+      if (uploadError) throw new Error(`Storage error: ${uploadError.message}`)
+
+      // 2. Send ONLY the JSON file path to the Render backend
+      setStatus('Processing document...')
       const res = await fetch(`${API_URL}/collections/${collectionId}/documents`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-        body: formData,
+        headers: { 
+          'Content-Type': 'application/json', 
+          Authorization: `Bearer ${token}` 
+        },
+        body: JSON.stringify({
+          file_path: filePath,
+          file_name: file.name
+        }),
       })
 
       if (!res.ok) {
