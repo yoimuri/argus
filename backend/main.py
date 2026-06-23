@@ -14,12 +14,19 @@ SUPABASE_KEY = os.getenv("SUPABASE_PUBLISHABLE_KEY")
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # 25 MB
 
 app = FastAPI()
+
+# Middleware order matters: JWTAuthMiddleware is added first, 
+# so CORSMiddleware wraps it and can intercept OPTIONS requests.
 app.add_middleware(JWTAuthMiddleware)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "https://argus-nine-ivory.vercel.app"],
-    allow_methods=["*"],
-    allow_headers=["Authorization", "Content-Type"],
+    allow_origins=[
+        "http://localhost:3000", 
+        "https://argus-nine-ivory.vercel.app"
+    ],
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "apikey"], # Explicitly allow the headers we use
 )
 
 class DocumentUploadRequest(BaseModel):
@@ -53,10 +60,10 @@ async def upload_document(collection_id: str, req: DocumentUploadRequest, reques
 
     token = request.state.access_token
     
-    # FIX 1: Added 'documents' (bucket name) to the URL path
+    # Include bucket name 'documents' in URL path
     storage_url = f"{SUPABASE_URL}/storage/v1/object/documents/{req.file_path}"
     
-    # FIX 2: Added apikey header. Supabase gateway requires this for storage routes.
+    # Supabase gateway requires apikey header for Storage routes
     headers = {
         "Authorization": f"Bearer {token}",
         "apikey": SUPABASE_KEY
@@ -65,7 +72,7 @@ async def upload_document(collection_id: str, req: DocumentUploadRequest, reques
     temp_path = f"temp_{uuid.uuid4()}.pdf"
     
     try:
-        # 1. Stream download from Supabase Storage directly to disk
+        # 1. Stream download from Supabase Storage directly to disk (0 memory buffer)
         async with httpx.AsyncClient() as client:
             async with client.stream("GET", storage_url, headers=headers) as resp:
                 if resp.status_code != 200:
@@ -91,12 +98,12 @@ async def upload_document(collection_id: str, req: DocumentUploadRequest, reques
             
         document = doc_rows[0]
 
-        # 3. Extract chunks using PyMuPDF
+        # 3. Extract chunks using PyMuPDF (massive memory savings over pdfplumber)
         chunk_strings = extract_chunks_from_pdf_file(temp_path)
         if not chunk_strings:
             raise HTTPException(status_code=400, detail="No text could be extracted from the PDF.")
 
-        # 4. Batch embed + insert
+        # 4. Batch embed + insert (caps memory usage on free-tier)
         chunks_created = 0
         async for embedded_batch in iter_embedded_chunk_batches(chunk_strings):
             chunk_rows = [
@@ -120,15 +127,14 @@ async def upload_document(collection_id: str, req: DocumentUploadRequest, reques
         )
 
     except HTTPException:
-        raise # Re-raise known HTTP exceptions so frontend sees them
+        raise # Re-raise known HTTP exceptions so frontend sees the exact error
     except Exception as e:
-        # FIX 3: Catch all other exceptions and return the actual error to the frontend
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
             
     finally:
-        # 5. Always clean up the temp file
+        # 5. Always clean up the temp file to prevent disk exhaustion
         if os.path.exists(temp_path):
             os.remove(temp_path)
 

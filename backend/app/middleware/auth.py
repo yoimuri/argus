@@ -15,6 +15,12 @@ PUBLIC_PATHS = {"/health"}
 
 class JWTAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
+        # 1. Allow CORS preflight requests to pass without auth.
+        # This is secure: OPTIONS requests carry no payload and cannot trigger
+        # business logic. They are purely for browser-server CORS negotiation.
+        if request.method == "OPTIONS":
+            return await call_next(request)
+
         if request.url.path in PUBLIC_PATHS:
             return await call_next(request)
 
