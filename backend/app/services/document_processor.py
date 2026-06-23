@@ -1,6 +1,6 @@
-import io
 import os
 import re
+import tempfile
 
 import httpx
 import pdfplumber
@@ -10,14 +10,7 @@ HF_EMBEDDING_URL = "https://router.huggingface.co/hf-inference/models/sentence-t
 
 CHUNK_SIZE = 800
 CHUNK_OVERLAP = 100
-
-
-def extract_text_from_pdf(file_bytes: bytes) -> str:
-    text_parts = []
-    with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
-        for page in pdf.pages:
-            text_parts.append(page.extract_text() or "")
-    return "\n\n".join(text_parts)
+EMBED_BATCH_SIZE = 8
 
 
 def chunk_text(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> list[str]:
@@ -38,6 +31,18 @@ def chunk_text(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVE
     return [c for c in chunks if c]
 
 
+def extract_chunks_from_pdf_bytes(file_bytes: bytes) -> list[str]:
+    """Parse PDF via a temp file so we don't hold bytes + pdfplumber buffers in memory."""
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=True) as tmp:
+        tmp.write(file_bytes)
+        tmp.flush()
+        text_parts: list[str] = []
+        with pdfplumber.open(tmp.name) as pdf:
+            for page in pdf.pages:
+                text_parts.append(page.extract_text() or "")
+    return chunk_text("\n\n".join(text_parts))
+
+
 async def _call_hf_embedding(inputs):
     async with httpx.AsyncClient(timeout=60) as client:
         response = await client.post(
@@ -54,16 +59,19 @@ async def embed_chunks(chunks: list[str]) -> list[list[float]]:
 
 
 async def embed_query(text: str) -> list[float]:
-    return await _call_hf_embedding(text)
+    result = await _call_hf_embedding(text)
+    return result[0] if isinstance(result, list) and result and isinstance(result[0], list) else result
 
 
-async def process_pdf(file_bytes: bytes) -> list[dict]:
-    text = extract_text_from_pdf(file_bytes)
-    chunks = chunk_text(text)
-    if not chunks:
-        return []
-    embeddings = await embed_chunks(chunks)
-    return [
-        {"content": chunk, "embedding": embedding, "chunk_index": i}
-        for i, (chunk, embedding) in enumerate(zip(chunks, embeddings))
-    ]
+async def iter_embedded_chunk_batches(
+    chunk_strings: list[str],
+    batch_size: int = EMBED_BATCH_SIZE,
+):
+    """Yield batches of {content, embedding, chunk_index} to cap peak memory on free-tier hosts."""
+    for start in range(0, len(chunk_strings), batch_size):
+        batch = chunk_strings[start : start + batch_size]
+        embeddings = await embed_chunks(batch)
+        yield [
+            {"content": text, "embedding": vector, "chunk_index": start + offset}
+            for offset, (text, vector) in enumerate(zip(batch, embeddings))
+        ]

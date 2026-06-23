@@ -4,6 +4,7 @@ import { useState, type FormEvent } from 'react'
 import { createClient } from '@/utils/supabase/client'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+const MAX_UPLOAD_BYTES = 25 * 1024 * 1024 // matches backend; Render free tier is 512 MB RAM
 
 export default function UploadPanel() {
   const [collectionName, setCollectionName] = useState('')
@@ -44,11 +45,31 @@ export default function UploadPanel() {
     }
   }
 
+  function handleFileChange(selected: File | null) {
+    setError(null)
+    if (!selected) {
+      setFile(null)
+      return
+    }
+    if (selected.size > MAX_UPLOAD_BYTES) {
+      setFile(null)
+      setError(
+        `PDF must be under 25 MB (free-tier limit). This file is ${(selected.size / (1024 * 1024)).toFixed(1)} MB.`,
+      )
+      return
+    }
+    setFile(selected)
+  }
+
   async function handleUpload(e: FormEvent) {
     e.preventDefault()
     setError(null)
     setStatus(null)
     if (!collectionId || !file) return
+    if (file.size > MAX_UPLOAD_BYTES) {
+      setError('PDF must be under 25 MB.')
+      return
+    }
 
     setUploading(true)
     try {
@@ -126,9 +147,12 @@ export default function UploadPanel() {
             <input
               type="file"
               accept="application/pdf"
-              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+              onChange={(e) => handleFileChange(e.target.files?.[0] ?? null)}
               required
             />
+            <p style={{ fontSize: 14, color: '#888', marginTop: 4 }}>
+              PDFs up to 25 MB. Large reports (e.g. DBIR) may need a compressed export.
+            </p>
             <button type="submit" disabled={uploading}>
               {uploading ? 'Uploading and embedding, this can take a minute...' : 'Upload PDF'}
             </button>
