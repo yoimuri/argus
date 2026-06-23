@@ -2,9 +2,10 @@
 
 import { useState, type FormEvent } from 'react'
 import { createClient } from '@/utils/supabase/client'
+import ReactMarkdown from 'react-markdown'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
-const MAX_UPLOAD_BYTES = 25 * 1024 * 1024 // matches backend; Render free tier is 512 MB RAM.
+const MAX_UPLOAD_BYTES = 25 * 1024 * 1024 // matches backend; Render free tier is 512 MB RAM
 
 export default function UploadPanel() {
   const [collectionName, setCollectionName] = useState('')
@@ -197,9 +198,9 @@ export default function UploadPanel() {
           </form>
 
           {report && (
-            <pre style={{ whiteSpace: 'pre-wrap', marginTop: 12, padding: 12, border: '1px solid #444' }}>
-              {report}
-            </pre>
+            <div style={{ marginTop: 12, padding: 12, border: '1px solid #444', background: '#111', color: '#fff', borderRadius: 4 }}>
+              <ReactMarkdown>{report}</ReactMarkdown>
+            </div>
           )}
         </>
       )}

@@ -160,18 +160,6 @@ so it's not a valid RLS test by default.
 Fixed: Pasted file contents only. Used "set role anon" technique to simulate no JWT request and confirm 0 rows will show even if there's a data.
 End state: 5 tables live, RLS confirmed blocking anon access via role simulation.
 
-### ADR-001: Database-Level RLS as Primary Authorization Boundary
-Date: June 20, 2026
-Decision: Authorization enforced at the Postgres RLS layer (auth.uid() = user_id), not in
-FastAPI application code.
-Context: Application-level checks can be skipped if a developer forgets a guard on one route.
-RLS evaluates on every single query at the database itself, regardless of which code path
-reaches it.
-Consequence: Every user-scoped table must carry a user_id column and a matching policy from
-day one. Forgetting this on a new table means that table is wide open via the API.
-Status: Accepted. Verified by simulating an anon (no-JWT) request and confirming 0 rows
-returned against a table containing data.
-
 ---
 
 **[June 21, 2026] — Sprint 3 (backend half)**
@@ -191,19 +179,6 @@ Fixed: Added apikey header to PyJWKClient, confirmed correct JWKS path via curl 
 live project before touching code again, corrected SUPABASE_URL to the bare project URL.
 End state: Unauthenticated POST /collections → 401. Authenticated request with a real
 Supabase-issued JWT → 200 with verified user_id attached via request.state.
-
-### ADR-002: JWKS-Based Verification, No Shared Secret in Backend
-Date: June 21, 2026
-Decision: Verify Supabase JWTs using the project's public JWKS endpoint (ES256), not a
-shared HS256 secret stored in the backend.
-Context: This project was created after Supabase's shift to asymmetric signing by default
-(Oct 2025+). A shared secret, if leaked, lets an attacker forge valid tokens. A public key
-used only for verification cannot be used to forge anything.
-Consequence: Backend has one less secret to protect entirely (no SUPABASE_JWT_SECRET in
-.env). Tradeoff: backend now depends on network access to the JWKS endpoint, with PyJWKClient
-caching it locally to reduce repeated calls.
-Status: Accepted. Verified end-to-end: 401 with no token, 200 with a real signed-in user's
-JWT.
 
 ---
 
@@ -252,17 +227,6 @@ End state: Full browser flow confirmed working end-to-end: login → create coll
 upload PDF → 36 chunks created, against a real Verizon DBIR 2025 PDF.
 
 ---
-
-### ADR-003: Explicit Parent-Ownership Check Before Cross-Table Inserts
-Date: June 21, 2026
-Decision: Before accepting a file upload, the backend queries the target collection under
-the caller's own JWT and rejects with 404 if it isn't found.
-Context: RLS on documents only validates the new row's own user_id, it has no visibility
-into whether a referenced collection_id in another table actually belongs to the same user.
-Context: A cross-table WITH CHECK is possible but adds complexity not worth it at this scale.
-Consequence: One extra round trip per upload. Acceptable for an MVP; revisit if upload
-volume ever becomes a bottleneck.
-Status: Accepted.
 
 
 
