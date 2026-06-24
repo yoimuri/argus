@@ -18,10 +18,10 @@ app = FastAPI()
 app.add_middleware(JWTAuthMiddleware)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "https://argus-nine-ivory.vercel.app"],
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "apikey"],
+    allow_origins=["*"],  # Fixes infinite preflight load on Vercel preview URLs
+    allow_credentials=False,  # We use Bearer tokens, not cookies
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 class DocumentUploadRequest(BaseModel):
@@ -64,36 +64,28 @@ async def upload_document(collection_id: str, req: DocumentUploadRequest, reques
     temp_path = f"temp_{uuid.uuid4()}.pdf"
     
     try:
-        # 1. Stream download from Supabase Storage directly to disk
+        # 1. Stream download from Supabase Storage to disk (with size limit)
+        downloaded_bytes = 0
         async with httpx.AsyncClient() as client:
             async with client.stream("GET", storage_url, headers=headers) as resp:
                 if resp.status_code != 200:
-                    raise HTTPException(status_code=400, detail="Failed to fetch file from storage.")
-                
-                # FIX 1a: Check Content-Length header before downloading
-                content_length = int(resp.headers.get("content-length", 0))
-                if content_length > MAX_UPLOAD_BYTES:
-                    raise HTTPException(status_code=400, detail="File too large (25MB limit).")
-                
-                bytes_written = 0
-                is_first_chunk = True
-                
+                    error_text = await resp.aread()
+                    raise HTTPException(status_code=400, detail=f"Storage fetch failed ({resp.status_code}).")
+
                 with open(temp_path, "wb") as f:
                     async for chunk in resp.aiter_bytes():
-                        # FIX 1b: Running total check in case header was missing/spoofed
-                        bytes_written += len(chunk)
-                        if bytes_written > MAX_UPLOAD_BYTES:
+                        downloaded_bytes += len(chunk)
+                        if downloaded_bytes > MAX_UPLOAD_BYTES:
                             raise HTTPException(status_code=400, detail="File too large (25MB limit).")
-                            
-                        # FIX 2: Check magic bytes on the very first chunk
-                        if is_first_chunk:
-                            if not chunk.startswith(b"%PDF"):
-                                raise HTTPException(status_code=400, detail="File is not a valid PDF.")
-                            is_first_chunk = False
-                            
                         f.write(chunk)
+
+        # 2. Validate file type using magic bytes before PyMuPDF touches it
+        with open(temp_path, "rb") as f:
+            header = f.read(4)
+        if header != b"%PDF":
+            raise HTTPException(status_code=400, detail="File does not appear to be a valid PDF.")
         
-        # 2. Create document record
+        # 3. Create document record
         doc_rows = await supabase_request(
             "POST", "documents", request.state.access_token,
             json_body={
@@ -108,12 +100,12 @@ async def upload_document(collection_id: str, req: DocumentUploadRequest, reques
             
         document = doc_rows[0]
 
-        # 3. Extract chunks using PyMuPDF
+        # 4. Extract chunks using PyMuPDF
         chunk_strings = extract_chunks_from_pdf_file(temp_path)
         if not chunk_strings:
             raise HTTPException(status_code=400, detail="No text could be extracted from the PDF.")
 
-        # 4. Batch embed + insert
+        # 5. Batch embed + insert
         chunks_created = 0
         async for embedded_batch in iter_embedded_chunk_batches(chunk_strings):
             chunk_rows = [
@@ -139,13 +131,12 @@ async def upload_document(collection_id: str, req: DocumentUploadRequest, reques
     except HTTPException:
         raise # Re-raise known HTTP exceptions so frontend sees the exact error
     except Exception as e:
-        # FIX 3: Log full traceback server-side, send generic message to client
         import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail="An internal error occurred while processing the document.")
+        traceback.print_exc()  # full detail stays in Render's logs only
+        raise HTTPException(status_code=500, detail="Internal server error processing document.")
             
     finally:
-        # 5. Always clean up the temp file to prevent disk exhaustion
+        # 6. Always clean up the temp file to prevent disk exhaustion
         if os.path.exists(temp_path):
             os.remove(temp_path)
 
