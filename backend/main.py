@@ -15,18 +15,13 @@ MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # 25 MB
 
 app = FastAPI()
 
-# Middleware order matters: JWTAuthMiddleware is added first, 
-# so CORSMiddleware wraps it and can intercept OPTIONS requests.
 app.add_middleware(JWTAuthMiddleware)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000", 
-        "https://argus-nine-ivory.vercel.app"
-    ],
+    allow_origins=["http://localhost:3000", "https://argus-nine-ivory.vercel.app"],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "apikey"], # Explicitly allow the headers we use
+    allow_headers=["Authorization", "Content-Type", "apikey"],
 )
 
 class DocumentUploadRequest(BaseModel):
@@ -60,10 +55,7 @@ async def upload_document(collection_id: str, req: DocumentUploadRequest, reques
 
     token = request.state.access_token
     
-    # Include bucket name 'documents' in URL path
     storage_url = f"{SUPABASE_URL}/storage/v1/object/documents/{req.file_path}"
-    
-    # Supabase gateway requires apikey header for Storage routes
     headers = {
         "Authorization": f"Bearer {token}",
         "apikey": SUPABASE_KEY
@@ -72,15 +64,33 @@ async def upload_document(collection_id: str, req: DocumentUploadRequest, reques
     temp_path = f"temp_{uuid.uuid4()}.pdf"
     
     try:
-        # 1. Stream download from Supabase Storage directly to disk (0 memory buffer)
+        # 1. Stream download from Supabase Storage directly to disk
         async with httpx.AsyncClient() as client:
             async with client.stream("GET", storage_url, headers=headers) as resp:
                 if resp.status_code != 200:
-                    error_text = await resp.aread()
-                    raise HTTPException(status_code=400, detail=f"Storage fetch failed ({resp.status_code}): {error_text.decode()}")
+                    raise HTTPException(status_code=400, detail="Failed to fetch file from storage.")
+                
+                # FIX 1a: Check Content-Length header before downloading
+                content_length = int(resp.headers.get("content-length", 0))
+                if content_length > MAX_UPLOAD_BYTES:
+                    raise HTTPException(status_code=400, detail="File too large (25MB limit).")
+                
+                bytes_written = 0
+                is_first_chunk = True
                 
                 with open(temp_path, "wb") as f:
                     async for chunk in resp.aiter_bytes():
+                        # FIX 1b: Running total check in case header was missing/spoofed
+                        bytes_written += len(chunk)
+                        if bytes_written > MAX_UPLOAD_BYTES:
+                            raise HTTPException(status_code=400, detail="File too large (25MB limit).")
+                            
+                        # FIX 2: Check magic bytes on the very first chunk
+                        if is_first_chunk:
+                            if not chunk.startswith(b"%PDF"):
+                                raise HTTPException(status_code=400, detail="File is not a valid PDF.")
+                            is_first_chunk = False
+                            
                         f.write(chunk)
         
         # 2. Create document record
@@ -98,12 +108,12 @@ async def upload_document(collection_id: str, req: DocumentUploadRequest, reques
             
         document = doc_rows[0]
 
-        # 3. Extract chunks using PyMuPDF (massive memory savings over pdfplumber)
+        # 3. Extract chunks using PyMuPDF
         chunk_strings = extract_chunks_from_pdf_file(temp_path)
         if not chunk_strings:
             raise HTTPException(status_code=400, detail="No text could be extracted from the PDF.")
 
-        # 4. Batch embed + insert (caps memory usage on free-tier)
+        # 4. Batch embed + insert
         chunks_created = 0
         async for embedded_batch in iter_embedded_chunk_batches(chunk_strings):
             chunk_rows = [
@@ -129,9 +139,10 @@ async def upload_document(collection_id: str, req: DocumentUploadRequest, reques
     except HTTPException:
         raise # Re-raise known HTTP exceptions so frontend sees the exact error
     except Exception as e:
+        # FIX 3: Log full traceback server-side, send generic message to client
         import traceback
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing the document.")
             
     finally:
         # 5. Always clean up the temp file to prevent disk exhaustion
