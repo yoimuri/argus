@@ -20,9 +20,9 @@ async def retriever_node(state: ResearchState) -> dict:
                 "match_count": 5,
             },
         )
+        # PRINT THE EXACT OBJECT RETURNED BY SUPABASE
+        print(f"--- DEBUG RETRIEVER RAW RESPONSE: {rows} ---")
         print(f"--- DEBUG RETRIEVER: Database returned {len(rows) if rows else 0} chunks ---")
-        if rows:
-            print(f"--- DEBUG RETRIEVER: First chunk ID: {rows[0].get('id', 'NO ID')} ---")
     except Exception as e:
         print(f"--- DEBUG RETRIEVER ERROR: Database call failed! ---")
         print(f"--- DEBUG RETRIEVER ERROR: {type(e).__name__}: {e} ---")
