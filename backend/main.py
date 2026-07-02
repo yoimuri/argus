@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from app.middleware.auth import JWTAuthMiddleware
 from app.services.document_processor import extract_chunks_from_pdf_file, iter_embedded_chunk_batches
 from app.services.supabase_client import supabase_request
+from app.services.injection_guard import check_query, InjectionDetected
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_PUBLISHABLE_KEY")
@@ -150,6 +151,11 @@ async def research(request: Request):
     collection_id = body.get("collection_id")
     if not query or not collection_id:
         raise HTTPException(status_code=400, detail="query and collection_id are required.")
+
+    try:
+        await check_query(query, request.state.user_id, request.state.access_token)
+    except InjectionDetected:
+        raise HTTPException(status_code=400, detail="Query blocked, possible prompt injection detected.")
 
     owned = await supabase_request(
         "GET", f"collections?id=eq.{collection_id}&select=id", request.state.access_token
