@@ -1,8 +1,67 @@
 import os
+import re
 from groq import AsyncGroq
 from app.agents.state import ResearchState
+from app.services.supabase_client import supabase_request
 
 _client = AsyncGroq(api_key=os.environ["GROQ_API_KEY"])
+
+# Phrases that look like someone trying to hijack the AI from inside a chunk.
+# Case-insensitive, so "IGNORE PREVIOUS" still triggers.
+INJECTION_PATTERNS = [
+    r"ignore\s+(all\s+)?(previous\s+)?instructions",
+    r"your\s+new\s+role\s+is",
+    r"system\s+override",
+    r"forget\s+your\s+instructions",
+    r"disregard\s+(all\s+)?(previous\s+)?instructions",
+    r"you\s+are\s+now\s+a",
+    r"new\s+instructions\s*:",
+    r"act\s+as\s+if\s+you\s+are",
+    r"you\s+must\s+now",
+    r"do\s+not\s+follow\s+your\s+previous",
+]
+
+_compiled_patterns = [re.compile(p, re.IGNORECASE) for p in INJECTION_PATTERNS]
+
+
+async def scan_chunks(chunks: list[dict], user_id: str, access_token: str) -> list[dict]:
+    """
+    Runs before the model sees anything. Checks each chunk for injection phrases.
+    Flagged chunks get logged to security_events and removed from the stack.
+    If the logbook write fails, scan still continues, a pipeline crash here
+    would be worse than a missed log entry.
+    """
+    clean = []
+    for chunk in chunks:
+        content = chunk.get("content", "")
+        matched = any(p.search(content) for p in _compiled_patterns)
+
+        if not matched:
+            clean.append(chunk)
+            continue
+
+        # Log to security_events. Store only the first 300 chars, enough for
+        # triage without permanently preserving a full attack string.
+        try:
+            await supabase_request(
+                "POST",
+                "security_events",
+                access_token,
+                json_body={
+                    "user_id": user_id,
+                    "event_type": "content_as_instruction",
+                    "source": f"chunk:{chunk.get('id', 'unknown')}",
+                    "detail": content[:300],
+                },
+            )
+        except Exception as log_err:
+            print(f"[ARGUS] security_events write failed: {log_err}")
+
+        # Flagged chunk never reaches the model regardless of log outcome.
+        print(f"[ARGUS] Flagged and removed chunk {chunk.get('chunk_index')} - injection pattern detected.")
+
+    return clean
+
 
 SYSTEM_PROMPT = (
     "You are a research assistant. Answer the user's question using ONLY the "
@@ -26,10 +85,15 @@ async def synthesizer_node(state: ResearchState) -> dict:
     chunks = state["chunks"]
 
     if not chunks:
-        # Nothing came back from the filing cabinet. Don't even call the model,
-        # there's nothing real to ground it in, this is the "say so honestly"
-        # path from earlier.
         return {"answer": "No relevant information was found in this collection for that query."}
+
+    # Lock #2: scan before the model sees anything. Flagged chunks are logged
+    # to security_events and stripped here. Model only ever gets the clean list.
+    chunks = await scan_chunks(chunks, state["user_id"], state["access_token"])
+
+    if not chunks:
+        # Every retrieved chunk was flagged. Don't call the model with nothing.
+        return {"answer": "The retrieved content was flagged as potentially malicious and could not be used to answer this query."}
 
     context = "\n\n".join(
         f"[Chunk {c['chunk_index']} | trust_level={c.get('trust_level', 'retrieved')}] {c['content']}"
