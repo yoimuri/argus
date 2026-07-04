@@ -46,16 +46,16 @@ def _regex_check(query: str) -> bool:
 
 async def check_query(query: str, user_id: str, access_token: str) -> None:
     """
-    Two layers, in order. Layer 1: ask Groq itself to classify the query.
-    Layer 2: regex, only runs if Groq is unreachable. If regex itself throws,
-    fail closed, treat the query as blocked rather than letting it through.
+    Regex now runs every time, not just when Groq is unreachable. TC-2.2-01
+    proved why: a classifier that's reachable but answers wrong is a miss
+    exactly like a classifier that's down, the original design only had a
+    backup for the second case. Query is blocked if EITHER layer says yes.
 
     Note: this call isn't wrapped in a circuit breaker yet, that's Sprint 2.4.
-    Right now a slow-but-not-erroring Groq response will still make the
-    request wait, it won't hang forever, but it also won't fail over fast.
+    A slow-but-not-erroring Groq response will still make the request wait.
     """
+    groq_blocked = False
     layer = None
-    blocked = False
 
     try:
         completion = await _client.chat.completions.create(
@@ -64,20 +64,37 @@ async def check_query(query: str, user_id: str, access_token: str) -> None:
                 {"role": "system", "content": CLASSIFIER_PROMPT},
                 {"role": "user", "content": query},
             ],
-            max_tokens=5,
+            max_tokens=20,  # was 5, likely too tight for a reasoning-style model to reach a clean answer
         )
-        verdict = completion.choices[0].message.content.strip().upper()
-        blocked = verdict.startswith("YES")
-        layer = "groq_classifier"
+        raw = completion.choices[0].message.content or ""
+        verdict = raw.strip().upper()
+        groq_blocked = verdict.startswith("YES")
+        # Visible in Render logs even on the success path, this is what was
+        # missing before, we only ever logged the exception path.
+        print(f"[ARGUS] Groq classifier verdict: {verdict!r} "
+              f"finish_reason={completion.choices[0].finish_reason}")
     except Exception as groq_err:
-        print(f"[ARGUS] Groq classifier unreachable, falling back to regex: {groq_err}")
-        try:
-            blocked = _regex_check(query)
+        print(f"[ARGUS] Groq classifier unreachable: {groq_err}")
+
+    try:
+        regex_blocked = _regex_check(query)
+    except Exception as regex_err:
+        print(f"[ARGUS] Regex check itself failed, failing closed: {regex_err}")
+        regex_blocked = True
+        layer = "fail_closed_regex_error"
+
+    blocked = groq_blocked or regex_blocked
+
+    if not blocked:
+        return
+
+    if layer is None:
+        if groq_blocked and regex_blocked:
+            layer = "groq_classifier+regex"
+        elif groq_blocked:
+            layer = "groq_classifier"
+        else:
             layer = "regex_fallback"
-        except Exception as regex_err:
-            print(f"[ARGUS] Regex fallback also failed, failing closed: {regex_err}")
-            blocked = True
-            layer = "fail_closed_both_layers_down"
 
     if not blocked:
         return
