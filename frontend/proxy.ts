@@ -1,6 +1,8 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
+const IDLE_TIMEOUT_MS = 30 * 60 * 1000 // 30 minutes
+
 export async function proxy(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request })
 
@@ -38,6 +40,35 @@ export async function proxy(request: NextRequest) {
     const url = request.nextUrl.clone()
     url.pathname = '/login'
     return NextResponse.redirect(url)
+  }
+
+  // Idle timeout, checked on whatever the next request happens to be, not a
+  // live countdown, nothing fires while a tab just sits open with no new
+  // request. If the last recorded activity is older than 30 minutes, sign
+  // out and send to login. scope: 'local' matters here, this only ends the
+  // session on this browser, not every device the user happens to be logged
+  // into. See docs/ADR-009.md.
+  if (
+    user &&
+    !request.nextUrl.pathname.startsWith('/login') &&
+    !request.nextUrl.pathname.startsWith('/auth')
+  ) {
+    const lastActive = request.cookies.get('last_active')?.value
+    const now = Date.now()
+
+    if (lastActive && now - Number(lastActive) > IDLE_TIMEOUT_MS) {
+      await supabase.auth.signOut({ scope: 'local' })
+      const url = request.nextUrl.clone()
+      url.pathname = '/login'
+      url.searchParams.set('reason', 'idle')
+      return NextResponse.redirect(url)
+    }
+
+    supabaseResponse.cookies.set('last_active', String(now), {
+      httpOnly: true,
+      sameSite: 'lax',
+      path: '/',
+    })
   }
 
   return supabaseResponse

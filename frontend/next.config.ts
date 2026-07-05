@@ -3,7 +3,7 @@ import type { NextConfig } from "next";
 // The two origins the frontend actually talks to. Update both if either
 // the Supabase project or the Render backend URL ever changes.
 const SUPABASE_URL = "https://gidhqyjzyrcnzpkodymw.supabase.co";
-const BACKEND_URL = "https://argus-27g9.onrender.com";
+const BACKEND_URL = "https://argus-am5t.onrender.com";
 
 // A static CSP, not nonce-based. Next.js's own docs are explicit that
 // nonce-based CSP forces every page into dynamic rendering and disables
