@@ -75,6 +75,59 @@ async def create_collection(request: Request):
     return rows[0]
 
 
+@app.get("/collections")
+async def list_collections(request: Request):
+    # RLS already scopes this to the caller's own rows; the user_id filter here
+    # is redundant with the "own collections" policy but costs nothing and makes
+    # the intent explicit at the call site.
+    rows = await supabase_request(
+        "GET",
+        f"collections?user_id=eq.{request.state.user_id}&select=id,name,created_at&order=created_at.desc",
+        request.state.access_token,
+    )
+    return rows
+
+
+@app.delete("/collections/{collection_id}")
+async def delete_collection(collection_id: str, request: Request):
+    # Right-to-erasure (ADR-013): a user-initiated, complete delete of a
+    # collection and everything under it — documents, chunks, and the actual
+    # uploaded PDF files in Storage, not just DB rows.
+    owned = await supabase_request(
+        "GET", f"collections?id=eq.{collection_id}&user_id=eq.{request.state.user_id}&select=id",
+        request.state.access_token,
+    )
+    if not owned:
+        raise HTTPException(status_code=404, detail="Collection not found.")
+
+    token = request.state.access_token
+
+    # Purge the underlying Storage objects first. Best-effort: a missing or
+    # already-gone file must not block deleting the DB rows — the DB delete is
+    # the part that actually removes the data from RLS-visible access.
+    documents = await supabase_request(
+        "GET", f"documents?collection_id=eq.{collection_id}&select=storage_path", token,
+    )
+    async with httpx.AsyncClient() as client:
+        for doc in documents:
+            storage_path = doc.get("storage_path")
+            if not storage_path:
+                continue
+            try:
+                await client.delete(
+                    f"{SUPABASE_URL}/storage/v1/object/documents/{storage_path}",
+                    headers={"Authorization": f"Bearer {token}", "apikey": SUPABASE_KEY},
+                )
+            except Exception as storage_err:
+                print(f"[ARGUS] could not delete storage object {storage_path}: {storage_err}")
+
+    # Deleting the collection row cascades to documents and document_chunks
+    # (on delete cascade in 001_core_schema.sql) — one delete clears the tree.
+    await supabase_request("DELETE", f"collections?id=eq.{collection_id}", token)
+
+    return {"status": "deleted", "collection_id": collection_id}
+
+
 @app.post("/collections/{collection_id}/documents")
 async def upload_document(collection_id: str, req: DocumentUploadRequest, request: Request):
     owned = await supabase_request(
@@ -123,6 +176,7 @@ async def upload_document(collection_id: str, req: DocumentUploadRequest, reques
                 "collection_id": collection_id,
                 "user_id": request.state.user_id,
                 "filename": req.file_name,
+                "storage_path": req.file_path,
                 "status": "processing",
             },
         )

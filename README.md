@@ -98,6 +98,22 @@ argus/
 - Render's free tier has a cold-start delay after inactivity
 - No keyword list or classifier catches every possible attack phrasing, this is a
   structural limit of the approach, not a bug, see `docs/ADVERSARIAL-TESTS.md`
+- Vague or meta questions ("summarize for me") can return "no relevant information found"
+  instead of a real answer — retrieval currently pulls a fixed top-5-by-similarity sample
+  with no query-intent understanding. Planned fix is Phase 3's Orchestrator agent, not a
+  quick prompt patch, see `docs/BLUEPRINT.md`
+
+## Privacy
+
+Data is encrypted in transit (TLS) and at rest (Supabase platform default), and Postgres
+Row Level Security means one user's data is invisible to another. That said, this system
+is not end-to-end encrypted, and can't be: retrieval-augmented generation requires the
+server to read document text in plaintext to chunk, embed, and answer questions about it.
+Document content is also processed by two third-party APIs (Groq for LLM inference,
+Hugging Face for embeddings and injection detection). Users can delete their own
+collections (and everything under them, including the underlying files) at any time. Full
+honest posture, including what a real public launch would still require, is in
+`docs/ADR-013.md`.
 
 ## Local setup
 

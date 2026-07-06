@@ -408,7 +408,12 @@ test suite (start with 10 payloads, not 20).
 
 **Phase 3 — Full Agent Pipeline + Observability (weeks 8–10)**
 Orchestrator + Web Scout + Critic agents · re-retrieval loop · Langfuse integration · RAGAS scoring
-· StepWriter + `execution_steps` table (Debug Diary backend).
+· StepWriter + `execution_steps` table (Debug Diary backend). **Orchestrator acceptance
+criterion added from live testing (July 8, 2026):** a vague/meta query ("summarize for me",
+"what's the gist") must be understood by intent and routed to appropriate retrieval (broad,
+representative sampling — not the current top-5-by-raw-query-similarity), producing a real
+answer instead of a "not enough information" refusal. Root cause confirmed in `retriever.py`,
+not the system prompt — see `docs/PHASE2.md`'s Known Limitations table and CONTINUITY.md.
 
 **Phase 4 — SOC Dashboard (weeks 11–13)**
 Supabase Realtime subscriptions · ExecutionTimeline UI (Debug Diary frontend) · live request feed

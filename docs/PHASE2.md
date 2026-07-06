@@ -120,6 +120,7 @@ End state:
 | Debug Diary | Phase 3 |
 | SOC dashboard | Phase 4 |
 | MCP server (allowlist logic exists here, server ships Phase 5) | Phase 5 |
+| Query-intent understanding — a vague/meta question ("summarize for me") retrieves an arbitrary top-5-by-similarity chunk sample instead of a representative one, since there's no query rewriting/routing yet. Found in live testing July 8, 2026, see CONTINUITY.md. Acceptance criterion for Phase 3's Orchestrator: a vague query is understood by intent and routed to appropriate retrieval, not just answered "not enough information" | Phase 3 (Orchestrator) |
 
 ---
 
