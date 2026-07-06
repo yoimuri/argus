@@ -19,8 +19,13 @@ app = FastAPI()
 app.add_middleware(JWTAuthMiddleware)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Fixes infinite preflight load on Vercel preview URLs
-    allow_credentials=False,  # We use Bearer tokens, not cookies
+    # Locked to the Vercel frontend (prod + preview subdomains) and local dev,
+    # instead of the "*" wildcard that used to live here. CORS is not the real
+    # security boundary — JWT is (see BLUEPRINT Lesson #4) — but the wildcard
+    # contradicted ADR-008 and had no reason to stay. allow_credentials stays
+    # False because we authenticate with Bearer tokens, not cookies.
+    allow_origin_regex=r"^https://argus[a-z0-9.-]*\.vercel\.app$|^http://localhost:3000$",
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -28,6 +33,21 @@ app.add_middleware(
 class DocumentUploadRequest(BaseModel):
     file_path: str
     file_name: str
+
+
+async def _mark_document_failed(document, access_token):
+    """Best-effort: flip a document row to 'failed' so a crashed upload doesn't
+    leave it stuck at 'processing' forever. Never raises — a failed status write
+    must not mask the original error that got us here."""
+    if not document:
+        return
+    try:
+        await supabase_request(
+            "PATCH", f"documents?id=eq.{document['id']}", access_token,
+            json_body={"status": "failed"},
+        )
+    except Exception as patch_err:
+        print(f"[ARGUS] could not mark document {document.get('id')} as failed: {patch_err}")
 
 
 @app.get("/health")
@@ -63,7 +83,8 @@ async def upload_document(collection_id: str, req: DocumentUploadRequest, reques
     }
     
     temp_path = f"temp_{uuid.uuid4()}.pdf"
-    
+    document = None
+
     try:
         # 1. Stream download from Supabase Storage to disk (with size limit)
         downloaded_bytes = 0
@@ -130,10 +151,15 @@ async def upload_document(collection_id: str, req: DocumentUploadRequest, reques
         )
 
     except HTTPException:
-        raise # Re-raise known HTTP exceptions so frontend sees the exact error
+        # Re-raise known HTTP exceptions so frontend sees the exact error, but if
+        # the document row was already created, mark it failed first so it doesn't
+        # sit at 'processing' forever.
+        await _mark_document_failed(document, request.state.access_token)
+        raise
     except Exception as e:
         import traceback
         traceback.print_exc()  # full detail stays in Render's logs only
+        await _mark_document_failed(document, request.state.access_token)
         raise HTTPException(status_code=500, detail="Internal server error processing document.")
             
     finally:

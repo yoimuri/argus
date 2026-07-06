@@ -106,6 +106,7 @@ async def synthesizer_node(state: ResearchState) -> dict:
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {state['query']}"},
         ],
+        max_tokens=1024,  # cap output so a single research call can't run up unbounded token cost
     )
 
     return {"answer": completion.choices[0].message.content}

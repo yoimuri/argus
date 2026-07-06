@@ -330,22 +330,25 @@ the app at that moment.
 |---|---|---|
 | LLM01:2025 Prompt Injection | ✅ | Injection guard (2-layer, fail-closed) + trust_level tagging |
 | LLM02:2025 Sensitive Info Disclosure | ✅ | RLS — users see only their own data |
-| LLM03:2025 Supply Chain | ✅ **[V3 closed]** | Dependabot + `pip-audit`/`npm audit` CI gate + MCP allowlist |
-| LLM04:2025 Data/Model Poisoning | ✅ | Vector shadow detection pre-insert |
+| LLM03:2025 Supply Chain | ⏳ Phase 5 | Manual `pip-audit`/`npm audit` done (ADR-010); automated CI gate + Dependabot + MCP allowlist NOT built yet |
+| LLM04:2025 Data/Model Poisoning | ◐ Partial | Synthesis-time chunk scan live (Lock #2); pre-insert vector shadow detection is Sprint 2.3, not yet built |
 | LLM05:2025 Improper Output Handling | ✅ | Markdown-only output, no executable paths |
 | LLM06:2025 Excessive Agency | ✅ | No tool access beyond defined LangGraph outputs |
 | LLM07:2025 System Prompt Leakage | ✅ | Server-side only; guard rejects extraction attempts |
-| LLM08:2025 Vector/Embedding Weaknesses | ✅ | Shadow detection + trust_level |
-| LLM09:2025 Misinformation | ✅ | RAGAS faithfulness + Critic flagging |
-| LLM10:2025 Unbounded Consumption | ✅ | Redis rate limiting + breakers |
-| ASI01–ASI08:2026 | ✅ | trust_level enforcement, JWT+RBAC, sandboxed extraction, per-service breakers (see Pillars above) |
+| LLM08:2025 Vector/Embedding Weaknesses | ◐ Partial | trust_level plumbing live (migration 004); dedicated shadow detection pending Sprint 2.3 |
+| LLM09:2025 Misinformation | ⏳ Phase 3 | RAGAS + Critic agent not yet built |
+| LLM10:2025 Unbounded Consumption | ⏳ Planned | Redis rate limiting + circuit breakers specified but NOT yet implemented in code |
+| ASI01–ASI08:2026 | ◐ Partial | trust_level tagging + JWT auth live; per-service circuit breakers not yet implemented (Sprint 2.4+) |
 | ASI09:2026 Human-Agent Trust Exploitation | ✅ **[V3 closed]** | Confidence badge rendered on report output, not buried in metadata |
 | ASI10:2026 Rogue Agents | ✅ | Max 2 re-retrieval loops, no self-modifying logic |
 
-**Auth:** Supabase JWT validated on every endpoint except `/health` and `/auth/callback`; MCP
-server requires JWT too. **Rate limiting:** 60 research req/user/hr, 100/IP/hr via Upstash Redis,
-sliding window, `429` + `Retry-After`. **Secrets:** Render/Vercel env panels, `.env.example`
-committed with placeholders only, GitHub secret scanning + `detect-secrets` pre-commit + Dependabot.
+**Auth:** Supabase JWT validated on every endpoint except `/health`; MCP
+server requires JWT too. **Rate limiting (PLANNED — not yet in code):** intended 60 research
+req/user/hr, 100/IP/hr via Upstash Redis, sliding window, `429` + `Retry-After`. No limiter exists
+in the codebase today; treat this as a target, not a shipped control. **Secrets:** Render/Vercel env
+panels, `.env.example` committed with placeholders only (`.env` gitignored, never committed —
+verified). GitHub secret scanning + `detect-secrets` pre-commit + Dependabot are also planned, not
+yet configured.
 
 ---
 
