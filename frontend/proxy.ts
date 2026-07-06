@@ -61,13 +61,27 @@ export async function proxy(request: NextRequest) {
       const url = request.nextUrl.clone()
       url.pathname = '/login'
       url.searchParams.set('reason', 'idle')
-      return NextResponse.redirect(url)
+      // signOut() cleared the auth cookies by writing to supabaseResponse, but
+      // we're about to return a *different* response object. Copy those cookie
+      // mutations onto the redirect, otherwise the browser keeps its session
+      // cookies and the "logout" never actually happens client-side.
+      const redirectResponse = NextResponse.redirect(url)
+      supabaseResponse.cookies.getAll().forEach((cookie) => {
+        redirectResponse.cookies.set(cookie.name, cookie.value, cookie)
+      })
+      redirectResponse.cookies.delete('last_active')
+      return redirectResponse
     }
 
     supabaseResponse.cookies.set('last_active', String(now), {
       httpOnly: true,
       sameSite: 'lax',
       path: '/',
+      // Without maxAge this was a session cookie: closing the browser deleted
+      // it, so returning after any gap looked like a fresh visit and the idle
+      // timer never fired. Persisting it is what makes "left the site, came
+      // back 40 minutes later" actually require a re-login.
+      maxAge: 60 * 60 * 24 * 7,
     })
   }
 

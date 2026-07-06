@@ -9,6 +9,8 @@ from app.middleware.auth import JWTAuthMiddleware
 from app.services.document_processor import extract_chunks_from_pdf_file, iter_embedded_chunk_batches
 from app.services.supabase_client import supabase_request
 from app.services.injection_guard import check_query, InjectionDetected
+from app.services.injection_patterns import matches_any
+from app.services.circuit_breaker import groq_breaker
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_PUBLISHABLE_KEY")
@@ -53,6 +55,13 @@ async def _mark_document_failed(document, access_token):
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
+
+
+@app.get("/health/circuit-breakers")
+async def circuit_breaker_health(request: Request):
+    """Live breaker state. Auth-gated (not public) so it isn't a free recon
+    endpoint. Phase 4's SOC dashboard reads the same snapshot."""
+    return {"groq": await groq_breaker.snapshot()}
 
 
 @app.post("/collections")
@@ -127,23 +136,46 @@ async def upload_document(collection_id: str, req: DocumentUploadRequest, reques
         if not chunk_strings:
             raise HTTPException(status_code=400, detail="No text could be extracted from the PDF.")
 
-        # 5. Batch embed + insert
+        # 5. Batch embed + shadow-scan + insert.
+        # Sprint 2.3 (vector shadow detection): scan each chunk BEFORE it goes
+        # into pgvector. A poisoned chunk is quarantined — never inserted, logged
+        # to security_events — so it can't be retrieved and fed to the model
+        # later. This is the pre-insert twin of the synthesizer's Lock #2 scan;
+        # together they mean poisoned content is caught at write time AND read time.
         chunks_created = 0
+        quarantined = 0
         async for embedded_batch in iter_embedded_chunk_batches(chunk_strings):
-            chunk_rows = [
-                {
+            chunk_rows = []
+            for c in embedded_batch:
+                if matches_any(c["content"]):
+                    quarantined += 1
+                    try:
+                        await supabase_request(
+                            "POST", "security_events", request.state.access_token,
+                            json_body={
+                                "user_id": request.state.user_id,
+                                "event_type": "vector_shadow_quarantined",
+                                "source": f"document:{document['id']}:chunk:{c['chunk_index']}",
+                                "detail": c["content"][:300],
+                            },
+                        )
+                    except Exception as log_err:
+                        print(f"[ARGUS] shadow-quarantine log failed: {log_err}")
+                    print(f"[ARGUS] Quarantined poisoned chunk {c['chunk_index']} - not inserted.")
+                    continue
+                chunk_rows.append({
                     "document_id": document["id"],
                     "user_id": request.state.user_id,
                     "content": c["content"],
                     "embedding": c["embedding"],
                     "chunk_index": c["chunk_index"],
-                }
-                for c in embedded_batch
-            ]
-            await supabase_request(
-                "POST", "document_chunks", request.state.access_token, json_body=chunk_rows
-            )
-            chunks_created += len(chunk_rows)
+                })
+
+            if chunk_rows:
+                await supabase_request(
+                    "POST", "document_chunks", request.state.access_token, json_body=chunk_rows
+                )
+                chunks_created += len(chunk_rows)
 
         await supabase_request(
             "PATCH", f"documents?id=eq.{document['id']}", request.state.access_token,
@@ -167,7 +199,11 @@ async def upload_document(collection_id: str, req: DocumentUploadRequest, reques
         if os.path.exists(temp_path):
             os.remove(temp_path)
 
-    return {"document_id": document["id"], "chunks_created": chunks_created}
+    return {
+        "document_id": document["id"],
+        "chunks_created": chunks_created,
+        "chunks_quarantined": quarantined,
+    }
 
 
 @app.post("/research")

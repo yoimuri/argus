@@ -114,7 +114,12 @@ export default function UploadPanel() {
         return
       }
       const data = await res.json()
-      setStatus(`Uploaded. ${data.chunks_created} chunks created.`)
+      const quarantined = data.chunks_quarantined ?? 0
+      setStatus(
+        quarantined > 0
+          ? `Uploaded. ${data.chunks_created} chunks created. ${quarantined} chunk(s) quarantined as potential prompt injection and not stored.`
+          : `Uploaded. ${data.chunks_created} chunks created.`,
+      )
     } catch (err) {
       setError(`Network error: ${err instanceof Error ? err.message : 'unknown'}`)
     } finally {

@@ -1,27 +1,15 @@
 import os
-import re
 from groq import AsyncGroq
 from app.agents.state import ResearchState
 from app.services.supabase_client import supabase_request
+from app.services.injection_patterns import matches_any
+from app.services.circuit_breaker import groq_breaker, CircuitBreakerOpen
 
-_client = AsyncGroq(api_key=os.environ["GROQ_API_KEY"])
+_client = AsyncGroq(api_key=os.environ["GROQ_API_KEY"], timeout=30.0)
 
-# Phrases that look like someone trying to hijack the AI from inside a chunk.
-# Case-insensitive, so "IGNORE PREVIOUS" still triggers.
-INJECTION_PATTERNS = [
-    r"ignore\s+(all\s+)?(previous\s+)?instructions",
-    r"your\s+new\s+role\s+is",
-    r"system\s+override",
-    r"forget\s+your\s+instructions",
-    r"disregard\s+(all\s+)?(previous\s+)?instructions",
-    r"you\s+are\s+now\s+a",
-    r"new\s+instructions\s*:",
-    r"act\s+as\s+if\s+you\s+are",
-    r"you\s+must\s+now",
-    r"do\s+not\s+follow\s+your\s+previous",
-]
-
-_compiled_patterns = [re.compile(p, re.IGNORECASE) for p in INJECTION_PATTERNS]
+# Injection patterns now live in one shared module (injection_patterns.py) used
+# by this chunk scanner, the query guard, and upload-time shadow detection —
+# the merge CONTINUITY.md said to do once a third caller appeared.
 
 
 async def scan_chunks(chunks: list[dict], user_id: str, access_token: str) -> list[dict]:
@@ -34,7 +22,7 @@ async def scan_chunks(chunks: list[dict], user_id: str, access_token: str) -> li
     clean = []
     for chunk in chunks:
         content = chunk.get("content", "")
-        matched = any(p.search(content) for p in _compiled_patterns)
+        matched = matches_any(content)
 
         if not matched:
             clean.append(chunk)
@@ -100,13 +88,29 @@ async def synthesizer_node(state: ResearchState) -> dict:
         for c in chunks
     )
 
-    completion = await _client.chat.completions.create(
-        model="openai/gpt-oss-20b",
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {state['query']}"},
-        ],
-        max_tokens=1024,  # cap output so a single research call can't run up unbounded token cost
-    )
+    async def _synthesize():
+        completion = await _client.chat.completions.create(
+            model="openai/gpt-oss-20b",
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {state['query']}"},
+            ],
+            max_tokens=1024,  # cap output so a single research call can't run up unbounded token cost
+        )
+        return completion.choices[0].message.content
 
-    return {"answer": completion.choices[0].message.content}
+    # Sprint 2.4: run the synthesis call through the same Groq breaker as the
+    # query guard. If Groq is down/slow/open, return a graceful banner answer
+    # instead of a 500 — Phase 2 acceptance criterion #3 (no 500 when Groq is
+    # unreachable; the session must not hang).
+    try:
+        answer = await groq_breaker.call(_synthesize)
+    except CircuitBreakerOpen:
+        answer = ("The AI service is temporarily unavailable (too many recent failures). "
+                  "Your documents and retrieved context are fine — please try again shortly.")
+    except Exception as groq_err:
+        print(f"[ARGUS] synthesis call failed, returning graceful fallback: {groq_err}")
+        answer = ("The AI service is temporarily unavailable. Your documents and retrieved "
+                  "context are fine — please try again shortly.")
+
+    return {"answer": answer}

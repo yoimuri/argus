@@ -1,5 +1,5 @@
 # ARGUS — Phase 2: Security Hardening
-**Status:** ⚪ Not Started
+**Status:** 🟡 Code-complete across all sprints (2.1–2.5) as of July 6, 2026 — pending live re-run of the 10-payload Integration Gate after the next Render/Vercel deploy.
 **Timeline:** Weeks 5–7
 **SDLC Stages:** Threat Modeling → Security Design → Adversarial Testing → Re-deploy
 **Prerequisite:** Phase 1 Integration Gate fully passed
@@ -125,9 +125,21 @@ End state:
 
 ## Integration Gate — Before Phase 3 Can Start
 
-- [ ] Injection attempt via document upload: neutralized, logged in `security_events`
-- [ ] Injection attempt via query text: blocked with 400, logged
-- [ ] Vector shadow detection: poisoned chunk confirmed absent from `document_chunks`
-- [ ] Groq circuit breaker: trips on failure, returns fallback, half-opens on recovery
-- [ ] All 10 adversarial test payloads passing (all attacks blocked)
-- [ ] Phase 1 acceptance criteria still passing after Phase 2 changes are deployed
+Code for every item below is written and compiles; the checkboxes flip to done once
+the GATE-01..10 suite in docs/ADVERSARIAL-TESTS.md is re-run against the deployed app.
+
+- [~] Injection attempt via document upload: neutralized, logged in `security_events` — GATE-07/08 (code done)
+- [~] Injection attempt via query text: blocked with 400, logged — GATE-01..05 (code done)
+- [~] Vector shadow detection: poisoned chunk confirmed absent from `document_chunks` — GATE-07 (code done)
+- [~] Groq circuit breaker: trips on failure, returns fallback, half-opens on recovery — GATE-09 (code done)
+- [~] All 10 adversarial test payloads passing — GATE-01..10 defined (live re-run pending)
+- [~] Phase 1 acceptance criteria still passing after Phase 2 changes are deployed — verify post-deploy
+
+Sprint status as of July 6, 2026:
+- Sprint 2.1 (trust_level + Lock #1/#2): done, deployed, partially verified.
+- Sprint 2.2 (2-layer query guard): done, deployed, TC-2.2-01 confirmed PASS.
+- Sprint 2.3 (pre-insert shadow detection): code complete (main.py upload loop). See ADR-011.
+- Sprint 2.4 (Groq circuit breaker + 10-payload suite): code complete (circuit_breaker.py). See ADR-011.
+- Sprint 2.5 (MCP allowlist logic): code complete (mcp_allowlist.py). See ADR-011.
+- Shared injection_patterns.py module created; guard + synthesizer + upload scan all use it.
+- Idle-timeout logout: two real bugs found in testing and fixed. See ADR-009 addendum.
