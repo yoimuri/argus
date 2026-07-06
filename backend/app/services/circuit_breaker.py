@@ -86,7 +86,15 @@ class CircuitBreaker:
             }
 
 
-# Both Groq callers (query classifier and synthesizer) share this instance:
-# they hit the same upstream, so one being down means the other is too.
+# The synthesizer's answer-generation call shares this instance. The query
+# guard's classifier used to share it too (ADR-007/ADR-011), but ADR-012
+# replaced that classifier with a purpose-built HF injection model, which gets
+# its own breaker below since it's a different upstream with its own failure mode.
 # Thresholds from BLUEPRINT.md's breaker table (Groq row).
 groq_breaker = CircuitBreaker("groq", fail_threshold=5, failure_window_s=120, recover_timeout_s=60)
+
+# ADR-012: guards the HF prompt-injection classifier call in injection_guard.py.
+# Separate from groq_breaker because it's a different upstream (HuggingFace, not
+# Groq) with its own independent failure mode — Groq being down shouldn't open
+# this one and vice versa.
+hf_breaker = CircuitBreaker("hf_prompt_guard", fail_threshold=5, failure_window_s=120, recover_timeout_s=60)

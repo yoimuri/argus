@@ -4,7 +4,39 @@ import { NextResponse, type NextRequest } from 'next/server'
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000 // 30 minutes
 
 export async function proxy(request: NextRequest) {
-  let supabaseResponse = NextResponse.next({ request })
+  // Nonce-based CSP (ADR-008 addendum, closes pentest finding HDR_003: static
+  // 'unsafe-inline' on script-src disables XSS protection). A fresh,
+  // unpredictable value per request, allow-listed via 'nonce-{value}' instead
+  // of 'unsafe-inline'. Next.js parses this header during SSR and auto-applies
+  // the nonce to its own framework scripts and page bundles — no per-component
+  // changes needed. style-src keeps 'unsafe-inline' deliberately: components
+  // use inline style={{}} throughout, and nonces don't apply to style
+  // attributes anyway, so nonce-ing styles would break the UI for no security
+  // gain (styles can't execute JS).
+  const nonce = Buffer.from(crypto.randomUUID()).toString('base64')
+  const isDev = process.env.NODE_ENV === 'development'
+  const cspHeader = `
+    default-src 'self';
+    script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${isDev ? " 'unsafe-eval'" : ''};
+    style-src 'self' 'unsafe-inline';
+    img-src 'self' data:;
+    font-src 'self';
+    connect-src 'self' ${process.env.NEXT_PUBLIC_SUPABASE_URL} ${process.env.NEXT_PUBLIC_API_URL};
+    object-src 'none';
+    base-uri 'self';
+    form-action 'self';
+    frame-ancestors 'none';
+    upgrade-insecure-requests;
+  `
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+
+  const requestHeaders = new Headers(request.headers)
+  requestHeaders.set('x-nonce', nonce)
+  requestHeaders.set('Content-Security-Policy', cspHeader)
+
+  let supabaseResponse = NextResponse.next({ request: { headers: requestHeaders } })
+  supabaseResponse.headers.set('Content-Security-Policy', cspHeader)
 
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -16,7 +48,8 @@ export async function proxy(request: NextRequest) {
         },
         setAll(cookiesToSet, headers) {
           cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value))
-          supabaseResponse = NextResponse.next({ request })
+          supabaseResponse = NextResponse.next({ request: { headers: requestHeaders } })
+          supabaseResponse.headers.set('Content-Security-Policy', cspHeader)
           cookiesToSet.forEach(({ name, value, options }) =>
             supabaseResponse.cookies.set(name, value, options)
           )
@@ -39,7 +72,9 @@ export async function proxy(request: NextRequest) {
   ) {
     const url = request.nextUrl.clone()
     url.pathname = '/login'
-    return NextResponse.redirect(url)
+    const redirectResponse = NextResponse.redirect(url)
+    redirectResponse.headers.set('Content-Security-Policy', cspHeader)
+    return redirectResponse
   }
 
   // Idle timeout, checked on whatever the next request happens to be, not a
@@ -66,6 +101,7 @@ export async function proxy(request: NextRequest) {
       // mutations onto the redirect, otherwise the browser keeps its session
       // cookies and the "logout" never actually happens client-side.
       const redirectResponse = NextResponse.redirect(url)
+      redirectResponse.headers.set('Content-Security-Policy', cspHeader)
       supabaseResponse.cookies.getAll().forEach((cookie) => {
         redirectResponse.cookies.set(cookie.name, cookie.value, cookie)
       })
@@ -90,6 +126,20 @@ export async function proxy(request: NextRequest) {
 
 export const config = {
   matcher: [
-    '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
+    /*
+     * Match all request paths except for the ones starting with:
+     * - _next/static (static files)
+     * - _next/image (image optimization files)
+     * - favicon.ico (favicon file)
+     * - image assets
+     * and skip prefetch requests (next/link) so they don't churn nonces.
+     */
+    {
+      source: '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
+      missing: [
+        { type: 'header', key: 'next-router-prefetch' },
+        { type: 'header', key: 'purpose', value: 'prefetch' },
+      ],
+    },
   ],
 }
