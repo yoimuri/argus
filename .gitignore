@@ -7,4 +7,8 @@ node_modules/
 # Private working log — session status lives here, public repo only sees curated docs
 CONTINUITY.md
 CLAUDE.md
+
+# Claude Code skills (local tooling, not part of the shipped project)
+.claude/
+.agents/
 skills-lock.json
