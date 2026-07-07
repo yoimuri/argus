@@ -63,14 +63,23 @@ async def orchestrator_node(state: ResearchState) -> dict:
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": query},
             ],
-            max_tokens=512,
+            max_tokens=768,
             # Same reasoning-model trap as the synthesizer (see synthesizer.py): the
             # hidden reasoning tokens and the JSON output share the max_tokens budget.
             # At the old 300 with uncapped reasoning, a long reasoning pass could leave
             # no room for the JSON, producing empty content -> _extract_json fails ->
-            # fail-open to raw query. 'low' effort keeps reasoning tiny; 512 gives the
-            # JSON comfortable headroom. Passed via extra_body for groq-sdk robustness.
-            extra_body={"reasoning_effort": "low"},
+            # fail-open to raw query.
+            #
+            # 'medium' (not 'low'): terse/lazy inputs with no few-shot match (e.g. a
+            # bare "summarize", no punctuation, no named topic) need actual judgment,
+            # not just pattern-matching the examples in SYSTEM_PROMPT. 'low' was too
+            # tight a leash for that. This reopens the original variability (reasoning
+            # can swing, same as the pre-fix default effort did), so max_tokens is
+            # raised to 768 to give it room without falling back to unbounded. Worst
+            # case if reasoning still overruns: _extract_json fails and the except
+            # block below fails open to a raw-query pass, same as any other Orchestrator
+            # failure. It does not reproduce the Synthesizer's blank-answer bug.
+            extra_body={"reasoning_effort": "medium"},
         )
         return completion.choices[0].message.content
 

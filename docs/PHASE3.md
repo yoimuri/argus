@@ -229,15 +229,27 @@ independently deployable and verifiable. After you live-test each one, jot anyth
 
 ### Sprint 3a.1 — Orchestrator agent + intent-based retrieval (the headline win)
 
-**Status:** 🟡 Code-complete; the vague-query failure is root-caused and fixed, awaiting live
-re-test. The symptom, vague queries returning a blank answer, was traced to neither retrieval nor
-classification (both confirmed working against live data). The synthesis model is a reasoning model
-whose token budget covers its internal reasoning *and* the visible answer together; when reasoning
-ran long it consumed the whole budget and returned nothing. Capping reasoning effort on both model
-calls fixed it, with a guard so an empty completion can never surface as a silent blank answer. This
-also settled an open model-choice question. The model was never the weak point, the budget was.
-Retrieval constants unchanged (`SPECIFIC_MATCH_COUNT=5`, `BROAD_MATCH_COUNT=8`, `FINAL_TOP_N=8`).
-**Do not flip to ✅ until re-verified live.**
+**Status:** 🟡 Code-complete, partially live-verified. The vague-query failure (blank answers on
+queries like "summarize for me") was traced to neither retrieval nor classification, both
+confirmed working against live data. The synthesis model is a reasoning model whose token budget
+covers its internal reasoning *and* the visible answer together; when reasoning ran long it
+consumed the whole budget and returned nothing. Capping reasoning effort on both model calls fixed
+it, with a guard so an empty completion can never surface as a silent blank answer. This also
+settled an open model-choice question: the model was never the weak point, the budget was. This
+fix, at `reasoning_effort: "low"` on both the Orchestrator and Synthesizer, was live-tested
+2026-07-08 and passed: the pinned acceptance criterion (vague query returns a real answer, not a
+refusal) holds.
+
+**Since that passing test, one more change has been made and is NOT yet live-verified:** the
+Orchestrator's `reasoning_effort` was raised from `"low"` to `"medium"` (synthesizer unchanged) to
+give intent classification more room on terse/atypical phrasing, like a bare `"summarize"` with no
+punctuation and nothing matching the system prompt's few-shot examples. This reopens some of the
+reasoning-length variability the original fix was capping, so `max_tokens` was raised 512→768 to
+compensate. Worst case if it still overruns: the Orchestrator's existing fail-open logic (any
+parse failure falls back to a raw-query pass) absorbs it; this cannot reproduce the Synthesizer's
+blank-answer bug. Still needs a fresh live pass on both a normal query and a terse one before this
+sprint can close.
+**Do not flip to ✅ until this specific version is re-verified live.**
 Concrete constants chosen: `SPECIFIC_MATCH_COUNT=5`, `BROAD_MATCH_COUNT=8` (per sub-query),
 `FINAL_TOP_N=8` after merge/dedupe/sort by similarity. Picked so the single-query "specific"
 path returns byte-for-byte the same rows Phase 2 did (no regression), while "broad"/"meta" fan
@@ -505,8 +517,9 @@ generic on very large PDFs | future (retrieval tuning) | open`.
 
 | Date | Sprint / Phase | What I noticed | Useful for | Status |
 |---|---|---|---|---|
-| 2026-07-07 | 3a.1 | Vague queries returned blank answers. Ruled out retrieval and classification against live data (both fine); real cause was the synthesis model's token budget being shared between internal reasoning and output, so long reasoning left nothing for the answer. Fixed by capping reasoning effort. | headline win, pending live re-test | fixed locally |
+| 2026-07-07 | 3a.1 | Vague queries returned blank answers. Ruled out retrieval and classification against live data (both fine); real cause was the synthesis model's token budget being shared between internal reasoning and output, so long reasoning left nothing for the answer. Fixed by capping reasoning effort. | headline win | fixed, verified live 2026-07-08 |
 | 2026-07-07 | 3a.1 | Design lesson: any reasoning-model call needs an explicit reasoning/output budget or it can silently return empty: carry this into the Critic and Web Scout agents. | future (all model calls) | open |
+| 2026-07-08 | 3a.1 | A bare "summarize" (no punctuation, not matching the system prompt's few-shot wording) is the kind of terse/lazy phrasing real users send, and low reasoning effort may not judge it as reliably as clearer phrasing. Raised the Orchestrator's `reasoning_effort` low to medium, `max_tokens` 512 to 768 to compensate. Synthesizer untouched (different job, not classification). | this sprint, intent-recognition robustness | implemented, not yet live-tested |
 |  |  |  |  |  |
 
 ---
