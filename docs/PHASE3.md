@@ -230,12 +230,20 @@ independently deployable and verifiable. After you live-test each one, jot anyth
 
 ### Sprint 3a.1 — Orchestrator agent + intent-based retrieval (the headline win)
 
-**Status:** 🟡 Code-complete 2026-07-07 (Sonnet 5 execution session), not yet deployed or
-live-verified. Built exactly as planned below, no deviations. Concrete constants chosen:
-`SPECIFIC_MATCH_COUNT=5`, `BROAD_MATCH_COUNT=8` (per sub-query), `FINAL_TOP_N=8` after
-merge/dedupe/sort by similarity — picked so the single-query "specific" path returns
-byte-for-byte the same rows Phase 2 did (no regression), while "broad"/"meta" fan out
-across up to 3 sub-queries before capping. New file: `backend/app/agents/orchestrator.py`.
+**Status:** 🟡 Code-complete, first live test FAILED, bug diagnosed + fixed, redeploy + re-test
+pending. Original build (2026-07-07) matched the plan exactly, no deviations. First live test
+that same day failed the headline acceptance criterion (vague queries still got no real answer);
+root cause and fix are a mechanical correction, not a plan/architecture change — full diagnosis in
+`CONTINUITY.md`. Short version: `orchestrator.py` requested a Groq response-format feature never
+confirmed supported for this model; likely always failed and silently fell back to old raw-query
+behavior on every call, which explained both the failed fix and Clint's "sensitive to `?`" finding
+(that was the *old* embedding search's known fragility leaking through, not a new bug). Fixed by
+dropping that param, adding defensive JSON parsing, and strengthening the prompt to state
+punctuation is not an intent signal. **Not yet re-verified live — do not flip to ✅ until it is.**
+Concrete constants chosen: `SPECIFIC_MATCH_COUNT=5`, `BROAD_MATCH_COUNT=8` (per sub-query),
+`FINAL_TOP_N=8` after merge/dedupe/sort by similarity — picked so the single-query "specific"
+path returns byte-for-byte the same rows Phase 2 did (no regression), while "broad"/"meta" fan
+out across up to 3 sub-queries before capping. New file: `backend/app/agents/orchestrator.py`.
 Changed: `retriever.py`, `graph.py`, `state.py`, `main.py`'s `/research` seed dict.
 
 **In plain terms:** teach ARGUS to understand what you *mean*. A vague "summarize for me" gets

@@ -17,13 +17,40 @@ SYSTEM_PROMPT = (
     "(example: \"What are the risks mentioned in this document?\"). refined_queries "
     "should contain 2-3 sub-questions sampling different angles of the topic.\n"
     "- \"meta\": the question is vague or asks about the document as a whole with no "
-    "real topic (example: \"summarize this for me\", \"what's the gist\"). "
-    "refined_queries should contain 3 sub-questions covering different likely parts of "
-    "a document (overview/purpose, key findings or figures, conclusions or next steps) "
-    "so retrieval samples broadly instead of landing on one arbitrary spot.\n\n"
+    "real topic (examples: \"summarize this for me\", \"summarize for me\", \"what's the "
+    "gist\", \"give me an overview\"). refined_queries should contain 3 sub-questions "
+    "covering different likely parts of a document (overview/purpose, key findings or "
+    "figures, conclusions or next steps) so retrieval samples broadly instead of landing "
+    "on one arbitrary spot.\n\n"
+    "Punctuation is not a signal. A trailing question mark does not make a query "
+    "'specific', and a missing one does not make it 'meta' — judge intent only by "
+    "whether the wording names a concrete topic. \"summarize for me\" and "
+    "\"summarize for me?\" must be classified identically.\n\n"
     "Always return at least one refined query. Never include commentary, markdown, or "
     "text outside the JSON object."
 )
+
+
+def _extract_json(raw: str) -> dict:
+    """Best-effort JSON parse. Some models wrap the object in a markdown code
+    fence or add a stray sentence before/after it even when told not to — strip
+    a fence and fall back to the first {...} substring before giving up, rather
+    than treating cosmetic wrapping as a hard failure."""
+    text = raw.strip()
+
+    if text.startswith("```"):
+        text = text.strip("`")
+        if text.lower().startswith("json"):
+            text = text[4:]
+        text = text.strip()
+
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        start, end = text.find("{"), text.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            raise
+        return json.loads(text[start:end + 1])
 
 
 async def orchestrator_node(state: ResearchState) -> dict:
@@ -37,13 +64,12 @@ async def orchestrator_node(state: ResearchState) -> dict:
                 {"role": "user", "content": query},
             ],
             max_tokens=300,
-            response_format={"type": "json_object"},
         )
         return completion.choices[0].message.content
 
     try:
         raw = await groq_breaker.call(_classify)
-        parsed = json.loads(raw)
+        parsed = _extract_json(raw)
         intent = parsed.get("intent")
         refined_queries = parsed.get("refined_queries")
 
@@ -56,11 +82,12 @@ async def orchestrator_node(state: ResearchState) -> dict:
         if not refined_queries:
             raise ValueError("refined_queries empty after cleaning")
 
+        print(f"[ARGUS] orchestrator intent={intent!r} refined_queries={refined_queries!r}")
         return {"intent": intent, "refined_queries": refined_queries}
 
     except Exception as err:
         # Fail-open: the Orchestrator improving retrieval must never block it. Any
         # failure here (Groq down, breaker open, bad/unparseable JSON) falls back to
         # exactly the pre-Phase-3 behavior — one raw-query retrieval pass.
-        print(f"[ARGUS] orchestrator fallback to raw query: {err}")
+        print(f"[ARGUS] orchestrator fallback to raw query: {err!r}")
         return {"intent": "specific", "refined_queries": [query]}
