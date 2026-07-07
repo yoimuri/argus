@@ -287,6 +287,8 @@ async def research(request: Request):
         "collection_id": collection_id,
         "access_token": request.state.access_token,
         "user_id": request.state.user_id,
+        "intent": "specific",
+        "refined_queries": [query],
         "chunks": [],
         "answer": None,
         "report": None,

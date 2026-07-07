@@ -6,6 +6,8 @@ class ResearchState(TypedDict):
     collection_id: str
     access_token: str
     user_id: str
+    intent: str
+    refined_queries: list[str]
     chunks: list[dict]
     answer: Optional[str]
     report: Optional[str]
