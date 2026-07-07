@@ -263,7 +263,11 @@ async def upload_document(collection_id: str, req: DocumentUploadRequest, reques
 @app.post("/research")
 async def research(request: Request):
     body = await request.json()
-    query = body.get("query")
+    # Normalize at the entry point: strip leading/trailing whitespace so the exact
+    # same string reaches both the orchestrator and (on fail-open) the embedding.
+    # A trailing space must never change the answer; trimming here kills that whole
+    # class of bug at the source. The guard below then also catches whitespace-only input.
+    query = (body.get("query") or "").strip()
     collection_id = body.get("collection_id")
     if not query or not collection_id:
         raise HTTPException(status_code=400, detail="query and collection_id are required.")

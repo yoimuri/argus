@@ -34,6 +34,13 @@ async def retriever_node(state: ResearchState) -> dict:
             },
         )
 
+        # Observability: dim should always be 384, and rows should be non-zero for a
+        # populated collection (the RPC has no similarity threshold). If a future run
+        # returns an empty answer, these two numbers say immediately whether the cause
+        # was a bad embedding (wrong dim) or the RPC genuinely returning nothing.
+        dim = len(query_embedding) if isinstance(query_embedding, list) else "N/A"
+        print(f"[ARGUS] retriever sub_query={sub_query!r} embed_dim={dim} rows={len(rows)}")
+
         for row in rows:
             row_id = row.get("id")
             if row_id in seen_ids:
@@ -43,4 +50,9 @@ async def retriever_node(state: ResearchState) -> dict:
 
     merged.sort(key=lambda r: r.get("similarity", 0), reverse=True)
 
-    return {"chunks": merged[:FINAL_TOP_N]}
+    final = merged[:FINAL_TOP_N]
+    print(
+        f"[ARGUS] retriever intent={intent!r} sub_queries={len(refined_queries)} "
+        f"merged={len(merged)} returned={len(final)}"
+    )
+    return {"chunks": final}

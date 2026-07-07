@@ -9,6 +9,7 @@ HF_EMBEDDING_URL = "https://router.huggingface.co/hf-inference/models/sentence-t
 CHUNK_SIZE = 800
 CHUNK_OVERLAP = 100
 EMBED_BATCH_SIZE = 8
+EMBED_DIM = 384  # all-MiniLM-L6-v2 output dimension; the pgvector column is vector(384)
 
 
 def chunk_text(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> list[str]:
@@ -59,7 +60,32 @@ async def embed_chunks(chunks: list[str]) -> list[list[float]]:
 
 async def embed_query(text: str) -> list[float]:
     result = await _call_hf_embedding(text)
-    return result[0] if isinstance(result, list) and result and isinstance(result[0], list) else result
+
+    # HF's feature-extraction endpoint returns either a flat [384] vector or a
+    # nested [[384]] (a single pooled row) for one input string. Resolve both to the
+    # vector, but only accept a nested shape when it is exactly one row: a multi-row
+    # 2-D array is token-level output (no pooling), which we must NOT silently collapse
+    # to its first token. Leaving vector=None there routes it into the raise below.
+    if isinstance(result, list) and result and isinstance(result[0], list):
+        vector = result[0] if len(result) == 1 else None
+    else:
+        vector = result
+
+    # Fail loud on anything that is not a real 384-float vector. Cold-start returns an
+    # {"error": "...model loading..."} dict, and token-level output returns a multi-row
+    # array; the old code passed either straight through as the "embedding", silently
+    # poisoning retrieval (wrong/garbage vector) or getting rejected downstream as a
+    # confusing empty answer. Raising here surfaces the real cause in the logs instead.
+    # The retriever/synthesizer have no fallback for a bad embedding by design: a broken
+    # embedding must not be allowed to look like "no results".
+    if not isinstance(vector, list) or len(vector) != EMBED_DIM or not all(isinstance(x, (int, float)) for x in vector):
+        preview = repr(result)[:300]
+        raise ValueError(
+            f"embed_query got an unexpected HF response (not a {EMBED_DIM}-float vector). "
+            f"Raw payload preview: {preview}"
+        )
+
+    return vector
 
 
 async def iter_embedded_chunk_batches(

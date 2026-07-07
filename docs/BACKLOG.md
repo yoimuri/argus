@@ -112,6 +112,26 @@ that gets picked up.
 
 ---
 
+## Item 6 — Embedding calls have no circuit breaker or retry (cold-start resilience)
+
+`embed_query` and `embed_chunks` (`backend/app/services/document_processor.py`) call the
+HuggingFace Inference API directly with no `hf_breaker` wrap and no retry/backoff. The HF
+serverless endpoint cold-starts and can return a 5xx or a "model loading" payload on the
+first hit after idle. As of the 2026-07-08 hardening, `embed_query` now *validates* its
+result and raises loudly on a bad shape (so the failure is visible instead of a silent bad
+vector), but there is still no graceful degradation: a cold-start surfaces as a failed
+research request rather than a retried or degraded one.
+
+The real fix mirrors what already exists for the injection classifier: wrap the HF call in
+`hf_breaker` (`backend/app/services/circuit_breaker.py`) and add one retry with short backoff
+for the model-loading case. Deferred deliberately so the diagnostic hardening could ship tight;
+this is the resilience layer on top of it.
+
+**Phase:** Phase 3 observability/resilience, or whenever a cold-start failure is actually
+observed live. Not urgent until the retriever logs show it happening.
+
+---
+
 ## Suggested sequencing (not a locked decision)
 
 1. Item 2 (edit/mass-delete) + Item 5 (UX debt) together. Same file surface, all frontend/UploadPanel.tsx.
