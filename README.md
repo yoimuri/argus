@@ -53,25 +53,22 @@ phase instead of building everything at once. Full plan in `docs/BLUEPRINT.md`.
 
 ## Security approach
 
-Every piece of content the agents see gets labeled by where it came from (uploaded document,
-web search, the user's own question). The agents are explicitly instructed to treat labeled
-reference content as data to summarize, never as instructions to follow. Content pulled from
-documents is scanned for injection patterns twice: once before it's stored (upload-time
-vector shadow detection) and again before the model sees it (synthesis-time). Direct attacks
-typed into the query box go through a two-layer check: a purpose-built HuggingFace prompt-
-injection classifier judges intent directly (not just keyword matching, so reworded attacks
-are caught too), backed by a regex fallback that runs on every request and fails closed if the
-classifier is unreachable. Every external AI call (Groq, HuggingFace) is wrapped in a circuit
-breaker so an outage degrades gracefully instead of hanging or 500ing. Browser-level hardening
-includes a nonce-based Content-Security-Policy (per-request nonce, no `unsafe-inline` on
-scripts), the other standard security headers, and an idle session timeout. Dependency
-vulnerability scanning is also in place. Authorization is enforced at the database level
-(Postgres Row Level Security), not just in application code. No layer here claims to catch
-every possible attack — prompt injection detection is an open problem — the actual defense is
-layered detection plus containment: even a missed detection is treated as data, never
-executed. Architecture decisions, including ones that changed from the original plan and why,
-and real bugs found during testing and how they were fixed, are documented as ADRs in `docs/`,
-not papered over.
+The design assumes detection will sometimes miss, so it leans on containment as much as
+detection. Everything the agents see is labeled by origin. Uploaded document, web search, the
+user's own question, and the agents are instructed to treat reference content as data to
+summarize, never as instructions to follow. Document content is scanned for injection patterns
+both before storage and again before the model reads it. Direct attacks in the query box go
+through a two-layer check: a purpose-built classifier that judges intent (so reworded attacks
+are caught, not just known keywords), backed by a regex fallback that fails closed if the
+classifier is unreachable. The point is that even a missed injection is still handled as data,
+never executed.
+
+Around that sit the operational safeguards: database-level authorization (Postgres Row Level
+Security) rather than app-code checks alone, circuit breakers on every external AI call so an
+outage degrades gracefully, a nonce-based Content-Security-Policy, an idle session timeout, and
+dependency scanning. No layer claims to catch every attack. Prompt injection is an open problem,
+and the docs say so plainly. Decisions that changed from the original plan, and real bugs found
+in testing, are written up as ADRs rather than papered over.
 
 ## Repository structure
 
@@ -99,7 +96,7 @@ argus/
 - No keyword list or classifier catches every possible attack phrasing, this is a
   structural limit of the approach, not a bug, see `docs/ADVERSARIAL-TESTS.md`
 - Vague or meta questions ("summarize for me") can return "no relevant information found"
-  instead of a real answer — retrieval currently pulls a fixed top-5-by-similarity sample
+  instead of a real answer. Retrieval currently pulls a fixed top-5-by-similarity sample
   with no query-intent understanding. Planned fix is Phase 3's Orchestrator agent, not a
   quick prompt patch, see `docs/BLUEPRINT.md`
 
@@ -130,7 +127,6 @@ fill in your own Supabase, Hugging Face, and Groq credentials.
 
 - `docs/BLUEPRINT.md`, full technical specification and roadmap
 - `docs/PHASE1.md`, `docs/PHASE2.md`, sprint-by-sprint build plan and build log
-- `docs/HOW-WE-BUILT-THIS.md`, plain-language walkthrough of how the system actually works
 - `docs/ADR-*.md`, individual architecture decisions, including real bugs and how they
   were found and fixed
 - `docs/ADVERSARIAL-TESTS.md`, security test cases and real results, pass and fail alike

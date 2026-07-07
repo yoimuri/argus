@@ -2,10 +2,10 @@
 
 Durable home for work identified but deliberately not built yet. Each item has enough
 grounding (root cause where known, relevant files, phase assignment) that a future session
-can start productively instead of re-deriving context. Not an execution-ready spec — full
+can start productively instead of re-deriving context. Not an execution-ready spec. Full
 implementation planning happens when a session picks an item up.
 
-Phase 2 (Security Hardening) closed 2026-07-07 — see `docs/PHASE2.md` and
+Phase 2 (Security Hardening) closed 2026-07-07. See `docs/PHASE2.md` and
 `docs/ADVERSARIAL-TESTS.md` for the closing gate run. Everything below is post-Phase-2 work.
 
 ---
@@ -13,7 +13,7 @@ Phase 2 (Security Hardening) closed 2026-07-07 — see `docs/PHASE2.md` and
 ## Confirmed phase assignments
 
 Phase 2's scope is LLM/agent security specifically (injection, extraction, poisoning,
-resilience, MCP allowlist — the 13 gates). Checked each item below against that scope before
+resilience, MCP allowlist. The 13 gates). Checked each item below against that scope before
 closing Phase 2, to make sure nothing here was secretly a Phase 2 requirement:
 
 | Item | Real phase | Why |
@@ -21,7 +21,7 @@ closing Phase 2, to make sure nothing here was secretly a Phase 2 requirement:
 | Query intent understanding | Phase 3 (Orchestrator) | Retrieval-quality problem, not security |
 | Edit / mass-delete collections | Post-Phase-2 UX | Feature gap, not security |
 | Google sign-in | Pre-public-launch | Feature + privacy posture, not Phase 2 security |
-| Image/figure reading | Future phase, own threat model | New injection channel, but the channel doesn't exist yet — nothing for a Phase 2 gate to test |
+| Image/figure reading | Future phase, own threat model | New injection channel, but the channel doesn't exist yet: nothing for a Phase 2 gate to test |
 
 None of these were hidden Phase 2 blockers. Closing Phase 2 on the 13 gates skipped nothing
 that belonged to Phase 2.
@@ -33,12 +33,12 @@ that belonged to Phase 2.
 **Root cause already diagnosed** (July 8, 2026 session): `backend/app/agents/retriever.py`
 embeds the raw query and pulls top-5 by cosine similarity with no intent parsing, so a
 vague/meta query ("summarize for me") retrieves an arbitrary sample instead of a
-representative one. Confirmed live again during Phase 2 gate verification (2026-07-07) —
+representative one. Confirmed live again during Phase 2 gate verification (2026-07-07),
 still an open, expected gap. `docs/BLUEPRINT.md`'s own Debug Diary example already uses
 "Summarize the Q3 financial report" as the Orchestrator's worked example, confirming this was
 always meant to be the Orchestrator's job, not a Synthesizer prompt patch.
 
-**Phase:** 3 (Orchestrator agent design). Not a standalone fix — a prompt patch now would be
+**Phase:** 3 (Orchestrator agent design). Not a standalone fix. A prompt patch now would be
 a band-aid reworked the moment Phase 3 lands.
 
 ---
@@ -52,7 +52,7 @@ Two related but distinct gaps:
 - **Mass delete:** `frontend/app/dashboard/UploadPanel.tsx` has one Delete button per
   collection (calls `DELETE /collections/{id}` one at a time with a `confirm()` guard). A
   "select multiple, delete all" flow needs either (a) a loop of the existing endpoint from the
-  frontend, or (b) a new batch backend endpoint — undecided. Reuse the Storage-purge-then-cascade
+  frontend, or (b) a new batch backend endpoint. Undecided. Reuse the Storage-purge-then-cascade
   pattern already built in `delete_collection` (`backend/main.py`) either way.
 
 **Phase:** post-Phase-2 UX, standalone.
@@ -63,7 +63,7 @@ Two related but distinct gaps:
 
 Currently email/password only (`frontend/app/login/LoginForm.tsx`,
 `supabase.auth.signInWithPassword`). Supabase Auth supports OAuth natively
-(`supabase.auth.signInWithOAuth({ provider: 'google' })`) — mechanically simple, not a novel
+(`supabase.auth.signInWithOAuth({ provider: 'google' })`). Mechanically simple, not a novel
 design problem. **Real prerequisite:** `docs/ADR-013.md`'s pre-launch checklist (privacy
 policy, sub-processor disclosure) stops being theoretical once real public users can sign up.
 Sequence this against that checklist, not as a standalone OAuth wire-up.
@@ -78,12 +78,12 @@ Of the six items in `README.md`'s Known Limitations section: two overlap items 1
 are accepted structural/platform facts with nothing to plan (no classifier catches every
 attack phrasing; Render cold-start delay), and two are genuinely new:
 
-- **Image/figure reading** — `backend/app/services/document_processor.py` uses PyMuPDF's
+- **Image/figure reading**. `backend/app/services/document_processor.py` uses PyMuPDF's
   `page.get_text("text")` only, no vision model. Per `docs/SECURITY-RESEARCH-LOG.md`'s own
   forward-note, the current text-only injection guards would NOT automatically cover an image
-  channel — this needs its own explicit threat model before building, not an assumption the
-  existing guards extend to it. Largest, most architecturally novel item here — sequence last.
-- **Synchronous file processing** — `backend/main.py`'s upload handler processes inline.
+  channel. This needs its own explicit threat model before building, not an assumption the
+  existing guards extend to it. Largest, most architecturally novel item here. Sequence last.
+- **Synchronous file processing**. `backend/main.py`'s upload handler processes inline.
   Known scaling limit, already an accepted tradeoff, not urgent.
 
 **Phase:** image reading needs its own future phase + threat model. Sync processing:
@@ -94,7 +94,7 @@ low-priority, no phase assigned.
 ## Item 5 — UX/design debt found during Phase 2 gate verification (2026-07-07)
 
 Four items surfaced while running the live gates, none security-relevant, all logged in
-CONTINUITY.md's gaps table:
+the project's gaps table:
 
 - **Chunk-granularity quarantine.** Upload-time shadow detection (GATE-07) discards the whole
   chunk when it contains an injected tail, even if most of the chunk is legitimate content.
@@ -107,14 +107,14 @@ CONTINUITY.md's gaps table:
 - **No upload-cancel.** No way to cancel an in-progress upload, including by navigating away.
   `frontend/app/dashboard/UploadPanel.tsx`.
 
-**Phase:** unassigned, not yet triaged — small enough to bundle with Item 2's UI work when
+**Phase:** unassigned, not yet triaged. Small enough to bundle with Item 2's UI work when
 that gets picked up.
 
 ---
 
 ## Suggested sequencing (not a locked decision)
 
-1. Item 2 (edit/mass-delete) + Item 5 (UX debt) together — same file surface, all frontend/UploadPanel.tsx.
+1. Item 2 (edit/mass-delete) + Item 5 (UX debt) together. Same file surface, all frontend/UploadPanel.tsx.
 2. Item 3 (Google sign-in), paired with the ADR-013 checklist review.
 3. Item 1 (query intent) as part of Phase 3's Orchestrator design, not standalone.
-4. Item 4's image/figure reading last — largest, needs its own injection threat model first.
+4. Item 4's image/figure reading last. Largest, needs its own injection threat model first.

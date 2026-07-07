@@ -1,15 +1,15 @@
 # ARGUS — Phase 1: MVP Core
-**Status:** 🔵 In Progress
+**Status:** ✅ Complete (verified live)
 **Timeline:** Weeks 1–4
 **SDLC Stages:** Requirements → Architecture Design → Build → Test → Deploy
 **Prerequisite:** None (this is the foundation everything else runs on)
 
 ---
 
-## What You're Building
+## What this phase builds
 
-A working 3-agent research pipeline. User signs in, uploads a PDF, asks a research question,
-gets back a cited markdown report. That is the entire scope of Phase 1. Nothing more.
+A working 3-agent research pipeline. A user signs in, uploads a PDF, asks a research question,
+and gets back a cited markdown report. That is the entire scope of Phase 1. Nothing more.
 
 **Active services this phase:**
 
@@ -40,8 +40,8 @@ Localhost does not count. If any step fails on the deployed version, Phase 1 is 
 
 ## Sprint Breakdown
 
-One sprint = one Claude session. Do not start the next sprint until the current stable state is
-confirmed. Every sprint has a testable end condition, not just "I wrote the code."
+One sprint = one focused work session. Don't start the next until the current stable state is
+confirmed. Every sprint has a testable end condition, not just "the code is written."
 
 ### Sprint 1: Monorepo scaffold + local Docker
 **Session goal:** GitHub repo exists, directory structure is correct, docker-compose.yml spins up
@@ -94,12 +94,12 @@ This is the exact lesson from the Cloudflare Worker project applied before it bi
 | Decision | Choice | Why |
 |---|---|---|
 | Embeddings | HuggingFace `all-MiniLM-L6-v2` | Free, 384 dimensions, local CPU fallback available |
-| Vector dimensions | 384 | Fixed at schema creation — changing later means re-embedding everything |
+| Vector dimensions | 384 | Fixed at schema creation; changing it later means re-embedding everything |
 | PDF extraction | `pdfplumber` → markdown formatter | Cleaner chunks than raw text; better retrieval quality |
 | LangGraph version | 1.2.6 (June 18, 2026) | Latest stable; Python 3.10+ required |
 | Next.js version | 16.2.9 LTS (June 9, 2026) | Current LTS; Next.js 15 ends Oct 2026 |
 | Auth pattern | Supabase JWT, server-side validation only | CORS is bypassable by direct calls; JWT is the real gate |
-| Demo document type | CTI reports (Verizon DBIR, CISA advisories, Mandiant) | Free to download; directly relevant to Trend Micro / Accenture interviews |
+| Demo document type | CTI reports (Verizon DBIR, CISA advisories, Mandiant) | Free to download, and representative of the security domain the project targets |
 
 ---
 
@@ -116,8 +116,8 @@ cost beyond what a free-tier solo portfolio project justifies.
 data layer is possible.
 **Production upgrade path:** Separate vector DB (Pinecone/Weaviate for 100M+ scale), dedicated
 managed auth (Auth0), Postgres with read replicas.
-**Status:** Accepted. This is your answer when an interviewer asks "what would you do
-differently at production scale?"
+**Status:** Accepted. The production upgrade path above is the deliberate answer to "what would
+you do differently at real scale?"
 
 ### ADR-001: [Title]
 **Date:**
@@ -130,8 +130,7 @@ differently at production scale?"
 
 ## Build Log
 
-Fill in one block per Claude session. This becomes your interview prep — you should be able to
-explain what each piece does, why it exists, and what broke during build.
+One block per sprint: what was built, why it exists, what broke, and how it was fixed.
 
 > Format: Date → Goal → What you built → What broke → How you fixed it → End state
 
@@ -144,7 +143,7 @@ docker-compose.yml exposing port 8000, requirements.txt pinned to fastapi==0.137
 uvicorn[standard]==0.48.0.
 Broke: Nothing in the build itself. My own mistake was checking the docker compose
 terminal log for the {"status":"ok"} response instead of actually hitting the route
-in the browser — the terminal log only shows the server starting, not the route response.
+in the browser. The terminal log only shows the server starting, not the route response.
 Fixed: Opened http://localhost:8000/health directly, confirmed {"status":"ok"}.
 End state: docker compose up --build successfully serves /health on localhost:8000.
 
@@ -152,12 +151,13 @@ End state: docker compose up --build successfully serves /health on localhost:80
 
 **[June 20, 2026] — Sprint 2**
 Goal: 5 core tables live with pgvector + RLS, confirm RLS actually blocks unauthenticated access.
-Built: supabase/migrations/001_core_schema.sql — 5 tables, vector(384) column with IVFFlat index,
-RLS policies on all 5 tables scoped to auth.uid() = user_id.
-Broke: First attempt sa SQL editor failed because I pasted the create table along with the terminal command (cat > ... << EOF)
-on SQL editor, not just the contents of the file. Also learned SQL runs at superuser,
-so it's not a valid RLS test by default.
-Fixed: Pasted file contents only. Used "set role anon" technique to simulate no JWT request and confirm 0 rows will show even if there's a data.
+Built: supabase/migrations/001_core_schema.sql, with 5 tables, a vector(384) column with IVFFlat
+index, and RLS policies on all 5 tables scoped to auth.uid() = user_id.
+Broke: First attempt in the SQL editor failed because I pasted the CREATE TABLE along with the
+terminal command (cat > ... << EOF), not just the contents of the file. Also learned SQL runs at
+superuser, so it's not a valid RLS test by default.
+Fixed: Pasted file contents only. Used the "set role anon" technique to simulate a no-JWT request
+and confirm 0 rows show even when data exists.
 End state: 5 tables live, RLS confirmed blocking anon access via role simulation.
 
 ---
@@ -166,13 +166,13 @@ End state: 5 tables live, RLS confirmed blocking anon access via role simulation
 Goal: FastAPI middleware validates Supabase JWT (ES256/JWKS) on all routes except /health.
 Built: app/middleware/auth.py using PyJWT's PyJWKClient against the project's JWKS endpoint.
 Broke: Three layered bugs, found one at a time.
-  1. JWKS fetch returned 401 — Supabase's API gateway requires an `apikey` header on every
+  1. JWKS fetch returned 401. Supabase's API gateway requires an `apikey` header on every
      request through it, even endpoints serving public keys. PyJWKClient has no apikey by
      default, so it was rejected before reaching the actual verification logic.
-  2. After adding the apikey header, fetch returned 404 — wasted time testing the wrong path
+  2. After adding the apikey header, fetch returned 404. I wasted time testing the wrong path
      (/auth/v1/jwks vs the correct /auth/v1/.well-known/jwks.json) before confirming both via
      direct curl.
-  3. Even with the correct path in code, still 404 — SUPABASE_URL in .env had a leftover
+  3. Even with the correct path in code, still 404. SUPABASE_URL in .env had a leftover
      /rest/v1/ suffix from when I was looking at the Data API page, so the code was building
      .../rest/v1/auth/v1/.well-known/jwks.json, a path that doesn't exist.
 Fixed: Added apikey header to PyJWKClient, confirmed correct JWKS path via curl against the
@@ -250,6 +250,7 @@ upload PDF → 36 chunks created, against a real Verizon DBIR 2025 PDF.
 | MCP server | Phase 5 |
 | Reading figures/images inside PDFs | Post-Phase 5, documented permanent limitation |
 | Async file processing | Upgrade path: Celery task queue, post-Phase 5 |
+| Upload progress/loading indicator | Deferred to a UI polish pass once the core pipeline is feature-complete |
 
 ---
 
@@ -263,7 +264,6 @@ touching Phase 2 code:
 - [ ] Supabase connection stable from the deployed backend (not just localhost)
 - [ ] PDF upload → embedding → retrieval confirmed working with a real document
 - [ ] Render redeploy tested: Supabase and Groq API keys survive the redeploy without being reset
-| Upload progress/loading indicator | Deferred to a UI polish pass after core pipeline (Sprint 5/6) is feature-complete |
 
 **[June 23, 2026] — Sprint 6 (mid-deploy fix)**
 Goal: Deploy backend to Render's free tier.
