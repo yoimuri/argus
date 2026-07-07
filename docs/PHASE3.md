@@ -172,16 +172,18 @@ is incremental. Each sprint seeds the keys it introduces, in the initial state d
 
 ## Database changes
 
-One migration (007), needed starting at Sprint 3a.2. **Platform reminder:** migrations do NOT
-auto-run; they are pasted into the Supabase SQL editor by hand. New tables are NOT auto-exposed
-(grants are explicit, see migration 002) and RLS is auto-force-enabled by
-the `ensure_rls` trigger (see migration 006), so a new table with no policy = deny-all for
-everyone including the backend.
+Two migrations. **007** (`hnsw_vector_index`) ships with Sprint 3a.1 — it replaces the ivfflat
+ANN index with HNSW to fix the vague-query zero-recall bug (see the field notes and the file's
+own header comment). **008** (`execution_steps`) is needed starting at Sprint 3a.2.
+**Platform reminder:** migrations do NOT auto-run; they are pasted into the Supabase SQL editor
+by hand. New tables are NOT auto-exposed (grants are explicit, see migration 002) and RLS is
+auto-force-enabled by the `ensure_rls` trigger (see migration 006), so a new table with no
+policy = deny-all for everyone including the backend.
 
-### Migration 007 — `execution_steps` table + `research_sessions.status`
+### Migration 008 — `execution_steps` table + `research_sessions.status`
 
 ```sql
--- 007_execution_steps.sql: Phase 3a Debug Diary backend.
+-- 008_execution_steps.sql: Phase 3a Debug Diary backend.
 -- research_sessions already exists (migration 001); we finally start WRITING to it
 -- in this phase and add a status column to mirror the Debug Diary's session status.
 alter table research_sessions
@@ -249,6 +251,17 @@ compensate. Worst case if it still overruns: the Orchestrator's existing fail-op
 parse failure falls back to a raw-query pass) absorbs it; this cannot reproduce the Synthesizer's
 blank-answer bug. Still needs a fresh live pass on both a normal query and a terse one before this
 sprint can close.
+
+**A second, distinct bug surfaced in that same testing (2026-07-08) and is also NOT yet
+live-verified:** some valid queries returned *zero* chunks ("No relevant information found"),
+separate from the blank-answer/token bug above (there retrieval returned chunks and the model
+emitted nothing; here retrieval itself returned nothing). Instrumentation added to the retriever
+traced it to the **ivfflat vector index** (`lists = 100`, migration 001) losing recall on a small
+dataset at the default `probes = 1`. Fix: migration `007_hnsw_vector_index.sql` replaces it with
+HNSW. See the field notes for the full trace. This sprint now has **two** pending live checks
+before it can close: (1) the `reasoning_effort: "medium"` orchestrator change, and (2) the HNSW
+index migration applied live, with a "summarize" query confirmed returning chunks afterward.
+**Do not flip to ✅ until both are re-verified live.**
 **Do not flip to ✅ until this specific version is re-verified live.**
 Concrete constants chosen: `SPECIFIC_MATCH_COUNT=5`, `BROAD_MATCH_COUNT=8` (per sub-query),
 `FINAL_TOP_N=8` after merge/dedupe/sort by similarity. Picked so the single-query "specific"
@@ -310,7 +323,7 @@ never been written to). "Diary" = a `StepWriter` that logs one `execution_steps`
 it runs. This sprint also retro-wraps the agents built so far with tracing.
 
 **Build:**
-- Run **migration 007** (manual step, detailed below).
+- Run **migration 008** (manual step, detailed below).
 - `backend/app/services/step_writer.py` (new):
   - `async def record_step(session_id, user_id, access_token, step_index, agent_name, status, latency_ms, detail)`, POSTs one row to `execution_steps` via the existing `supabase_request` (`supabase_client.py`). **Must never raise:** wrap the whole body in `try/except` and on failure `print()` to stdout (local-log fallback), the blueprint is explicit that the diary failing must never crash a research session.
   - `def traced(agent_name)`. An async decorator that wraps a LangGraph node: records `time.monotonic()` at entry, runs the node, computes `latency_ms`, calls `record_step(...)`, returns the node's dict unchanged. Comment why: a decorator avoids copy-pasting timing code into every node.
@@ -324,7 +337,7 @@ it runs. This sprint also retro-wraps the agents built so far with tracing.
 
 **Reuse, don't rebuild:** `supabase_request` for all writes.
 
-**Manual step (Clint):** paste migration 007 into the Supabase SQL editor; confirm
+**Manual step (Clint):** paste migration 008 into the Supabase SQL editor; confirm
 `execution_steps` exists with one `"own execution steps"` policy. Then git push → Render redeploy.
 
 **Verify live:**
@@ -471,12 +484,15 @@ threat model get written when 3b is picked up (own ADR). Sketch:
 
 Everything touching live systems is a manual step. Consolidated:
 
-1. **Migration 007:** paste into the Supabase SQL editor by hand; verify `execution_steps` exists
-   with its RLS policy and grants. (Sprint 3a.2)
-2. **Langfuse Cloud:** create account and project, copy keys, set `LANGFUSE_*` env on Render.
+1. **Migration 007 (`hnsw_vector_index`):** paste into the Supabase SQL editor by hand; replaces
+   the ivfflat index with HNSW to fix the vague-query zero-recall bug. Verify with a "summarize"
+   query returning chunks afterward. (Sprint 3a.1)
+2. **Migration 008 (`execution_steps`):** paste into the Supabase SQL editor by hand; verify
+   `execution_steps` exists with its RLS policy and grants. (Sprint 3a.2)
+3. **Langfuse Cloud:** create account and project, copy keys, set `LANGFUSE_*` env on Render.
    (Sprint 3a.4)
-3. **Tavily:** create account, set `TAVILY_API_KEY` on Render. (Phase 3b only)
-4. **Deploys:** every sprint ends with a git push (commits and pushes are always manual); Render
+4. **Tavily:** create account, set `TAVILY_API_KEY` on Render. (Phase 3b only)
+5. **Deploys:** every sprint ends with a git push (commits and pushes are always manual); Render
    and Vercel rebuild on push. "Deployed" means the live URLs were re-checked. Render free tier:
    first hit after idle is 30–60 s, not a bug.
 
@@ -520,15 +536,18 @@ generic on very large PDFs | future (retrieval tuning) | open`.
 | 2026-07-07 | 3a.1 | Vague queries returned blank answers. Ruled out retrieval and classification against live data (both fine); real cause was the synthesis model's token budget being shared between internal reasoning and output, so long reasoning left nothing for the answer. Fixed by capping reasoning effort. | headline win | fixed, verified live 2026-07-08 |
 | 2026-07-07 | 3a.1 | Design lesson: any reasoning-model call needs an explicit reasoning/output budget or it can silently return empty: carry this into the Critic and Web Scout agents. | future (all model calls) | open |
 | 2026-07-08 | 3a.1 | A bare "summarize" (no punctuation, not matching the system prompt's few-shot wording) is the kind of terse/lazy phrasing real users send, and low reasoning effort may not judge it as reliably as clearer phrasing. Raised the Orchestrator's `reasoning_effort` low to medium, `max_tokens` 512 to 768 to compensate. Synthesizer untouched (different job, not classification). | this sprint, intent-recognition robustness | implemented, not yet live-tested |
-| 2026-07-08 | 3a.1 | Heisenbug: bare "summarize" sometimes returns "No relevant information found" while "summarize " (trailing space) or a retry answers. Code trace showed that message only fires when the retriever returns zero chunks, but the live RPC has no similarity threshold, so a valid embedding against a populated collection always returns rows. The empty is only reachable via a broken embedding (HF cold-start returning a wrong shape) or an un-captured Orchestrator output. The trailing space is almost certainly non-determinism (warm HF endpoint / clean classification on retry), not a real cause. Hardened rather than guessed: normalized the query (strip) at the entry point so whitespace can't change the answer; added retriever logging of embedding dim + rows-per-sub-query; made `embed_query` validate a 384-float vector and raise loudly instead of passing an error dict / wrong shape through silently. | this sprint, plus a reusable observability + fail-loud lesson for every embedding/model call | diagnosable + whitespace-hardened; ROOT CAUSE still open, needs the Render `orchestrator intent=...` + retriever log line from the *next* failing run |
+| 2026-07-08 | 3a.1 | Heisenbug: bare "summarize" sometimes returns "No relevant information found" while "summarize " (trailing space) or a retry answers. Hardened rather than guessed: normalized the query (strip) at entry so whitespace can't change the answer; added retriever logging of embedding dim + rows-per-sub-query; made `embed_query` validate a 384-float vector and raise loudly instead of silently passing a bad shape through. | this sprint, plus a reusable observability + fail-loud lesson for every embedding/model call | whitespace-hardened; root cause FOUND (see next row) |
+| 2026-07-08 | 3a.1 | ROOT CAUSE (from the new retriever logs + the live RPC definition): embeddings and Orchestrator classification are both fine (`embed_dim=384`, correct `meta` intent). The vector search returned different row counts (0, 1, 1) for different sub-queries against the *same* collection. First hypothesis was a hidden similarity threshold in the live RPC, but pulling the live `match_document_chunks` definition disproved that: it has NO threshold, identical to the migration files. The real cause is the **ivfflat approximate index** on `document_chunks.embedding` (`with (lists = 100)`, migration 001). ivfflat buckets vectors into 100 lists and, at the default `probes = 1`, scans only the single nearest list. On a small collection the chunks are spread thinly so most lists are empty; a query whose vector lands on an empty list returns 0 rows. Different sub-query embeddings probe different lists, hence the random-looking 0/1/1 and why specific queries (which co-cluster with their answer chunk) work while vague ones (generic embedding, empty list) fail. The "trailing space" was never causal. Lesson: `lists = 100` is tuned for a large dataset (rule of thumb ~rows/1000); on a small one it destroys recall. This also revises ADR-014's premise: sub-query fan-out alone did NOT fix the vague-query case because the ANN index was silently dropping the fan-out results. | fix = replace the ANN index so retrieval reliably returns nearest chunks at this data scale | root cause confirmed; fix chosen = HNSW (migration `007_hnsw_vector_index.sql` written); PENDING Clint's manual apply in the Supabase SQL editor + a live "summarize" re-test |
 |  |  |  |  |  |
 
 ---
 
 ## ADRs to write (as decisions are made, not retroactively)
 
-- **ADR-014. Orchestrator intent routing via sub-query expansion** (why sub-query merge over an
-  RPC threshold change; the fail-open stance).
+- **ADR-014. Orchestrator intent routing via sub-query expansion + the vector-index fix** (why
+  sub-query merge over an RPC threshold change; the fail-open stance; AND the ivfflat→HNSW index
+  change from Sprint 3a.1 testing, since sub-query fan-out only works once the ANN index actually
+  returns the nearest chunks — the two are one retrieval-quality story).
 - **ADR-015. Bounded re-retrieval loop + Critic** (the ASI10 cap; why the graph's first cycle is
   safe).
 - **ADR-016. Langfuse Cloud over self-hosted** (records the scope decision above and its tradeoff

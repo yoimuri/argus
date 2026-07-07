@@ -351,7 +351,7 @@ yet configured.
 
 | Table | Purpose |
 |---|---|
-| `user_profiles`, `collections`, `documents`, `document_chunks` | Standard auth-scoped RAG data; `document_chunks` uses `vector(384)` + IVFFlat index |
+| `user_profiles`, `collections`, `documents`, `document_chunks` | Standard auth-scoped RAG data; `document_chunks` uses `vector(384)` + HNSW index (migration 007; was IVFFlat, changed for recall on small collections) |
 | `research_sessions` | One row per query; stores report, citations, RAGAS scores |
 | `execution_steps` | **The Debug Diary.** One row per agent step per session, written live by StepWriter |
 | `circuit_breaker_log` | Breaker state transitions, for SOC historical view |
