@@ -230,16 +230,24 @@ independently deployable and verifiable. After you live-test each one, jot anyth
 
 ### Sprint 3a.1 — Orchestrator agent + intent-based retrieval (the headline win)
 
-**Status:** 🟡 Code-complete, first live test FAILED, bug diagnosed + fixed, redeploy + re-test
-pending. Original build (2026-07-07) matched the plan exactly, no deviations. First live test
-that same day failed the headline acceptance criterion (vague queries still got no real answer);
-root cause and fix are a mechanical correction, not a plan/architecture change — full diagnosis in
-`CONTINUITY.md`. Short version: `orchestrator.py` requested a Groq response-format feature never
-confirmed supported for this model; likely always failed and silently fell back to old raw-query
-behavior on every call, which explained both the failed fix and Clint's "sensitive to `?`" finding
-(that was the *old* embedding search's known fragility leaking through, not a new bug). Fixed by
-dropping that param, adding defensive JSON parsing, and strengthening the prompt to state
-punctuation is not an intent signal. **Not yet re-verified live — do not flip to ✅ until it is.**
+**Status:** 🟡 Code-complete, **true root cause found + fixed (Opus, 2026-07-07)**, redeploy + live
+re-test pending. Original build (2026-07-07) matched the plan exactly, no deviations. The bug hunt
+went through two wrong diagnoses before Opus settled it with live evidence (Supabase RPC logs, the
+live function definition, direct vector searches, local reproduction of the real Groq calls) — full
+trail in `CONTINUITY.md`. **The vague-query "no answer" was never a retrieval or classification
+problem** (both proven healthy: every RPC returns 200 on a 36-chunk collection with no similarity
+threshold; classification produces correct intents + sub-queries). The real cause: `openai/gpt-oss-20b`
+is a **reasoning model**, and `max_tokens` caps its hidden reasoning tokens + visible answer
+*combined*. Reasoning varied 350–550+ tokens run-to-run on the same prompt and intermittently ate the
+whole budget → `finish_reason='length'` → empty `content` → a blank `## Answer` section that reads as
+"no answer." Non-determinism is why it "failed sometimes" and why the `?`-sensitivity looked real.
+**Fix:** `reasoning_effort: "low"` on both Groq callers (synthesizer + orchestrator) pins reasoning to
+<70 tokens so the answer always fits; plus an empty-content guard in the synthesizer. Validated
+locally through the actual groq SDK (reasoning 305→8, `finish=stop` every run); **not yet re-verified
+on the live app — do not flip to ✅ until it is.** This also resolves the deferred Groq-vs-Gemini
+question: Groq was never the weak link. (The earlier `orchestrator.py` JSON-parsing fix — dropping the
+unconfirmed `response_format` param, adding defensive parsing — was a real, separate robustness
+improvement and stays; it just wasn't the cause of the reported symptom.)
 Concrete constants chosen: `SPECIFIC_MATCH_COUNT=5`, `BROAD_MATCH_COUNT=8` (per sub-query),
 `FINAL_TOP_N=8` after merge/dedupe/sort by similarity — picked so the single-query "specific"
 path returns byte-for-byte the same rows Phase 2 did (no regression), while "broad"/"meta" fan
@@ -507,6 +515,9 @@ generic on very large PDFs | future (retrieval tuning) | open`.
 
 | Date | Sprint / Phase | What I noticed | Useful for | Status |
 |---|---|---|---|---|
+| 2026-07-07 | 3a.1 | Reworded vague-query tests ("what's inside the report?", "what are the common causes of breach", "what's the gist", "tell me what's in the report") returned no real answer. Render logs show Orchestrator classified 6/7 correctly — **classification is working.** ~~Root cause is `retriever.py`'s multi-query merge returning zero chunks.~~ **This diagnosis was WRONG — corrected below.** | this phase (blocks 3a.1) | diagnosis corrected → see next row |
+| 2026-07-07 | 3a.1 | **Root cause (Opus, live evidence):** not retrieval, not classification — `openai/gpt-oss-20b` is a reasoning model and `max_tokens` caps reasoning + answer combined; reasoning intermittently ate the whole budget, blanking the answer. Proven via Supabase RPC logs (all 200s), the threshold-free live RPC, direct vector search returning the right chunks, and local reproduction. Fixed with `reasoning_effort:"low"` on both Groq callers + empty-content guard. Also closes the Groq-vs-Gemini question (Groq is fine). | this phase — headline win, once live-verified | fixed locally, awaiting live re-test |
+| 2026-07-07 | 3a.1 | **Design lesson worth an ADR:** any reasoning-model call in this codebase must set `reasoning_effort` and/or budget `max_tokens` for reasoning+content, or it can silently return empty. Applies to future agents (Critic, Web Scout) if they use gpt-oss. | future (all Groq agents) | open |
 |  |  |  |  |  |
 
 ---

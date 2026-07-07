@@ -96,6 +96,15 @@ async def synthesizer_node(state: ResearchState) -> dict:
                 {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {state['query']}"},
             ],
             max_tokens=1024,  # cap output so a single research call can't run up unbounded token cost
+            # gpt-oss-20b is a REASONING model: it spends hidden "reasoning tokens"
+            # before any visible content, and max_tokens caps the two COMBINED. With
+            # default effort, reasoning varied 350-550+ tokens run-to-run on the same
+            # prompt and sometimes ate the whole budget — finish_reason='length', empty
+            # content, which surfaced as a blank "no answer" on perfectly-retrieved
+            # context (the July 2026 vague-query bug). 'low' pins reasoning to <70
+            # tokens, so the answer always fits. Passed via extra_body to stay robust
+            # across groq-sdk versions (requirements pins none).
+            extra_body={"reasoning_effort": "low"},
         )
         return completion.choices[0].message.content
 
@@ -112,5 +121,15 @@ async def synthesizer_node(state: ResearchState) -> dict:
         print(f"[ARGUS] synthesis call failed, returning graceful fallback: {groq_err}")
         answer = ("The AI service is temporarily unavailable. Your documents and retrieved "
                   "context are fine — please try again shortly.")
+
+    # Defence in depth: even with reasoning_effort capped, a completion could still
+    # come back empty/whitespace (budget exhaustion, an odd model response). Never
+    # let that reach the user as a silent blank Answer section — the exact failure
+    # mode that made retrieval look broken when it wasn't.
+    if not answer or not answer.strip():
+        print("[ARGUS] synthesis returned empty content — surfacing retry message instead of blank answer.")
+        answer = ("The AI could not produce an answer for this query on this attempt "
+                  "(empty response). Your documents and retrieved context are fine — "
+                  "please try again.")
 
     return {"answer": answer}

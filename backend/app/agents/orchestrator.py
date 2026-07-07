@@ -63,7 +63,14 @@ async def orchestrator_node(state: ResearchState) -> dict:
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": query},
             ],
-            max_tokens=300,
+            max_tokens=512,
+            # Same reasoning-model trap as the synthesizer (see synthesizer.py): the
+            # hidden reasoning tokens and the JSON output share the max_tokens budget.
+            # At the old 300 with uncapped reasoning, a long reasoning pass could leave
+            # no room for the JSON, producing empty content -> _extract_json fails ->
+            # fail-open to raw query. 'low' effort keeps reasoning tiny; 512 gives the
+            # JSON comfortable headroom. Passed via extra_body for groq-sdk robustness.
+            extra_body={"reasoning_effort": "low"},
         )
         return completion.choices[0].message.content
 
