@@ -71,6 +71,12 @@ create policy "read own security events" on security_events
 --    (The 003 version did NOT return trust_level, so every chunk fell back to
 --    the 'retrieved' default regardless of its real source.)
 -- ---------------------------------------------------------------------------
+-- Postgres won't let CREATE OR REPLACE change a function's return columns
+-- (the 003 version didn't return trust_level), so the old signature must be
+-- dropped first — otherwise replaying migrations 001-005 from scratch fails
+-- with "cannot change return type of existing function".
+drop function if exists match_document_chunks(vector(384), uuid, int);
+
 create or replace function match_document_chunks(
   query_embedding vector(384),
   match_collection_id uuid,
