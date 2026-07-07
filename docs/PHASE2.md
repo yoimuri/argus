@@ -1,5 +1,5 @@
 # ARGUS — Phase 2: Security Hardening
-**Status:** 🟡 Code-complete across all sprints (2.1–2.5) as of July 6, 2026 — pending live re-run of the 10-payload Integration Gate after the next Render/Vercel deploy.
+**Status:** ✅ Closed July 7, 2026 — all 13 gates in docs/ADVERSARIAL-TESTS.md re-run and passing against the live deployed app (Render + Vercel), Integration Gate below flipped. Phase 3 unblocked.
 **Timeline:** Weeks 5–7
 **SDLC Stages:** Threat Modeling → Security Design → Adversarial Testing → Re-deploy
 **Prerequisite:** Phase 1 Integration Gate fully passed
@@ -126,15 +126,15 @@ End state:
 
 ## Integration Gate — Before Phase 3 Can Start
 
-Code for every item below is written and compiles; the checkboxes flip to done once
-the GATE-01..10 suite in docs/ADVERSARIAL-TESTS.md is re-run against the deployed app.
+All items below re-run live against the deployed app (Render + Vercel) on 2026-07-07.
+Full evidence (payloads, `security_events` rows, timestamps) in docs/ADVERSARIAL-TESTS.md.
 
-- [~] Injection attempt via document upload: neutralized, logged in `security_events` — GATE-07/08 (code done)
-- [~] Injection attempt via query text: blocked with 400, logged — GATE-01..05 (code done)
-- [~] Vector shadow detection: poisoned chunk confirmed absent from `document_chunks` — GATE-07 (code done)
-- [~] Groq circuit breaker: trips on failure, returns fallback, half-opens on recovery — GATE-09 (code done)
-- [~] All 10 adversarial test payloads passing — GATE-01..10 defined (live re-run pending)
-- [~] Phase 1 acceptance criteria still passing after Phase 2 changes are deployed — verify post-deploy
+- [x] Injection attempt via document upload: neutralized, logged in `security_events` — GATE-07/08 confirmed live
+- [x] Injection attempt via query text: blocked with 400, logged — GATE-01..05, 11, 12 confirmed live
+- [x] Vector shadow detection: poisoned chunk confirmed absent from `document_chunks` — GATE-07 confirmed live (see ADVERSARIAL-TESTS.md for the chunk-granularity note this run surfaced)
+- [x] Groq circuit breaker: trips on failure, returns fallback, half-opens on recovery — GATE-09 confirmed live, key restored and normal queries confirmed working afterward
+- [x] All 13 adversarial test payloads passing — GATE-01..13 confirmed live (13, not 10 — GATE-11/12/13 added July 7 for the HF classifier + CSP work)
+- [x] Phase 1 acceptance criteria still passing after Phase 2 changes are deployed — confirmed via GATE-06/09/10's benign-query paths, which exercise the full upload → retrieve → synthesize flow live
 
 Sprint status as of July 6, 2026:
 - Sprint 2.1 (trust_level + Lock #1/#2): done, deployed, partially verified.
