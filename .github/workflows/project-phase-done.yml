@@ -1,0 +1,145 @@
+name: Route closed issues to their phase's Done column
+
+# WHY THIS EXISTS: GitHub Projects' built-in "Item closed" workflow (the one
+# in the project's own Workflows tab) can only ever set ONE target Status
+# value. It has no conditional logic, so it can't tell "this issue is
+# Phase 3a, route it to Done (Phase 3a)" from "this issue is Phase 4, route
+# it to Done (Phase 4)". That's a real platform limit, not something
+# configurable away in the UI — this workflow exists to do the conditional
+# part the built-in automation can't.
+#
+# THE CONTRACT (must hold for this to work): the project's "Status" field
+# must have an option literally named "Done(<value>)" for every value the
+# "Phase" field can hold, matched by exact string (spacing/case included).
+# e.g. Phase option "Phase 3a" -> Status option "Done(Phase 3a)" must exist.
+# If the Phase field is empty, or no matching Status option exists, this
+# falls back to a plain "Done" option if one exists; otherwise it logs a
+# warning and does nothing (never fails the workflow run over a board-naming
+# mismatch — this automates a convenience, it must not block anyone's repo).
+
+on:
+  issues:
+    types: [closed]
+
+jobs:
+  route-to-phase-done:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Move the closed issue's project item to its phase's Done column
+        env:
+          # A classic PAT with `repo` + `project` scopes, added as a repo
+          # secret. The default GITHUB_TOKEN cannot write to a user-owned
+          # Projects v2 board, so `gh` needs to be pointed at this instead.
+          GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+          OWNER: ${{ vars.PROJECT_OWNER }}
+          OWNER_TYPE: ${{ vars.PROJECT_OWNER_TYPE }}
+          PROJECT_NUMBER: ${{ vars.PROJECT_NUMBER }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          REPO_NAME: ${{ github.event.repository.name }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+
+          # --- 1. Find this issue's item on the project + its Phase value ---
+          # fieldValueByName reads the current Phase selection directly, no
+          # separate field-id lookup needed just to read it.
+          item_json=$(gh api graphql -f query='
+            query($owner: String!, $repo: String!, $number: Int!) {
+              repository(owner: $owner, name: $repo) {
+                issue(number: $number) {
+                  projectItems(first: 10) {
+                    nodes {
+                      id
+                      project { number }
+                      phase: fieldValueByName(name: "Phase") {
+                        ... on ProjectV2ItemFieldSingleSelectValue { name }
+                      }
+                    }
+                  }
+                }
+              }
+            }' -f owner="$REPO_OWNER" -f repo="$REPO_NAME" -F number="$ISSUE_NUMBER")
+
+          item_id=$(echo "$item_json" | jq -r --arg num "$PROJECT_NUMBER" \
+            '.data.repository.issue.projectItems.nodes[] | select(.project.number == ($num | tonumber)) | .id' | head -n1)
+
+          if [ -z "${item_id:-}" ]; then
+            echo "::warning::Issue #$ISSUE_NUMBER isn't on project #$PROJECT_NUMBER — nothing to route."
+            exit 0
+          fi
+
+          phase_name=$(echo "$item_json" | jq -r --arg num "$PROJECT_NUMBER" \
+            '.data.repository.issue.projectItems.nodes[] | select(.project.number == ($num | tonumber)) | .phase.name // empty' | head -n1)
+
+          if [ -n "$phase_name" ]; then
+            target_name="Done($phase_name)"
+          else
+            target_name="Done"
+          fi
+          echo "Target Status option: $target_name"
+
+          # --- 2. Look up the project's Status field id + its option ids ---
+          owner_field="user"
+          if [ "$OWNER_TYPE" = "org" ]; then owner_field="organization"; fi
+
+          project_json=$(gh api graphql -f query='
+            query($login: String!, $number: Int!) {
+              user(login: $login) {
+                projectV2(number: $number) {
+                  id
+                  field(name: "Status") {
+                    ... on ProjectV2SingleSelectField { id options { id name } }
+                  }
+                }
+              }
+            }' -f login="$OWNER" -F number="$PROJECT_NUMBER" 2>/dev/null || true)
+
+          # Re-run against organization(...) instead of user(...) if that's
+          # where this board actually lives.
+          if [ "$owner_field" = "organization" ] || [ -z "$(echo "${project_json:-}" | jq -r '.data.user.projectV2.id // empty')" ]; then
+            project_json=$(gh api graphql -f query='
+              query($login: String!, $number: Int!) {
+                organization(login: $login) {
+                  projectV2(number: $number) {
+                    id
+                    field(name: "Status") {
+                      ... on ProjectV2SingleSelectField { id options { id name } }
+                    }
+                  }
+                }
+              }' -f login="$OWNER" -F number="$PROJECT_NUMBER")
+            project_id=$(echo "$project_json" | jq -r '.data.organization.projectV2.id')
+            field_id=$(echo "$project_json" | jq -r '.data.organization.projectV2.field.id')
+            options_json=$(echo "$project_json" | jq -c '.data.organization.projectV2.field.options')
+          else
+            project_id=$(echo "$project_json" | jq -r '.data.user.projectV2.id')
+            field_id=$(echo "$project_json" | jq -r '.data.user.projectV2.field.id')
+            options_json=$(echo "$project_json" | jq -c '.data.user.projectV2.field.options')
+          fi
+
+          option_id=$(echo "$options_json" | jq -r --arg name "$target_name" \
+            '.[] | select(.name == $name) | .id')
+
+          # Fallback: no phase-specific Done column exists yet -> try plain "Done".
+          if [ -z "${option_id:-}" ] && [ "$target_name" != "Done" ]; then
+            echo "::warning::No Status option named '$target_name' — falling back to 'Done'."
+            option_id=$(echo "$options_json" | jq -r '.[] | select(.name == "Done") | .id')
+          fi
+
+          if [ -z "${option_id:-}" ]; then
+            echo "::warning::No matching Status option found (looked for '$target_name' and 'Done'). Set the Phase's Done column up to fix this, or fix the Phase/Status naming to match. Leaving the item where it is."
+            exit 0
+          fi
+
+          # --- 3. Set the item's Status to the matching Done column ---
+          gh api graphql -f query='
+            mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
+              updateProjectV2ItemFieldValue(input: {
+                projectId: $projectId
+                itemId: $itemId
+                fieldId: $fieldId
+                value: { singleSelectOptionId: $optionId }
+              }) { projectV2Item { id } }
+            }' -f projectId="$project_id" -f itemId="$item_id" -f fieldId="$field_id" -f optionId="$option_id"
+
+          echo "Moved issue #$ISSUE_NUMBER to '$target_name'."
