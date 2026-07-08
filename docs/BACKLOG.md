@@ -94,18 +94,28 @@ low-priority, no phase assigned.
 ## Item 5 — UX/design debt found during Phase 2 gate verification (2026-07-07)
 
 Four items surfaced while running the live gates, none security-relevant, all logged in
-the project's gaps table:
+the project's gaps table. Two are now resolved (below), two are still open:
 
 - **Chunk-granularity quarantine.** Upload-time shadow detection (GATE-07) discards the whole
   chunk when it contains an injected tail, even if most of the chunk is legitimate content.
   Fails safe, but loses legitimate retrievable content as collateral. `backend/main.py` upload
-  handler (Sprint 2.3).
-- **Double login on first attempt.** The redirect URL sets `reason=idle` on the first try,
-  forcing a second login. `frontend/app/login/`.
-- **No per-collection file list.** Opening a stored collection doesn't show which PDF(s) are
-  inside it. `frontend/app/dashboard/UploadPanel.tsx`.
+  handler (Sprint 2.3). Still open.
+- ~~**Double login on first attempt.**~~ **Fixed 2026-07-08.** Root cause: `last_active`
+  (the idle-timeout cookie, `frontend/proxy.ts`) is a 7-day cookie but was only ever deleted
+  inside the idle-timeout's own redirect. Any other way a session ended — the `/auth/signout`
+  route, or a Supabase session simply expiring — left it behind with a stale timestamp. The
+  next login's first authenticated request compared "now" against that stale timestamp, saw
+  >30 minutes, and force-signed-out a session that had just started; that false idle-signout
+  was the only thing that deleted the stale cookie, which is why the second attempt always
+  worked. Fix: delete `last_active` in `frontend/proxy.ts`'s "not logged in" redirect branch
+  and in `frontend/app/auth/signout/route.ts`, so no login ever inherits a stale idle timestamp.
+  Code-complete, `npm run build` clean. Needs a live re-test (log out, wait past 30 min or
+  manually age the cookie, log back in once) to flip to verified.
+- ~~**No per-collection file list.**~~ **Fixed and live-verified 2026-07-08**, as part of the
+  Phase 3a document-management fix (`docs/PHASE3.md`) — opening a collection now shows its name
+  and document list.
 - **No upload-cancel.** No way to cancel an in-progress upload, including by navigating away.
-  `frontend/app/dashboard/UploadPanel.tsx`.
+  `frontend/app/dashboard/UploadPanel.tsx`. Still open.
 
 **Phase:** unassigned, not yet triaged. Small enough to bundle with Item 2's UI work when
 that gets picked up.

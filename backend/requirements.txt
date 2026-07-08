@@ -6,8 +6,14 @@ httpx==0.27.0
 python-multipart
 langgraph==1.2.6
 groq
-# v2, not v3: v3 is OpenTelemetry-based (extra dependency tree, real RAM cost
-# on Render's 512MB tier) and needs 32-hex trace ids. v2 is a small batching
-# client compatible with httpx==0.27.0 above and accepts our session UUID
-# directly via trace(id=...). See docs/ADR-016.md.
-langfuse==2.60.10
+# Latest SDK (v4, OTel-based), per Langfuse's official skill guidance ("always
+# use latest unless there's a good reason not to"). A prior version of this file
+# pinned v2 to dodge the OTel dependency tree; a real memory measurement showed
+# the marginal RAM cost over v2 is ~4MB (both already pull in pydantic/httpx),
+# negligible next to langgraph's own ~100MB. See docs/ADR-016.md (revised).
+langfuse==4.13.1
+# Auto-instruments every AsyncGroq client process-wide (model name + token
+# usage on every Groq call, nested under whatever Langfuse span is active) with
+# no changes needed to orchestrator.py/synthesizer.py/critic.py. Must be
+# .instrument()-ed AFTER the Langfuse client is constructed (observability.py).
+openinference-instrumentation-groq==0.1.16

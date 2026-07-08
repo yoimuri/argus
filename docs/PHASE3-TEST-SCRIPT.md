@@ -19,8 +19,12 @@ works well) makes steps 2 and 5 easiest to judge.
    ```
    If this errors with "relation does not exist," paste
    `supabase/migrations/008_execution_steps.sql` into the SQL editor and run it first.
-2. **Langfuse Cloud account + keys set on Render** — `LANGFUSE_PUBLIC_KEY`,
-   `LANGFUSE_SECRET_KEY`, `LANGFUSE_HOST` all set in the backend service's Environment tab.
+2. **Langfuse Cloud account + keys set on Render** — `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`,
+   `LANGFUSE_BASE_URL` all set in the backend service's Environment tab. **If you set
+   `LANGFUSE_HOST` earlier, rename that key to `LANGFUSE_BASE_URL` (same value)** — the SDK was
+   upgraded (2026-07-09) and the old key name is silently ignored now, not an error, just no
+   traces. Use the host matching your account's actual region (Project Settings in Langfuse
+   shows it — e.g. Japan is `https://jp.cloud.langfuse.com`, not the default EU one).
 3. **Code pushed and deployed.** `git push`, then confirm both Render (backend) and Vercel
    (frontend) show a successful build for the latest commit. Render's free tier sleeps after
    idle — the first request after a redeploy can take 30–60 seconds. That's normal, not a bug.
@@ -54,25 +58,38 @@ info sits in the first chunk of the PDF) — not just body details.
 
 ## Step 3 — TC-3a.2-01: diary never crashes a session (chaos test)
 
-**Do:** In the Supabase SQL editor:
+"Chaos test" just means: deliberately break one small piece on purpose, confirm the app still
+works anyway, then fix the piece back. Four sub-steps, in order, all in one sitting:
+
+**3a. Break it.** Open the Supabase SQL editor (your project → SQL Editor → New query) and run
+exactly this:
 ```sql
 revoke insert on public.execution_steps from authenticated;
 ```
-Then ask any research question in the app.
+You should see "Success. No rows returned." That's it — this one line is the entire "break."
 
-**PASS:** You still get a full, normal report — no error shown to you. In Render's logs, you'll
-see a `[ARGUS] execution_steps write failed for <agent> ...` line for each of the 5 agent steps.
-No new rows appear in `execution_steps` for that query. `research_sessions` still gets its row
-(that grant wasn't touched).
+**3b. Try the app normally.** Go back to the ARGUS app (don't touch Supabase again yet) and ask
+any question in any collection, exactly like any other query.
 
-**FAIL:** The query errors out, hangs, or returns no report.
+**3c. Check what happened — this is the PASS/FAIL check:**
+- **PASS** = you got a normal, complete answer in the app, same as always. That's the whole
+  point of this test: the broken piece (the diary write) should be invisible to you as a user.
+  Optional extra confirmation if you want it: open Render → your backend service → Logs, and
+  look for a line like `[ARGUS] execution_steps write failed for orchestrator ...` — seeing that
+  line (instead of a crash) is proof the failure was caught and swallowed, exactly as designed.
+- **FAIL** = the app showed an error, hung, or gave no answer at all.
 
-**Cleanup (always do this, even on FAIL):**
+**3d. Fix it back — do this even if step 3c was a FAIL, right away, don't skip it:**
 ```sql
 grant insert on public.execution_steps to authenticated;
 ```
+Same "Success. No rows returned." confirms it's restored. Ask one more normal question afterward
+to confirm `execution_steps` rows are being written again (check the table in Supabase Table
+Editor, or just trust step 1 already proved this works).
 
-**Record the result** (pass/fail, date) in `docs/ADVERSARIAL-TESTS.md` under **TC-3a.2-01**.
+**Record the result:** open `docs/ADVERSARIAL-TESTS.md` in the repo, find the entry
+`### TC-3a.2-01`, and change its `Status:` line to say PASS or FAIL plus today's date — one
+sentence is enough, e.g. `Status: PASS, live 2026-07-09.`
 
 ---
 
@@ -128,9 +145,25 @@ the critic runs more than once.
 
 ## Step 7 — Forced retry + loop cap (TC-3a.3-01, the ASI10 gate)
 
-**Do:** Ask something your collection genuinely cannot answer — a fact that isn't in any uploaded
-document. Example: `What was the company's Q3 2025 revenue in Antarctica?` (adjust to something
-plausible-sounding but definitely absent from your test PDFs).
+**How to force it:** the Critic only triggers a retry when it can find chunks that DON'T support
+the draft answer. That's a different thing from finding NO chunks at all — see the pitfall below,
+it's the easiest way to get a confusing result here.
+
+**Two requirements for the question you pick, both matter:**
+1. **Use a collection that currently has at least one document in it** — not one you just emptied
+   out in step 5's delete test. `match_document_chunks` has no similarity threshold (see
+   `retriever.py`'s own comment), so on a populated collection retrieval always returns *some*
+   chunks, however irrelevant. On an empty collection it returns none — a completely different
+   situation from what this test wants to exercise.
+2. **Ask something topically *on-target* for that document, but with a specific fact it doesn't
+   contain.** Don't go wildly off-topic (e.g. asking a security-report collection about "Q3
+   revenue in Antarctica") — a query that far from the document's content risks the retriever's
+   vector search landing zero chunks even on a populated collection, same failure mode as #1.
+   Instead pick something close enough that real chunks come back, specific enough that they
+   likely don't contain the exact fact asked for. Example, for a breach-report style document:
+   `What percentage of the breaches in this report involved a nation-state actor?`
+
+**Do:** Ask your chosen question against a populated collection.
 
 **PASS:** The response JSON's `status` field is `completed_with_fallback`. In `execution_steps`,
 you see **exactly 8 rows** for that session, `step_index` 0 through 7, in this order:
@@ -141,6 +174,11 @@ automatic re-retrieval pass was performed." No third pass. The request completes
 hang, no timeout.
 
 **FAIL:** More than 8 steps, the request hangs/times out, or `status` stays `completed`.
+
+**If you instead get `chunks_used: []` and a "Not assessed" confidence badge:** that's not this
+test — it means retrieval found zero chunks (an empty collection, or a question too far
+off-topic), so the Critic correctly declined to grade an answer built on nothing rather than the
+retry logic failing. Re-check the two requirements above and try again.
 
 **Record the result** in `docs/ADVERSARIAL-TESTS.md` under **TC-3a.3-01**.
 
@@ -177,11 +215,16 @@ console.log((await fetch(`${API}/research/00000000-0000-0000-0000-000000000000`,
 list looks empty.
 
 **PASS:** A trace named `research` appears, tagged with the session's UUID, containing one span
-per agent step with latency and a status field in its metadata. No raw chunk text or answer
-content appears anywhere in the trace — metadata only.
+per agent step (orchestrator, retriever, synthesizer, critic, reporter) with latency and a status
+field in its metadata. Open the `orchestrator`, `synthesizer`, or `critic` span — inside it you
+should see a nested Groq generation observation showing the model name (`openai/gpt-oss-20b`) and
+token usage (prompt/completion/total tokens) — this is the automatic model/token capture added in
+this revision. No raw chunk text or answer content appears anywhere in the trace — every text
+field should look like a short summary, not a full document excerpt.
 
-**FAIL:** No trace appears (double-check the env vars on Render first), or raw document content
-shows up in a span.
+**FAIL:** No trace appears (double-check the env vars on Render first — see precondition 2 about
+the `LANGFUSE_BASE_URL` rename), no nested Groq generation with model/tokens shows up, or raw
+document content shows up in a span.
 
 ---
 

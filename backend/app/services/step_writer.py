@@ -1,6 +1,6 @@
 import time
 from app.services.supabase_client import supabase_request
-from app.services.observability import record_step_span
+from app.services.observability import traced_span, mark_span
 
 
 async def record_step(session_id, user_id, access_token, step_index, agent_name, status, latency_ms, detail):
@@ -27,11 +27,14 @@ async def record_step(session_id, user_id, access_token, step_index, agent_name,
 
 
 def traced(agent_name: str):
-    """Wraps a LangGraph node with Debug Diary timing/logging. A node may
-    optionally return 'trace_detail' / 'trace_status' in its result dict to
-    enrich its own step row; both are popped here so they never leak into
-    ResearchState. A decorator instead of copy-pasting timing/logging into
-    every node body.
+    """Wraps a LangGraph node with Debug Diary timing/logging AND a Langfuse
+    span (observability.traced_span). The node runs INSIDE the Langfuse span
+    (not after it) so any Groq call the node makes nests under that span
+    automatically via GroqInstrumentor — see observability.py's module
+    docstring for why. A node may optionally return 'trace_detail' /
+    'trace_status' in its result dict to enrich its own step row; both are
+    popped here so they never leak into ResearchState. A decorator instead of
+    copy-pasting timing/logging into every node body.
     """
     def decorator(node_fn):
         async def wrapped(state):
@@ -42,25 +45,24 @@ def traced(agent_name: str):
             start = time.monotonic()
 
             try:
-                result = await node_fn(state)
+                with traced_span(agent_name, session_id, user_id) as span:
+                    result = await node_fn(state)
+                    detail = result.pop("trace_detail", None)
+                    status = result.pop("trace_status", "ok")
+                    mark_span(span, status, detail)
             except Exception:
                 latency_ms = int((time.monotonic() - start) * 1000)
                 await record_step(
                     session_id, user_id, access_token, idx, agent_name,
                     "error", latency_ms, "unhandled exception",
                 )
-                record_step_span(session_id, user_id, agent_name, "error", latency_ms, "unhandled exception")
                 raise
 
             latency_ms = int((time.monotonic() - start) * 1000)
-            detail = result.pop("trace_detail", None)
-            status = result.pop("trace_status", "ok")
-
             await record_step(
                 session_id, user_id, access_token, idx, agent_name,
                 status, latency_ms, detail,
             )
-            record_step_span(session_id, user_id, agent_name, status, latency_ms, detail)
 
             result["step_index"] = idx + 1
             return result

@@ -74,6 +74,12 @@ export async function proxy(request: NextRequest) {
     url.pathname = '/login'
     const redirectResponse = NextResponse.redirect(url)
     redirectResponse.headers.set('Content-Security-Policy', cspHeader)
+    // Drop any stale last_active left over from a prior session. Without this,
+    // logging back in right here reuses that old timestamp on the very next
+    // authenticated request, the idle check below sees it's >30 min old, and
+    // force-signs-out a session that just started (bug: "first login fails,
+    // second works" - the false idle-signout is what deletes the stale cookie).
+    redirectResponse.cookies.delete('last_active')
     return redirectResponse
   }
 

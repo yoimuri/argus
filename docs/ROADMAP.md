@@ -19,7 +19,8 @@ change makes any doc stale, fix it in the same turn.
 | Phase 1 — Core RAG pipeline | ✅ |
 | Phase 2 — Security hardening | ✅ |
 | Sprint 3a.1 — Orchestrator + intent retrieval | ✅ |
-| Sprints 3a.2–3a.5 + document management | 🟡 code-complete, awaiting `docs/PHASE3-TEST-SCRIPT.md` |
+| Sprint 3a.2 + document management | ✅ live-verified 2026-07-08 |
+| Sprints 3a.3–3a.5 | 🟡 code-complete, awaiting `docs/PHASE3-TEST-SCRIPT.md` steps 6–11 |
 | Phase 3b — Web Scout | ⏳ not started |
 | Phase 4 — SOC Dashboard | ⏳ not started |
 | Phase 5 — MCP Server, CI/CD, Polish | ⏳ not started |
@@ -98,7 +99,35 @@ a real sprint plan when its phase comes up; don't let it sit here forever unaddr
 |---|---|---|
 | 2026-07-08 | Idea: viewing multiple reports/sessions together (comparing runs side by side), raised while scoping the document management fix. Not designed yet — needs its own UX thinking, likely a Phase 4 concern once the timeline UI exists. | open |
 | 2026-07-08 | `tldr` gets flagged as possible prompt injection by the HF Prompt Guard classifier (false positive on a short, out-of-distribution slang token). Deliberately won't-fix: the only levers (raise threshold / allowlist the word) either weaken the guard against real attacks or hand attackers a bypass prefix. | won't-fix by design |
+| 2026-07-09 | UX/product question raised while live-testing Sprint 3a.3: is showing the raw `## Sources` chunk list and the `## Confidence` section to the end user appropriate for a released/recruiter-facing product, or is that developer-stage debug info that should be hidden (or moved to an optional "show details" toggle) before any public release? Not decided — needs a product call, not just a code change. | open, needs Opus/product decision |
+| 2026-07-09 | Idea: an in-browser PDF preview step before a document is committed to a collection — user sees the PDF and explicitly approves/rejects/re-selects the file, instead of upload going straight from file picker to processing. Raised alongside the document management fix (Sprint 3a.2-3a.5 batch). Not designed. | open, future phase |
+| 2026-07-09 | Reminder (not new, re-flagged so it doesn't get lost): PyMuPDF only reads text, so images/figures/charts inside a PDF are invisible to ARGUS today; Google sign-in is still email/password only. Both already tracked in `docs/BACKLOG.md` from earlier sessions — noting here too since they came up again this session. | open, tracked in BACKLOG.md |
 |  |  |  |
+
+---
+
+## Security & scaling notes — flagged for Opus, not evaluated (2026-07-09)
+
+Clint found these terms while researching independently and wants each one checked for actual
+relevance to ARGUS before anything gets built. **None of the below have been assessed against this
+project's real architecture, traffic, or scale** — recorded exactly as raised so a future planning
+session evaluates each on its merits rather than defaulting to "add it because it's a known best
+practice." This project's own rule applies here: no overengineering unless a need is genuinely
+established first.
+
+- **Rate limiting** — per-user or per-IP request throttling on the backend. Nothing like this
+  exists today. Whether it's warranted depends on real traffic patterns, which don't exist yet
+  outside personal/demo use.
+- **Re-authentication** — forcing a fresh login before sensitive actions. Raised generally, not
+  tied to a specific ARGUS flow yet — needs a concrete "which action, why" before it's a spec.
+- **Caching repeated requests with Redis** — would need a demonstrated case where the same query
+  hits the backend often enough for caching to matter (and a decision on cache invalidation once a
+  document's chunks change). Not established yet.
+- **Making AI calls, email sending, and PDF parsing asynchronous background jobs** — instead of
+  handling them synchronously inside the request/response cycle they run in today (see
+  `backend/main.py`'s upload handler for the current synchronous PDF parsing path). This is a real
+  architecture change if pursued — needs a job queue and worker process (e.g. Celery, RQ, or
+  Render's own background worker service type), not a small patch.
 
 ---
 

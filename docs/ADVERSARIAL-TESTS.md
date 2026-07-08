@@ -262,10 +262,16 @@ report rendered). No 500. `execution_steps` gets zero new rows for that run; Ren
 `[ARGUS] execution_steps write failed ...` print line once per node instead of a raised exception.
 Restore the table/grant afterward.
 
-Status: Not yet run — see `docs/PHASE3-TEST-SCRIPT.md` step 3. `record_step`
-(`backend/app/services/step_writer.py`) wraps its entire body in try/except and only prints on
-failure, by construction, but this needs a live run to confirm end-to-end, per the project's
-"compiling is not ✅" rule.
+Status: PASS, live 2026-07-08. Ran `revoke insert on public.execution_steps from authenticated;`
+in the Supabase SQL editor, then asked a real question in the app. The request returned a normal,
+complete report (`200 OK`), nothing surfaced to the user. Render logs show exactly one
+`[ARGUS] execution_steps write failed for <node> (session=6032f736-0b8a-476a-87c8-e7d7fcc17827): ...`
+print line per node attempted — never a raised/uncaught exception. Bonus finding: this same run
+also triggered the Critic's re-retrieval loop organically (see the TC-3a.3-01 note below), so all
+8 nodes of a full retry pass (orchestrator, retriever, synthesizer, critic, retriever,
+synthesizer, critic, reporter) hit the broken diary write independently and the run still
+completed cleanly. `grant insert on public.execution_steps to authenticated;` run afterward to
+restore.
 
 ---
 
@@ -296,7 +302,31 @@ Defense in depth (three independent fences, any one of which stops an uncapped l
 2. `graph.py`'s `route_after_critic` requires `loop_count < 2` to retry.
 3. LangGraph's default `recursion_limit` (25) is the backstop if the router were ever bypassed.
 
-Status: Not yet run — see `docs/PHASE3-TEST-SCRIPT.md` step 7.
+Status: PASS (loop-cap mechanism), live 2026-07-08. Deliberate test run: asked an on-topic but
+factually-unanswered question (`"What percentage of the breaches in this report involved a
+nation-state actor?"`) against a populated collection (a real 2025 DBIR PDF), session
+`b6876f98-26e7-4232-9c4e-52323f9e990e`. Response: `status: "completed_with_fallback"` — only
+reachable when `loop_count == 2`, since `graph.py`'s router requires `loop_count < 2` to retry
+(makes a third pass structurally impossible) and `main.py` only sets this status when
+`loop_count >= 2` — so this field alone proves exactly one retry fired and the graph terminated
+at the cap, no hang, no third pass. The retry visibly worked as designed: the second search
+returned a different 8-chunk set than a single pass would, including a chunk that explicitly
+discusses nation-state actor involvement, confirming the Critic's gap-query mechanism actually
+redirected the search rather than repeating the same query.
+
+Caveat, not a fail: the final badge read `High — ... One automatic re-retrieval pass was
+performed.` instead of the anticipated `⚠️ Low`. The draft answer was still a refusal ("does not
+include a specific percentage...") on both passes, and the Critic's own system prompt
+(`critic.py`) says a refusal should always grade low — but on pass 2 the model apparently judged
+that same refusal as accurately grounded in the (different, better) chunks it was given that time
+and marked it high. This is an LLM instruction-following inconsistency between passes, not a code
+defect: the routing, the 2-pass cap, and the badge rendering all did exactly what the code
+specifies with whatever verdict the model actually returned. Logged as an open field note in
+`PHASE3.md` for a possible future look, not treated as a bug.
+
+Not yet separately confirmed: Sprint 3a.3's other verification step (a well-covered question that
+should return a single critic pass, `status: "completed"`, and a High badge with no retry note —
+`docs/PHASE3-TEST-SCRIPT.md` step 6).
 
 ---
 

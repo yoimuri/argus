@@ -1,12 +1,13 @@
 # ARGUS — Phase 3: Full Agent Pipeline + Observability
 
 **Status:** 🟡 IN PROGRESS. Sprint 3a.1 (Orchestrator + intent retrieval) is ✅ complete and
-live-verified (2026-07-08). Sprints 3a.2 (Debug Diary + meta lead-chunk retrieval fix), 3a.3
-(Critic + bounded re-retrieval loop), 3a.4 (Langfuse), and 3a.5 (session read endpoints) are all
-🟡 code-complete as of 2026-07-08, bundled into one batch and not yet live-verified. A document
-management fix (per-collection document list + delete) shipped alongside them — see the field
-notes. Run `docs/PHASE3-TEST-SCRIPT.md` top to bottom to verify the whole batch in one sitting.
-Phase 3b is still ⏳ not started. Every checkbox is ⏳ until the sprint that owns it is
+live-verified (2026-07-08). Sprint 3a.2 (Debug Diary + meta lead-chunk retrieval fix), the
+document management fix, and Sprint 3a.5 (session read endpoints) are all ✅ live-verified
+(2026-07-08) — see the field notes. Sprint 3a.3 (Critic + bounded re-retrieval loop) has its
+security-critical loop-cap mechanism ✅ verified live, with the happy-path check (step 6) and a
+confidence-badge wording nuance still open — see TC-3a.3-01. Sprint 3a.4 (Langfuse) is still 🟡:
+code is written but not yet deployed (none of this session's changes have been pushed), so traces
+can't be checked until after a push. Phase 3b is still ⏳ not started. Every checkbox is ⏳ until the sprint that owns it is
 code-complete (🟡) and then live-verified (✅), per the project's status-marks rule. This file is
 the execution plan, not a status claim.
 **Timeline:** Weeks 8–10 (blueprint), realistically paced across the sub-sprints below.
@@ -316,6 +317,12 @@ can actually match. **This is the pinned Phase 3 acceptance criterion** (`BACKLO
 
 ### Sprint 3a.2 — Session backbone + StepWriter (the Debug Diary) + a retrieval fix
 
+**Status:** ✅ Live-verified 2026-07-08. `docs/PHASE3-TEST-SCRIPT.md` steps 1–3 all passed:
+baseline diary (real answer + `## Sources` + `## Confidence`), the meta lead-chunk fix
+(`"summarize this for me"` now includes the identifying header info), and the TC-3a.2-01 chaos
+test (diary write failures degrade gracefully — confirmed live via Render logs, see
+`ADVERSARIAL-TESTS.md`).
+
 **In plain terms:** give ARGUS a memory and a diary. It now saves each research run and writes
 down what every agent did, step by step, so you can look back later without re-running anything.
 Built so the diary failing can never break your answer. Bundled alongside: the small retrieval fix
@@ -352,12 +359,17 @@ retrieval is untouched — they already have a real topic, so semantic search is
 **Manual step (Clint):** paste migration 008 into the Supabase SQL editor; confirm
 `execution_steps` exists with one `"own execution steps"` policy. Then git push → Render redeploy.
 
-**Verify live:** see `docs/PHASE3-TEST-SCRIPT.md` steps 1–3 (baseline diary, meta lead-chunk
-check, TC-3a.2-01 chaos test). → Log any concerns in **Field notes**.
+**Verified live 2026-07-08:** `docs/PHASE3-TEST-SCRIPT.md` steps 1–3 (baseline diary, meta
+lead-chunk check, TC-3a.2-01 chaos test) all passed. See **Field notes**.
 
 ---
 
 ### Sprint 3a.3 — Critic agent + bounded re-retrieval loop
+
+**Status:** 🟡 Loop-cap mechanism live-verified 2026-07-08 (see TC-3a.3-01 in
+`ADVERSARIAL-TESTS.md`: retry fired, capped at exactly 2 passes, no hang — with an open,
+non-blocking field note on badge-wording consistency across passes). Step 6's happy-path check
+(single pass, no retry) not yet separately run — that's what's still holding this at 🟡.
 
 **In plain terms:** ARGUS learns to check its own homework. A new Critic agent compares the
 answer to your documents, flags anything not backed by a source, and if it's unsure, tries once
@@ -425,36 +437,54 @@ how many tokens it used, where it failed. If the dashboard is down, your answers
 **Concept:** Langfuse (free cloud tier, API keys only) records every LLM/agent call. The Debug
 Diary is the quick in-app triage layer; Langfuse is the deep-dive layer. Must be **non-fatal**.
 
-**Built (2026-07-08) — deviates from the original sketch above, see ADR-016:** the original plan
-called for a `langfuse_breaker`. Not built. The Langfuse Python SDK (v2) queues events onto an
-in-process background thread — `trace()`/`span()` calls never do network I/O on the request path,
-and delivery failures never propagate back to the caller. A circuit breaker would guard a call
-that cannot fail in the way breakers guard against; it would be dead code pretending to protect
-something, which is exactly the kind of overclaiming this project's docs rule exists to catch.
+**Built (2026-07-08, revised 2026-07-09) — deviates from the original sketch above, see
+ADR-016:** the original plan called for a `langfuse_breaker`. Not built, on both passes. Under
+OpenTelemetry (the foundation of Langfuse's current SDK), span export runs on a background
+thread — the calls made from `step_writer.py` never do network I/O on the request path, and
+delivery failures never propagate back to the caller. A circuit breaker would guard a call that
+cannot fail in the way breakers guard against; it would be dead code pretending to protect
+something. Verified directly, not just asserted: a smoke test built a real client with
+syntactically-valid but fake keys, created spans, and let the background exporter's delivery
+attempt fail with a real `401 Unauthorized` — nothing in the process raised or noticed.
 
-- `backend/requirements.txt`: `langfuse==2.60.10` pinned (**v2, not v3** — v3 is
-  OpenTelemetry-based, a real dependency-tree/RAM cost on Render's 512MB tier, and needs 32-hex
-  trace ids; v2 is a small batching client that accepts our session UUID directly via
-  `trace(id=...)`).
-- Env vars live in the **repo-root** `.env.example` (not `backend/.env.example` — that file
-  doesn't exist; this doc's earlier wording was wrong): `LANGFUSE_PUBLIC_KEY`,
-  `LANGFUSE_SECRET_KEY`, `LANGFUSE_HOST`. All optional — absent keys cleanly disable Langfuse
-  (one startup log line), research is unaffected either way.
-- `backend/app/services/observability.py` (new). Lazy-inits the Langfuse client on first emit
-  (imported inside the function, same 512MB reasoning as `langgraph`'s lazy import in `main.py`).
-  `record_step_span(session_id, user_id, agent_name, status, latency_ms, detail)` is synchronous,
-  never raises, and no-ops if keys are absent or init failed. `snapshot()` returns
-  `{"enabled": ..., "disabled": ...}` — "enabled" means configured and initialized, not that
-  Langfuse Cloud is currently reachable (delivery is out-of-band, invisible to this process).
-- `backend/app/services/step_writer.py`. `traced()`'s wrapper calls `record_step_span(...)`
-  right after `record_step(...)` on both the success and exception paths — diary write and
-  Langfuse emit happen in the same place, as originally intended, just without a breaker between
-  them.
-- `/health/circuit-breakers` now reports all three: `groq`, `hf_prompt_guard` (previously
-  hidden), and `langfuse` (the enabled/disabled flag, not a breaker state).
+**Revised 2026-07-09** after installing Langfuse's official Claude Code skill
+(`github.com/langfuse/skills`) and following its documentation-first workflow: the initial build
+(2026-07-08) pinned SDK v2 to dodge v3+'s OpenTelemetry dependency tree, an assumption never
+actually measured. A real measurement (clean-venv import RSS comparison) found v4's marginal cost
+over v2 is ~4MB — negligible next to `langgraph`'s own ~100MB already accepted on this instance —
+so the project moved to the current SDK. Full numbers and reasoning in ADR-016 (revised).
+
+- `backend/requirements.txt`: `langfuse==4.13.1` (current latest) + `openinference-
+  instrumentation-groq==0.1.16` (auto-captures model name + token usage on every Groq call,
+  process-wide, zero changes to orchestrator.py/synthesizer.py/critic.py).
+- Root `.env.example`: `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL` (renamed
+  from `LANGFUSE_HOST` — the v4 SDK's current env var name). All optional — absent keys cleanly
+  disable Langfuse (one startup log line), research is unaffected either way.
+- `backend/app/services/observability.py` (rewritten). `traced_span(agent_name, session_id,
+  user_id)` is a context manager, not a post-hoc emit call — the wrapped node runs INSIDE the
+  Langfuse span so any Groq call it makes nests under that span automatically via
+  GroqInstrumentor. `session_id` doubles as the OTel trace id (dashes stripped -> exactly 32 hex
+  chars), so one research run's whole trace needs no second id. `mask_otel_spans` truncates any
+  span attribute over 300 chars before export, as defense in depth (matches
+  `execution_steps.detail`'s own truncation convention). **Deliberately manual instrumentation,
+  not the LangChain/LangGraph CallbackHandler** Langfuse generally recommends — the
+  CallbackHandler auto-captures each node's FULL state (every chunk, the full answer) as span
+  data, which would send far more to a third-party cloud service than this project's privacy
+  stance (ADR-013) and the Debug Diary's own truncated-detail rule allow. Manual spans send
+  exactly what `step_writer.py` already decided to send. Full reasoning in ADR-016.
+- `backend/app/services/step_writer.py`. `traced()`'s wrapper now runs the node INSIDE
+  `traced_span(...)` (`with traced_span(...) as span: result = await node_fn(state)`) instead of
+  tracing it after the fact — required for the Groq-call nesting above. `mark_span(span, status,
+  detail)` records the same `trace_detail`/`trace_status` the Postgres diary gets, right before
+  the span closes.
+- `/health/circuit-breakers` reports all three: `groq`, `hf_prompt_guard` (previously hidden),
+  and `langfuse` (the enabled/disabled flag, not a breaker state).
 
 **Manual step (Clint):** (1) create a free Langfuse Cloud account + project, copy the public +
-secret keys; (2) set `LANGFUSE_*` in Render's backend env; (3) git push → Render redeploy.
+secret keys; (2) set `LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY`/`LANGFUSE_BASE_URL` in Render's
+backend env — **if you already set `LANGFUSE_HOST` from an earlier version of this sprint, rename
+it to `LANGFUSE_BASE_URL`, same value** (this is a real breaking rename, not cosmetic — the old
+key name is silently ignored by the new code); (3) git push → Render redeploy.
 
 **Verify live:** see `docs/PHASE3-TEST-SCRIPT.md` steps 9–10 (trace appears, Langfuse-down
 degradation). → Log any concerns in **Field notes**.
@@ -462,6 +492,9 @@ degradation). → Log any concerns in **Field notes**.
 ---
 
 ### Sprint 3a.5 — Session read endpoints (Debug Diary API surface)
+
+**Status:** ✅ Live-verified 2026-07-08. `docs/PHASE3-TEST-SCRIPT.md` step 8 passed: both
+endpoints returned correct, ownership-scoped data and the invalid-uuid case cleanly 404'd.
 
 **In plain terms:** add the backend "windows" to pull up a past research session and its diary.
 The visual timeline that displays them is Phase 4. This sprint just makes the data fetchable.
@@ -483,12 +516,19 @@ Phase 4, not now.
 
 **Manual step (Clint):** git push → Render redeploy.
 
-**Verify live:** see `docs/PHASE3-TEST-SCRIPT.md` step 8 (browser-console fetch snippet, no curl
-needed). → Log any concerns in **Field notes**.
+**Verified live 2026-07-08:** `docs/PHASE3-TEST-SCRIPT.md` step 8 passed — `GET /research/{id}`
+returned the correct session row, `GET /research/{id}/trace` returned exactly 8 ordered steps for
+the TC-3a.3-01 retry-loop session, and the all-zeros uuid returned a clean 404. See **Field
+notes**.
 
 ---
 
 ## Document management fix (shipped alongside this batch, owner-reported gap)
+
+**Status:** ✅ Live-verified 2026-07-08. `docs/PHASE3-TEST-SCRIPT.md` steps 4–5 both passed: the
+document list appears with the collection's real name and refreshes after upload, and deleting a
+document stops its content from being retrieved (confirmed by re-asking a question that
+previously only the deleted PDF could answer).
 
 **In plain terms:** you can now see which PDFs are in a collection and delete one without
 deleting the whole collection.
@@ -511,8 +551,8 @@ and the frontend showed only a bare `collectionId` string, no document list.
 
 **Manual step (Clint):** none beyond the batch's git push.
 
-**Verify live:** see `docs/PHASE3-TEST-SCRIPT.md` steps 4–5 (document list/upload refresh,
-delete fixes stale retrieval). → Log any concerns in **Field notes**.
+**Verified live 2026-07-08:** `docs/PHASE3-TEST-SCRIPT.md` steps 4–5 (document list/upload
+refresh, delete fixes stale retrieval) both passed. See **Field notes**.
 
 ---
 
@@ -608,6 +648,13 @@ generic on very large PDFs | future (retrieval tuning) | open`.
 | 2026-07-08 | 3a.2 | Live-tested the happy paths: normal query, injection gate, vague query all PASS. The TC-3a.2-01 chaos test (diary write failure) had not been run yet at that point — folded into this batch's test script instead of testing it in isolation. | this sprint | superseded by the bundled test script below |
 | 2026-07-08 | doc mgmt | Two related reports from live testing: uploading a new PDF into a collection still surfaced the old PDF in answers, and there was no way to see which files were even in a collection. Root cause was one thing, not two — uploads are purely additive (nothing ever deleted or replaced a document's chunks) and the UI showed only a bare collection id. Fixed with a document list + per-document delete (backend `GET .../documents` + `DELETE /documents/{id}`, frontend list in `UploadPanel.tsx`). | this sprint | code-complete; needs live verify |
 | 2026-07-08 | 3a.3/3a.4/3a.5 | Bundled the remaining Phase 3a sprints (Critic + bounded loop, Langfuse, session read endpoints) into one batch with the document-management fix, per Clint's request to test the whole remaining phase in one sitting rather than sprint-by-sprint. One deviation from the original sketch: Langfuse ships without a `langfuse_breaker` — its SDK delivers on a background thread, so there's no request-path failure for a breaker to guard against (see ADR-016). | this sprint | code-complete, py_compile + `npm run build` both clean; needs migration 008 (if not already applied) + live test via `docs/PHASE3-TEST-SCRIPT.md` |
+| 2026-07-09 | 3a.4 | Clint asked to install Langfuse's official Claude Code skill and re-instrument following its documented best practices. Following it (documentation-first, always fetch current docs) surfaced that the prior day's `langfuse==2.60.10` pin was based on an unmeasured RAM assumption. Measured it for real (clean-venv import RSS): v4 costs ~4MB more than v2, not the "real RAM cost" this file and ADR-016 originally claimed — negligible next to langgraph's own ~100MB. Upgraded to `langfuse==4.13.1`, added `openinference-instrumentation-groq` for automatic model/token capture, kept manual-span instrumentation (not the LangChain CallbackHandler Langfuse generally recommends) specifically because the CallbackHandler auto-captures full node state — full chunk content, full answers — which would leak far more to a third-party cloud service than ADR-013's disclosed sub-processors and the diary's own truncated-detail rule allow. Verified end-to-end with a real smoke test (not just py_compile): spans created correctly, exceptions propagate through the span wrapper untouched, and a real 401 from intentionally-fake API keys during background export never reached the process. Breaking rename: `LANGFUSE_HOST` → `LANGFUSE_BASE_URL` (Clint already had the old name set on Render from the prior day — flagged prominently as a required manual step). Full reasoning in ADR-016 (revised). | this sprint | code-complete, py_compile clean, smoke-tested locally against real Langfuse v4; still needs the full live test via `docs/PHASE3-TEST-SCRIPT.md` (step 9's model/token capture check is new) |
+| 2026-07-08 | 3a.2 | TC-3a.2-01 chaos test run live: revoked the `execution_steps` INSERT grant, ran a real query, got a normal report the whole way through (200 OK). Render logs show the `[ARGUS] execution_steps write failed ...` print line for every node instead of a crash. Bonus: this same run organically triggered the Critic's retry loop (8 nodes total, two full retriever/synthesizer/critic passes) while the diary writes were also broken, so both failure-tolerance mechanisms were exercised independently in one shot and the request still completed. | this sprint (3a.2 closing gate) + partial live evidence for 3a.3 | TC-3a.2-01 PASS, recorded in `ADVERSARIAL-TESTS.md`; TC-3a.3-01 still needs its deliberate forced-retry test (step 7) to formally close |
+| 2026-07-08 | regression | Double-login-on-first-attempt reconfirmed live during this test session (first login attempt silently fails, second succeeds). Real root cause found (not what `BACKLOG.md` Item 5 originally guessed): `last_active`, the idle-timeout cookie (`frontend/proxy.ts`), is a 7-day cookie only ever deleted inside the idle-timeout's own redirect. Any other way a session ends (explicit logout, or a Supabase session simply expiring) leaves it behind with a stale timestamp; the next login's first authenticated request compares "now" against that stale value, sees >30 minutes, and force-signs-out a session that just started — the false idle-signout is the only thing that deletes the stale cookie, which is why the second attempt always worked. | BACKLOG.md Item 5 | fixed — `last_active` now also cleared in `proxy.ts`'s not-logged-in redirect and in `app/auth/signout/route.ts`; `npm run build` clean; needs a live re-test (log out, wait >30 min or age the cookie manually, log back in once) |
+| 2026-07-08 | 3a.2 / doc mgmt | `docs/PHASE3-TEST-SCRIPT.md` steps 2 ("summarize this for me" answers well) and 4–5 (document list works, deleted PDF's content no longer retrieved) all passed live. | closes 3a.2 + document management verification | PASS |
+| 2026-07-08 | 3a.3 | Forced-retry test (step 7) confirmed the ASI10 loop cap works: retry fired, ran exactly 2 critic passes, terminated cleanly (`status: completed_with_fallback`), retry queries genuinely redirected the second search to different, better chunks. But the final badge read "High" instead of the expected "⚠️ Low" — the draft was still a refusal on both passes, and the Critic's system prompt says a refusal should always grade low, but the model's second-pass judgment treated that refusal as grounded in the new chunks it saw that time. Not a code bug (routing/capping/rendering all did exactly what the code says with whatever verdict the model returned); a real LLM instruction-following inconsistency between passes. | future: consider whether the Critic's system prompt needs a more forceful "always low on refusal, no exceptions" instruction, or whether this behavior is actually reasonable and doesn't need changing | open, non-blocking, logged in `ADVERSARIAL-TESTS.md` TC-3a.3-01 |
+| 2026-07-08 | 3a.5 | Step 8 read-endpoints check passed live: `/research/{id}` and `/research/{id}/trace` returned correct, ownership-scoped data (trace showed exactly 8 steps for the retry-loop session), invalid uuid returned a clean 404. | closes 3a.5 verification | PASS |
+| 2026-07-08 | 3a.4 | Checked Langfuse Cloud after the step 7/8 tests — no traces at all. Root cause found via `git status`: none of this session's changes (Langfuse v4 rewrite, login-bug fix) had actually been pushed yet, so the live backend was still running the pre-v4 Langfuse code, which likely still reads the old `LANGFUSE_HOST` env var name. If that was already renamed to `LANGFUSE_BASE_URL` on Render per the earlier instruction, the old deployed code would see it as unset and silently disable Langfuse. Not a new bug — a deploy-sequencing gap in how this session's testing was paced against pushes. | this batch | waiting on `git push`; steps 9-10 to be re-run after redeploy |
 |  |  |  |  |  |
 
 ---
