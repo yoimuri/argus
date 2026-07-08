@@ -1,9 +1,11 @@
 # ARGUS — Phase 3: Full Agent Pipeline + Observability
 
-**Status:** 🟡 IN PROGRESS. Sprint 3a.1 is code-complete, pending deploy and live
-verification. Sprints 3a.2–3b are still ⏳ not started. Every checkbox is ⏳ until the
-sprint that owns it is code-complete (🟡) and then live-verified (✅), per the project's
-status-marks rule. This file is the execution plan, not a status claim.
+**Status:** 🟡 IN PROGRESS. Sprint 3a.1 (Orchestrator + intent retrieval) is ✅ complete and
+live-verified (2026-07-08). Sprint 3a.2 (Debug Diary + meta lead-chunk retrieval fix) is 🟡
+code-complete, not yet live-verified — needs migration 008 applied + a git push before testing.
+3a.3–3b are still ⏳ not started. Every checkbox is ⏳ until the sprint that owns it is
+code-complete (🟡) and then live-verified (✅), per the project's status-marks rule. This file is
+the execution plan, not a status claim.
 **Timeline:** Weeks 8–10 (blueprint), realistically paced across the sub-sprints below.
 **SDLC Stages:** Agent Design → Observability → Adversarial Re-test → Re-deploy
 **Prerequisite:** Phase 2 closed and live-verified (✅ 2026-07-07). Confirmed unblocked.
@@ -231,37 +233,28 @@ independently deployable and verifiable. After you live-test each one, jot anyth
 
 ### Sprint 3a.1 — Orchestrator agent + intent-based retrieval (the headline win)
 
-**Status:** 🟡 Code-complete, partially live-verified. The vague-query failure (blank answers on
-queries like "summarize for me") was traced to neither retrieval nor classification, both
-confirmed working against live data. The synthesis model is a reasoning model whose token budget
-covers its internal reasoning *and* the visible answer together; when reasoning ran long it
-consumed the whole budget and returned nothing. Capping reasoning effort on both model calls fixed
-it, with a guard so an empty completion can never surface as a silent blank answer. This also
-settled an open model-choice question: the model was never the weak point, the budget was. This
-fix, at `reasoning_effort: "low"` on both the Orchestrator and Synthesizer, was live-tested
-2026-07-08 and passed: the pinned acceptance criterion (vague query returns a real answer, not a
-refusal) holds.
+**Status:** ✅ Complete, live-verified 2026-07-08. The pinned acceptance criterion holds on the
+deployed app: a vague query ("summarize", "summary", "summarize for me") returns a real,
+representative answer instead of a refusal. Getting here took fixing three separate things, each
+found by live testing and traced before being touched:
 
-**Since that passing test, one more change has been made and is NOT yet live-verified:** the
-Orchestrator's `reasoning_effort` was raised from `"low"` to `"medium"` (synthesizer unchanged) to
-give intent classification more room on terse/atypical phrasing, like a bare `"summarize"` with no
-punctuation and nothing matching the system prompt's few-shot examples. This reopens some of the
-reasoning-length variability the original fix was capping, so `max_tokens` was raised 512→768 to
-compensate. Worst case if it still overruns: the Orchestrator's existing fail-open logic (any
-parse failure falls back to a raw-query pass) absorbs it; this cannot reproduce the Synthesizer's
-blank-answer bug. Still needs a fresh live pass on both a normal query and a terse one before this
-sprint can close.
+1. **Blank-answer bug (token budget).** The synthesis model is a reasoning model whose token
+   budget covers its internal reasoning *and* the visible answer together; when reasoning ran long
+   it consumed the whole budget and returned nothing. Capping reasoning effort on both model calls
+   fixed it, with a guard so an empty completion can never surface as a silent blank answer.
+2. **Terse-input classification.** The Orchestrator's `reasoning_effort` was raised `"low"` →
+   `"medium"` (Synthesizer unchanged) so bare inputs like `"summarize"`, with no punctuation and no
+   few-shot match, are judged reliably; `max_tokens` 512 → 768 to absorb the added reasoning
+   variance. The existing fail-open path (parse failure → raw-query pass) bounds the worst case.
+3. **Zero-chunks bug (vector index recall).** Some valid queries returned *zero* chunks. Retriever
+   instrumentation traced it to the **ivfflat index** (`lists = 100`, migration 001) losing recall
+   on a small dataset at the default `probes = 1`. Migration `007_hnsw_vector_index.sql` replaces
+   it with HNSW. Applied live and re-tested; retrieval now reliably returns nearest chunks.
 
-**A second, distinct bug surfaced in that same testing (2026-07-08) and is also NOT yet
-live-verified:** some valid queries returned *zero* chunks ("No relevant information found"),
-separate from the blank-answer/token bug above (there retrieval returned chunks and the model
-emitted nothing; here retrieval itself returned nothing). Instrumentation added to the retriever
-traced it to the **ivfflat vector index** (`lists = 100`, migration 001) losing recall on a small
-dataset at the default `probes = 1`. Fix: migration `007_hnsw_vector_index.sql` replaces it with
-HNSW. See the field notes for the full trace. This sprint now has **two** pending live checks
-before it can close: (1) the `reasoning_effort: "medium"` orchestrator change, and (2) the HNSW
-index migration applied live, with a "summarize" query confirmed returning chunks afterward.
-**Do not flip to ✅ until both are re-verified live.**
+Two minor, non-blocking items were logged to the field notes rather than fixed: the injection
+classifier false-positives on the OOD token `tldr` (a known ML limitation, deliberately not
+weakened for one niche word), and meta-summaries can miss header facts like an author's name
+(expected top-N RAG behavior; a "always include chunk 0 for meta intent" enhancement is filed).
 **Do not flip to ✅ until this specific version is re-verified live.**
 Concrete constants chosen: `SPECIFIC_MATCH_COUNT=5`, `BROAD_MATCH_COUNT=8` (per sub-query),
 `FINAL_TOP_N=8` after merge/dedupe/sort by similarity. Picked so the single-query "specific"
@@ -312,28 +305,38 @@ can actually match. **This is the pinned Phase 3 acceptance criterion** (`BACKLO
 
 ---
 
-### Sprint 3a.2 — Session backbone + StepWriter (the Debug Diary)
+### Sprint 3a.2 — Session backbone + StepWriter (the Debug Diary) + a retrieval fix
 
 **In plain terms:** give ARGUS a memory and a diary. It now saves each research run and writes
 down what every agent did, step by step, so you can look back later without re-running anything.
-Built so the diary failing can never break your answer.
+Built so the diary failing can never break your answer. Bundled alongside: the small retrieval fix
+from 3a.1's field notes (below) — a "summarize" of a resume now includes the person's name.
 
 **Concept:** "Memory" = write one `research_sessions` row per query (the table exists but has
 never been written to). "Diary" = a `StepWriter` that logs one `execution_steps` row per agent as
 it runs. This sprint also retro-wraps the agents built so far with tracing.
 
-**Build:**
+**Build (retrieval fix, `retriever.py` only):** for `intent == "meta"`, fetch each document's
+`chunk_index=0` (its opening chunk — title/author/intro), dedupe against the vector-match ids
+already retrieved, cap at 3, and prepend them so the top-N cap can't drop them. `specific`/`broad`
+retrieval is untouched — they already have a real topic, so semantic search is on-target.
+
+**Build (Debug Diary):**
 - Run **migration 008** (manual step, detailed below).
 - `backend/app/services/step_writer.py` (new):
   - `async def record_step(session_id, user_id, access_token, step_index, agent_name, status, latency_ms, detail)`, POSTs one row to `execution_steps` via the existing `supabase_request` (`supabase_client.py`). **Must never raise:** wrap the whole body in `try/except` and on failure `print()` to stdout (local-log fallback), the blueprint is explicit that the diary failing must never crash a research session.
-  - `def traced(agent_name)`. An async decorator that wraps a LangGraph node: records `time.monotonic()` at entry, runs the node, computes `latency_ms`, calls `record_step(...)`, returns the node's dict unchanged. Comment why: a decorator avoids copy-pasting timing code into every node.
-- `graph.py`. Apply `@traced("...")` to **all** nodes now present (`orchestrator`, `retriever`,
+  - `def traced(agent_name)`. An async decorator that wraps a LangGraph node: records `time.monotonic()` at entry, runs the node inside its own try/except (on exception, records a `status="error"` step then re-raises so the original failure still propagates), computes `latency_ms`, pops optional `trace_detail`/`trace_status` off the node's returned dict (default `None`/`"ok"`) so per-node context reaches the diary without touching `ResearchState`, calls `record_step(...)`, increments `step_index`, returns the result. Comment why: a decorator avoids copy-pasting timing code into every node.
+- `graph.py`. Apply `traced("...")(...)` to **all** nodes now present (`orchestrator`, `retriever`,
   `synthesizer`, `reporter`).
 - `backend/main.py` `/research` handler. Before invoking the graph: (1) insert a
-  `research_sessions` row (`user_id`, `collection_id`, `query`), capture its `id`; (2) put
-  `session_id` into the initial state; (3) after the graph returns, `PATCH` the session row with
-  `report` + final `status`; (4) return `session_id` in the response JSON (additive. Existing
-  `report`/`chunks_used` stay). Seed `session_id` / `status` in the state dict.
+  `research_sessions` row (`user_id`, `collection_id`, `query`, `status="running"`), capture its
+  `id` — best-effort: if the insert itself fails, `session_id` stays `None` and the diary quietly
+  no-ops for that run instead of blocking the query; (2) seed `session_id` / `step_index: 0` into
+  the initial state; (3) after the graph returns, `PATCH` the session row with `report` +
+  `status="completed"` (on an `ainvoke` exception, `PATCH` `status="error"` first, then re-raise);
+  both patches are themselves try/except-guarded so a diary write failure never masks the real
+  error or blocks a good answer; (4) return `session_id` in the response JSON (additive — existing
+  `report`/`chunks_used` stay).
 
 **Reuse, don't rebuild:** `supabase_request` for all writes.
 
@@ -341,6 +344,8 @@ it runs. This sprint also retro-wraps the agents built so far with tracing.
 `execution_steps` exists with one `"own execution steps"` policy. Then git push → Render redeploy.
 
 **Verify live:**
+- **Retrieval fix:** summarize the resume collection → the answer now includes the person's
+  name/title. Run a `specific` query on the same collection → unchanged (no lead-chunk injection).
 - Run a normal query → one `research_sessions` row + four `execution_steps` rows
   (orchestrator/retriever/synthesizer/reporter), RLS-scoped to your user, sane `latency_ms`.
 - **StepWriter-never-crashes test:** temporarily point `record_step` at a bad table name (or
@@ -537,7 +542,10 @@ generic on very large PDFs | future (retrieval tuning) | open`.
 | 2026-07-07 | 3a.1 | Design lesson: any reasoning-model call needs an explicit reasoning/output budget or it can silently return empty: carry this into the Critic and Web Scout agents. | future (all model calls) | open |
 | 2026-07-08 | 3a.1 | A bare "summarize" (no punctuation, not matching the system prompt's few-shot wording) is the kind of terse/lazy phrasing real users send, and low reasoning effort may not judge it as reliably as clearer phrasing. Raised the Orchestrator's `reasoning_effort` low to medium, `max_tokens` 512 to 768 to compensate. Synthesizer untouched (different job, not classification). | this sprint, intent-recognition robustness | implemented, not yet live-tested |
 | 2026-07-08 | 3a.1 | Heisenbug: bare "summarize" sometimes returns "No relevant information found" while "summarize " (trailing space) or a retry answers. Hardened rather than guessed: normalized the query (strip) at entry so whitespace can't change the answer; added retriever logging of embedding dim + rows-per-sub-query; made `embed_query` validate a 384-float vector and raise loudly instead of silently passing a bad shape through. | this sprint, plus a reusable observability + fail-loud lesson for every embedding/model call | whitespace-hardened; root cause FOUND (see next row) |
-| 2026-07-08 | 3a.1 | ROOT CAUSE (from the new retriever logs + the live RPC definition): embeddings and Orchestrator classification are both fine (`embed_dim=384`, correct `meta` intent). The vector search returned different row counts (0, 1, 1) for different sub-queries against the *same* collection. First hypothesis was a hidden similarity threshold in the live RPC, but pulling the live `match_document_chunks` definition disproved that: it has NO threshold, identical to the migration files. The real cause is the **ivfflat approximate index** on `document_chunks.embedding` (`with (lists = 100)`, migration 001). ivfflat buckets vectors into 100 lists and, at the default `probes = 1`, scans only the single nearest list. On a small collection the chunks are spread thinly so most lists are empty; a query whose vector lands on an empty list returns 0 rows. Different sub-query embeddings probe different lists, hence the random-looking 0/1/1 and why specific queries (which co-cluster with their answer chunk) work while vague ones (generic embedding, empty list) fail. The "trailing space" was never causal. Lesson: `lists = 100` is tuned for a large dataset (rule of thumb ~rows/1000); on a small one it destroys recall. This also revises ADR-014's premise: sub-query fan-out alone did NOT fix the vague-query case because the ANN index was silently dropping the fan-out results. | fix = replace the ANN index so retrieval reliably returns nearest chunks at this data scale | root cause confirmed; fix chosen = HNSW (migration `007_hnsw_vector_index.sql` written); PENDING Clint's manual apply in the Supabase SQL editor + a live "summarize" re-test |
+| 2026-07-08 | 3a.1 | ROOT CAUSE (from the new retriever logs + the live RPC definition): embeddings and Orchestrator classification are both fine (`embed_dim=384`, correct `meta` intent). The vector search returned different row counts (0, 1, 1) for different sub-queries against the *same* collection. First hypothesis was a hidden similarity threshold in the live RPC, but pulling the live `match_document_chunks` definition disproved that: it has NO threshold, identical to the migration files. The real cause is the **ivfflat approximate index** on `document_chunks.embedding` (`with (lists = 100)`, migration 001). ivfflat buckets vectors into 100 lists and, at the default `probes = 1`, scans only the single nearest list. On a small collection the chunks are spread thinly so most lists are empty; a query whose vector lands on an empty list returns 0 rows. Different sub-query embeddings probe different lists, hence the random-looking 0/1/1 and why specific queries (which co-cluster with their answer chunk) work while vague ones (generic embedding, empty list) fail. The "trailing space" was never causal. Lesson: `lists = 100` is tuned for a large dataset (rule of thumb ~rows/1000); on a small one it destroys recall. This also revises ADR-014's premise: sub-query fan-out alone did NOT fix the vague-query case because the ANN index was silently dropping the fan-out results. | fix = replace the ANN index so retrieval reliably returns nearest chunks at this data scale | root cause confirmed; fix = HNSW (migration `007_hnsw_vector_index.sql`); applied live + re-tested 2026-07-08, "summarize"/"summary" now reliably return chunks. RESOLVED. |
+| 2026-07-08 | 3a.1 | `tldr` gets flagged as possible prompt injection. Confirmed it is NOT the regex layer (no pattern in `injection_patterns.py` matches it) — it's the HF Prompt Guard classifier false-positiving on a short, out-of-distribution slang token. Expected ML failure mode; already an honest documented limitation. Deliberately NOT fixing: the only levers (raise threshold / allowlist the word) either weaken the guard against real attacks or hand attackers a bypass prefix. | future / known-limitation (injection classifier false positives on OOD short inputs) | logged, won't-fix by design; grab the actual `Prompt Guard score=` next time it happens to confirm |
+| 2026-07-08 | 3a.1 | Summarizing a resume: the answer knew the body details but not the person's name. Expected RAG behavior, not a bug — the name lives in the header (chunk 0), and meta sub-queries ("purpose/findings/conclusions") don't rank a name chunk into the top-N, so the model never saw it. Cheap future enhancement: for `meta` intent, always include chunk_index 0 (title/author/intro almost always live there) so "what is this / who wrote it" is answerable. | future (retrieval tuning for meta intent) | implemented in 3a.2 (see below), not yet live-verified |
+| 2026-07-08 | 3a.2 | Built the fix for the row above: `retriever.py` now fetches each document's `chunk_index=0` and prepends it (deduped, capped at 3) whenever `intent == "meta"`, so lead chunks survive the top-N cap. `specific`/`broad` untouched. Also built the Debug Diary: `step_writer.py` (`record_step` + `traced` decorator), all four nodes wrapped, `research_sessions` insert/patch + `execution_steps` rows wired into `main.py`. Every diary write (session insert, both patches, and each `record_step` call) is individually try/except-guarded so a DB hiccup degrades to "no diary this run," never a broken research response — the blueprint's iron rule applied at every layer, not just inside StepWriter. | this sprint | code-complete, py_compile clean; needs migration 008 applied + live test |
 |  |  |  |  |  |
 
 ---

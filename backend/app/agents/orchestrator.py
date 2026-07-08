@@ -99,11 +99,20 @@ async def orchestrator_node(state: ResearchState) -> dict:
             raise ValueError("refined_queries empty after cleaning")
 
         print(f"[ARGUS] orchestrator intent={intent!r} refined_queries={refined_queries!r}")
-        return {"intent": intent, "refined_queries": refined_queries}
+        return {
+            "intent": intent,
+            "refined_queries": refined_queries,
+            "trace_detail": f"intent={intent}, {len(refined_queries)} refined queries",
+        }
 
     except Exception as err:
         # Fail-open: the Orchestrator improving retrieval must never block it. Any
         # failure here (Groq down, breaker open, bad/unparseable JSON) falls back to
         # exactly the pre-Phase-3 behavior — one raw-query retrieval pass.
         print(f"[ARGUS] orchestrator fallback to raw query: {err!r}")
-        return {"intent": "specific", "refined_queries": [query]}
+        return {
+            "intent": "specific",
+            "refined_queries": [query],
+            "trace_detail": f"fallback to raw query: {err!r}"[:200],
+            "trace_status": "fallback",
+        }

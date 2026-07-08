@@ -286,16 +286,63 @@ async def research(request: Request):
     # Lazy import: langgraph adds ~100MB+ RSS; keep upload path lean on 512MB Render free tier.
     from app.agents.graph import research_graph
 
-    result = await research_graph.ainvoke({
-        "query": query,
-        "collection_id": collection_id,
-        "access_token": request.state.access_token,
-        "user_id": request.state.user_id,
-        "intent": "specific",
-        "refined_queries": [query],
-        "chunks": [],
-        "answer": None,
-        "report": None,
-    })
+    # Debug Diary: one research_sessions row per query, patched to its final status
+    # once the graph finishes (or errors). Best-effort: if the insert itself fails,
+    # the research must still run — session_id stays None and record_step's own
+    # try/except (step_writer.py) quietly no-ops on every traced node instead of
+    # raising, same never-crash rule applied one level up.
+    session_id = None
+    try:
+        session_rows = await supabase_request(
+            "POST", "research_sessions", request.state.access_token,
+            json_body={
+                "user_id": request.state.user_id,
+                "collection_id": collection_id,
+                "query": query,
+                "status": "running",
+            },
+        )
+        session_id = session_rows[0]["id"]
+    except Exception as insert_err:
+        print(f"[ARGUS] could not create research_sessions row, diary disabled for this run: {insert_err}")
 
-    return {"report": result["report"], "chunks_used": result["chunks"]}
+    try:
+        result = await research_graph.ainvoke({
+            "query": query,
+            "collection_id": collection_id,
+            "access_token": request.state.access_token,
+            "user_id": request.state.user_id,
+            "session_id": session_id,
+            "step_index": 0,
+            "intent": "specific",
+            "refined_queries": [query],
+            "chunks": [],
+            "answer": None,
+            "report": None,
+        })
+    except Exception:
+        # Best-effort status patch: a diary write failing here must not mask the
+        # real error that triggered this except block (same never-crash rule as
+        # StepWriter — see app/services/step_writer.py).
+        if session_id:
+            try:
+                await supabase_request(
+                    "PATCH", f"research_sessions?id=eq.{session_id}", request.state.access_token,
+                    json_body={"status": "error"},
+                )
+            except Exception as patch_err:
+                print(f"[ARGUS] could not mark session {session_id} as error: {patch_err}")
+        raise
+
+    if session_id:
+        try:
+            await supabase_request(
+                "PATCH", f"research_sessions?id=eq.{session_id}", request.state.access_token,
+                json_body={"report": result["report"], "status": "completed"},
+            )
+        except Exception as patch_err:
+            # A perfectly good answer must still reach the user even if this final
+            # diary write fails — the report was already produced.
+            print(f"[ARGUS] could not mark session {session_id} as completed: {patch_err}")
+
+    return {"report": result["report"], "chunks_used": result["chunks"], "session_id": session_id}

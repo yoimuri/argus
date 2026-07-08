@@ -73,7 +73,11 @@ async def synthesizer_node(state: ResearchState) -> dict:
     chunks = state["chunks"]
 
     if not chunks:
-        return {"answer": "No relevant information was found in this collection for that query."}
+        return {
+            "answer": "No relevant information was found in this collection for that query.",
+            "trace_detail": "no chunks retrieved",
+            "trace_status": "fallback",
+        }
 
     # Lock #2: scan before the model sees anything. Flagged chunks are logged
     # to security_events and stripped here. Model only ever gets the clean list.
@@ -81,7 +85,11 @@ async def synthesizer_node(state: ResearchState) -> dict:
 
     if not chunks:
         # Every retrieved chunk was flagged. Don't call the model with nothing.
-        return {"answer": "The retrieved content was flagged as potentially malicious and could not be used to answer this query."}
+        return {
+            "answer": "The retrieved content was flagged as potentially malicious and could not be used to answer this query.",
+            "trace_detail": "all retrieved chunks flagged as injection",
+            "trace_status": "fallback",
+        }
 
     context = "\n\n".join(
         f"[Chunk {c['chunk_index']} | trust_level={c.get('trust_level', 'retrieved')}] {c['content']}"
@@ -112,15 +120,18 @@ async def synthesizer_node(state: ResearchState) -> dict:
     # query guard. If Groq is down/slow/open, return a graceful banner answer
     # instead of a 500 — Phase 2 acceptance criterion #3 (no 500 when Groq is
     # unreachable; the session must not hang).
+    trace_status = "ok"
     try:
         answer = await groq_breaker.call(_synthesize)
     except CircuitBreakerOpen:
         answer = ("The AI service is temporarily unavailable (too many recent failures). "
                   "Your documents and retrieved context are fine — please try again shortly.")
+        trace_status = "fallback"
     except Exception as groq_err:
         print(f"[ARGUS] synthesis call failed, returning graceful fallback: {groq_err}")
         answer = ("The AI service is temporarily unavailable. Your documents and retrieved "
                   "context are fine — please try again shortly.")
+        trace_status = "fallback"
 
     # Defence in depth: even with reasoning_effort capped, a completion could still
     # come back empty/whitespace (budget exhaustion, an odd model response). Never
@@ -131,5 +142,10 @@ async def synthesizer_node(state: ResearchState) -> dict:
         answer = ("The AI could not produce an answer for this query on this attempt "
                   "(empty response). Your documents and retrieved context are fine — "
                   "please try again.")
+        trace_status = "fallback"
 
-    return {"answer": answer}
+    return {
+        "answer": answer,
+        "trace_detail": f"answer length {len(answer)} chars",
+        "trace_status": trace_status,
+    }

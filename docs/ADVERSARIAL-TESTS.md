@@ -241,3 +241,28 @@ Notes on GATE-09/10 (the resilience pair you asked to guarantee):
 - **GATE-11/12 are the actual point of ADR-012.** Both payloads were specifically chosen to
   share zero keywords with `injection_patterns.py`'s regex list, so a PASS here is evidence
   the purpose-built classifier catches intent the old approach structurally could not.
+
+---
+
+### TC-3a.2-01: Debug Diary never crashes a session
+Risk class: Availability / graceful degradation (blueprint's stated iron rule for the Debug Diary:
+observability must never take down the feature it's observing).
+Sprint: 3a.2
+Objective: Verify that a broken `execution_steps`/`research_sessions` write degrades to "no diary
+for this run" and never blocks or corrupts the actual research response.
+
+Precondition: Migration 008 applied; a normal query already confirmed to write session + step rows.
+
+Test: Temporarily break the diary write path (e.g. point `record_step`'s table name at something
+that doesn't exist, or revoke the `authenticated` grant on `execution_steps`), then run a normal
+research query.
+
+Expected Result: The query still returns a normal report (chunks retrieved, answer synthesized,
+report rendered). No 500. `execution_steps` gets zero new rows for that run; Render logs show the
+`[ARGUS] execution_steps write failed ...` print line once per node instead of a raised exception.
+Restore the table/grant afterward.
+
+Status: Not yet run — pending Clint's live test after migration 008 is applied and the backend is
+redeployed. `record_step` (`backend/app/services/step_writer.py`) wraps its entire body in
+try/except and only prints on failure, by construction, but this needs a live run to confirm
+end-to-end, per the project's "compiling is not ✅" rule.
