@@ -1,4 +1,5 @@
 import os
+import re
 from groq import AsyncGroq
 from app.agents.state import ResearchState
 from app.services.circuit_breaker import groq_breaker
@@ -12,6 +13,36 @@ _client = AsyncGroq(api_key=os.environ["GROQ_API_KEY"], timeout=30.0)
 # the second search pass looks for exactly that. Originals + gap queries cap
 # at MAX_TOTAL_QUERIES so a retry pass can't balloon the retriever's fan-out.
 MAX_TOTAL_QUERIES = 5
+
+# Deterministic backstop for the Critic's own "mark low if the draft is a
+# refusal" rule (see SYSTEM_PROMPT). That rule alone isn't reliable — live
+# testing (2026-07-08) showed the SAME refusal answer graded "high" on one
+# run and "low" on another, since it's an LLM judgment call, not a fixed
+# check. Same pattern already used for the injection guard
+# (injection_patterns.py backs its LLM classifier with regex): the model's
+# judgment stays primary, this only catches the case where it contradicts its
+# own stated rule. Scoped to the confidence badge only — it does not force a
+# retry, since a real retry needs the model's own gap-targeted queries to
+# search for, which a regex can't generate.
+REFUSAL_PATTERNS = [
+    # Strongest single signal: the Synthesizer's system prompt tells it to
+    # "say so plainly" when context is lacking, and in practice it opens a
+    # refusal with this almost every time — live-confirmed across both
+    # observed refusal wordings ("...does not include A SPECIFIC PERCENTAGE"
+    # and "...does not include ENOUGH INFORMATION", neither of which the
+    # narrower patterns below would both catch on their own).
+    r"i.?m\s+sorry,?\s+but",
+    r"does\s+not\s+(include|contain|specify|mention|provide)\s+(a\s+|the\s+|any\s+|enough\s+|sufficient\s+|specific\s+)?information",
+    r"doesn.?t\s+(include|contain|specify|mention|provide)\s+(a\s+|the\s+|any\s+|enough\s+|sufficient\s+|specific\s+)?information",
+    r"no\s+relevant\s+information\s+was\s+found",
+    r"not\s+(mentioned|stated|specified|found)\s+in\s+(the|this|any)\s+(provided\s+)?context",
+    r"(unable|cannot)\s+to\s+determine",
+]
+_COMPILED_REFUSAL_PATTERNS = [re.compile(p, re.IGNORECASE) for p in REFUSAL_PATTERNS]
+
+
+def _looks_like_refusal(answer: str) -> bool:
+    return any(p.search(answer) for p in _COMPILED_REFUSAL_PATTERNS)
 
 SYSTEM_PROMPT = (
     "You are a fact-checker for a document research system. You receive the "
@@ -94,6 +125,18 @@ async def critic_node(state: ResearchState) -> dict:
         ][:8]
         if not flags:
             raise ValueError("flags empty after sanitizing")
+
+        if _looks_like_refusal(answer) and not any(not f["grounded"] for f in flags):
+            # The model's own flags say this refusal is fully grounded —
+            # contradicts its own system prompt's refusal rule. Override the
+            # badge, not the model: append an ungrounded flag so the report
+            # never shows High confidence on an answer that admits it
+            # couldn't answer the question.
+            flags.append({
+                "section": "overall",
+                "grounded": False,
+                "note": "Answer states the retrieved context lacks this information.",
+            })
 
         retry_queries = [
             str(q).strip() for q in (parsed.get("retry_queries") or [])

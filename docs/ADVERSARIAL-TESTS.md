@@ -314,15 +314,27 @@ returned a different 8-chunk set than a single pass would, including a chunk tha
 discusses nation-state actor involvement, confirming the Critic's gap-query mechanism actually
 redirected the search rather than repeating the same query.
 
-Caveat, not a fail: the final badge read `High — ... One automatic re-retrieval pass was
+Caveat found, not a fail: the final badge read `High — ... One automatic re-retrieval pass was
 performed.` instead of the anticipated `⚠️ Low`. The draft answer was still a refusal ("does not
 include a specific percentage...") on both passes, and the Critic's own system prompt
 (`critic.py`) says a refusal should always grade low — but on pass 2 the model apparently judged
 that same refusal as accurately grounded in the (different, better) chunks it was given that time
 and marked it high. This is an LLM instruction-following inconsistency between passes, not a code
 defect: the routing, the 2-pass cap, and the badge rendering all did exactly what the code
-specifies with whatever verdict the model actually returned. Logged as an open field note in
-`PHASE3.md` for a possible future look, not treated as a bug.
+specifies with whatever verdict the model actually returned.
+
+**Re-run 2026-07-08 (same question, fresh session `afe293b3-a201-4731-a1bf-cbfefd7d4a7d`), after
+redeploy:** confirmed this is a real recurring pattern, not a one-off — this time the model graded
+the refusal "High" on the very first pass (no retry ever fired, `status: "completed"`), where the
+previous run had graded it "low" on pass 1 then "high" on pass 2. Same underlying cause, different
+manifestation each time. **Fixed the same day:** `critic.py` now backs the model's grounding
+judgment with a deterministic `REFUSAL_PATTERNS` regex check (mirrors the injection guard's
+LLM-classifier + regex pattern, ADR-007) — if the draft reads like a refusal but the model's own
+flags say it's fully grounded, an ungrounded flag is appended so the badge can't show High
+confidence on an answer that admits it couldn't answer the question. Scoped to the badge only,
+does not force a retry (see ADR-015's revision). `py_compile` clean, regex verified against both
+observed refusal wordings. **Not yet re-verified live** — needs a push + one more run of this same
+question to confirm the badge now reads `⚠️ Low` consistently.
 
 Not yet separately confirmed: Sprint 3a.3's other verification step (a well-covered question that
 should return a single critic pass, `status: "completed"`, and a High badge with no retry note —
