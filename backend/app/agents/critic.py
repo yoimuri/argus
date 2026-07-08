@@ -66,24 +66,31 @@ SYSTEM_PROMPT = (
 async def critic_node(state: ResearchState) -> dict:
     answer = (state.get("answer") or "").strip()
     chunks = state.get("chunks") or []
+    # Sprint 3b: graded alongside chunks so a web-grounded claim doesn't get
+    # falsely flagged unsupported just because it's not in state["chunks"].
+    web_snippets = state.get("web_snippets") or []
     loop_count = state.get("loop_count", 0)
     # .get default above means even if seeding is ever missed, the cap in
     # graph.py's router still holds — there is no path to an infinite loop.
     base = {"loop_count": loop_count + 1}
 
-    if not chunks or not answer:
-        # Nothing to grade (no-chunks fallback answer, or every chunk was
+    if (not chunks and not web_snippets) or not answer:
+        # Nothing to grade (no chunks/web snippets, or every chunk was
         # flagged by the injection scan). A retry can't help without gap
         # information to search for, so fall through to the reporter.
         return {
             **base,
             "confidence_flags": [],
             "needs_retry": False,
-            "trace_detail": "skipped: no chunks or empty answer",
+            "trace_detail": "skipped: no chunks/web snippets or empty answer",
             "trace_status": "fallback",
         }
 
-    context = "\n\n".join(f"[Chunk {c['chunk_index']}] {c['content']}" for c in chunks)
+    context_parts = [f"[Chunk {c['chunk_index']}] {c['content']}" for c in chunks]
+    context_parts += [
+        f"[Web result | {s.get('url') or 'unknown'}] {s['content']}" for s in web_snippets
+    ]
+    context = "\n\n".join(context_parts)
 
     async def _grade():
         completion = await _client.chat.completions.create(

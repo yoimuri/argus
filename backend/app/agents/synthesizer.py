@@ -71,8 +71,12 @@ SYSTEM_PROMPT = (
 
 async def synthesizer_node(state: ResearchState) -> dict:
     chunks = state["chunks"]
+    # Sprint 3b: web_scout.py already ran its own injection scan (the same
+    # shared pattern list) at fetch time, before these snippets ever landed in
+    # state — no second scan here.
+    web_snippets = state.get("web_snippets") or []
 
-    if not chunks:
+    if not chunks and not web_snippets:
         return {
             "answer": "No relevant information was found in this collection for that query.",
             "trace_detail": "no chunks retrieved",
@@ -83,18 +87,24 @@ async def synthesizer_node(state: ResearchState) -> dict:
     # to security_events and stripped here. Model only ever gets the clean list.
     chunks = await scan_chunks(chunks, state["user_id"], state["access_token"])
 
-    if not chunks:
-        # Every retrieved chunk was flagged. Don't call the model with nothing.
+    if not chunks and not web_snippets:
+        # Every retrieved chunk was flagged, and there's no web content to
+        # fall back on either. Don't call the model with nothing.
         return {
             "answer": "The retrieved content was flagged as potentially malicious and could not be used to answer this query.",
             "trace_detail": "all retrieved chunks flagged as injection",
             "trace_status": "fallback",
         }
 
-    context = "\n\n".join(
+    context_parts = [
         f"[Chunk {c['chunk_index']} | trust_level={c.get('trust_level', 'retrieved')}] {c['content']}"
         for c in chunks
-    )
+    ]
+    context_parts += [
+        f"[Web result | trust_level=web_scraped | source={s.get('url') or 'unknown'}] {s['content']}"
+        for s in web_snippets
+    ]
+    context = "\n\n".join(context_parts)
 
     async def _synthesize():
         completion = await _client.chat.completions.create(
@@ -146,6 +156,6 @@ async def synthesizer_node(state: ResearchState) -> dict:
 
     return {
         "answer": answer,
-        "trace_detail": f"answer length {len(answer)} chars",
+        "trace_detail": f"answer length {len(answer)} chars, {len(web_snippets)} web snippets used",
         "trace_status": trace_status,
     }

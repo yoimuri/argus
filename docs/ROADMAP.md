@@ -18,43 +18,51 @@ change makes any doc stale, fix it in the same turn.
 |---|---|
 | Phase 1 — Core RAG pipeline | ✅ |
 | Phase 2 — Security hardening | ✅ |
-| Sprint 3a.1 — Orchestrator + intent retrieval | ✅ |
-| Sprint 3a.2 + document management | ✅ live-verified 2026-07-08 |
-| Sprints 3a.3–3a.5 | 🟡 code-complete, awaiting `docs/PHASE3-TEST-SCRIPT.md` steps 6–11 |
-| Phase 3b — Web Scout | ⏳ not started |
+| Phase 3a — Full agent pipeline + observability (all sprints + document management) | ✅ live-verified 2026-07-08 |
+| Phase 3b — Web Scout | 🟡 code-complete 2026-07-09, awaiting `docs/PHASE3B-TEST-SCRIPT.md` |
 | Phase 4 — SOC Dashboard | ⏳ not started |
 | Phase 5 — MCP Server, CI/CD, Polish | ⏳ not started |
 
 ---
 
-## Phase 3a — closing gate
+## Phase 3a — closed 2026-07-08
 
-Everything in this batch (Critic + bounded loop, Langfuse, session read endpoints, document
-list/delete) is code-complete but unverified. `docs/PHASE3-TEST-SCRIPT.md` is the exit condition
-for Phase 3a — run it top to bottom, record every chaos/security test in
-`docs/ADVERSARIAL-TESTS.md`, and flip each sprint's status in `docs/PHASE3.md` from 🟡 to ✅ once
-its steps pass. Only after every 3a item is ✅ does 3b begin.
+Every sprint (Orchestrator, Debug Diary, Critic + bounded loop, Langfuse, session read endpoints)
+plus the document management fix ran the full `docs/PHASE3-TEST-SCRIPT.md` walkthrough and passed
+live. All results recorded in `docs/ADVERSARIAL-TESTS.md`; every sprint status in `docs/PHASE3.md`
+is ✅.
 
 ---
 
-## Phase 3b — Web Scout (live web search)
+## Phase 3b — Web Scout (live web search) — code-complete 2026-07-09
 
-**Why it's gated:** web text is a new untrusted input channel. Everything built through 3a
+**Why it was gated:** web text is a new untrusted input channel. Everything built through 3a
 assumes the only untrusted content is inside a user's own uploaded PDF; a live web result is
-untrusted in a different way (arbitrary third party, no upload-time scan). It gets its own threat
-model before it's built, not folded into 3a as an afterthought.
+untrusted in a different way (arbitrary third party, no upload-time scan). It got its own threat
+model before being built, not folded into 3a as an afterthought — see `docs/ADR-017.md`.
 
-**Sketch** (detailed sprint plan + a dedicated injection threat model get written when this is
-picked up, as its own ADR-017):
+**Built, revised from the original sketch above** (the sketch predated Sprint 3a.3's Critic and
+its retry cycle, which the "alongside the Retriever" wiring would have collided with — full
+reasoning in ADR-017):
 - New agent `backend/app/agents/web_scout.py`. Calls **Tavily** for real-time snippets, tags them
-  `trust_level='web_scraped'`, runs them through the same injection guard / shadow scan already
-  used for document chunks.
+  `trust_level='web_scraped'`, runs them through the same shared regex already used for document
+  chunks (`injection_patterns.matches_any`) before they reach the Synthesizer.
 - New `tavily_breaker` in `circuit_breaker.py` (5 fails / 2 min / 60s → doc-only fallback).
-- Graph: Web Scout runs alongside the Retriever, both feeding the Synthesizer. Tavily down →
-  proceed doc-only with a banner, same degrade-gracefully pattern as every other external call.
-- Env: `TAVILY_API_KEY` on Render.
-- New adversarial gates (GATE-14+): injection via a web result must be neutralized exactly like a
-  poisoned chunk; a Tavily outage must degrade, not 500.
+- **Graph wiring changed to serial**: `orchestrator → web_scout → retriever → synthesizer`, not
+  parallel with the Retriever as first sketched. Runs at most once per research call, never inside
+  the Critic's retry loop.
+- **Added Orchestrator gating**, not in the original sketch: the Orchestrator judges
+  `use_web: true|false` per query as part of its existing classification call (no second Groq
+  call); Web Scout self-skips with zero network I/O when false. Avoids a billable Tavily call +
+  latency + wider attack surface on every question, including ones the PDF already answers.
+- Env: `TAVILY_API_KEY` on Render (optional — degrades cleanly to doc-only if unset).
+- New adversarial gates GATE-14 through GATE-17 in `docs/ADVERSARIAL-TESTS.md`: injection via a
+  web result neutralized like a poisoned chunk; a Tavily outage degrades, not 500; a benign
+  web-augmented query lists web sources; a purely document-answerable question doesn't call
+  Tavily at all (gating actually works).
+
+**Exit condition:** `docs/PHASE3B-TEST-SCRIPT.md`, same discipline as 3a — run live, record every
+result in `docs/ADVERSARIAL-TESTS.md`, flip `docs/PHASE3.md`'s §3b from 🟡 to ✅ once it passes.
 
 ---
 
@@ -133,8 +141,10 @@ established first.
 
 ## Related documents
 
-- `docs/PHASE3.md` — the detailed Phase 3a sprint-by-sprint build log and field notes.
-- `docs/PHASE3-TEST-SCRIPT.md` — the live verification walkthrough for the current batch.
+- `docs/PHASE3.md` — the detailed Phase 3 sprint-by-sprint build log and field notes.
+- `docs/PHASE3-TEST-SCRIPT.md` — the Phase 3a live verification walkthrough.
+- `docs/PHASE3B-TEST-SCRIPT.md` — the Phase 3b (Web Scout) live verification walkthrough.
 - `docs/ADVERSARIAL-TESTS.md` — the running adversarial/chaos test suite.
 - `docs/BLUEPRINT.md` — the original target architecture and OWASP/ASI risk map.
+- `docs/ADR-017.md` — the Web Scout threat model, graph-wiring, and gating decisions.
 - `CONTINUITY.md` (repo root, gitignored) — the private working log between sessions.

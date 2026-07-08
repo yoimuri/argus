@@ -10,7 +10,7 @@ from app.services.document_processor import extract_chunks_from_pdf_file, iter_e
 from app.services.supabase_client import supabase_request
 from app.services.injection_guard import check_query, InjectionDetected
 from app.services.injection_patterns import matches_any
-from app.services.circuit_breaker import groq_breaker, hf_breaker
+from app.services.circuit_breaker import groq_breaker, hf_breaker, tavily_breaker
 from app.services import observability
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -79,6 +79,7 @@ async def circuit_breaker_health(request: Request):
     return {
         "groq": await groq_breaker.snapshot(),
         "hf_prompt_guard": await hf_breaker.snapshot(),
+        "tavily": await tavily_breaker.snapshot(),
         "langfuse": observability.snapshot(),
     }
 
@@ -389,6 +390,9 @@ async def research(request: Request):
             "confidence_flags": [],
             "needs_retry": False,
             "loop_count": 0,
+            "use_web": False,
+            "web_snippets": [],
+            "web_status": "not_run",
         })
     except Exception:
         # Best-effort status patch: a diary write failing here must not mask the

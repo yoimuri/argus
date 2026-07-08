@@ -1,7 +1,7 @@
 """Sprint 2.4 — circuit breaker for external API calls.
 
-One shared breaker per external service. Groq and HF (ADR-012) each have one
-as of Phase 2/3a; Tavily gets its in Phase 3b, ip-api in Phase 4. Langfuse
+One shared breaker per external service. Groq, HF (ADR-012), and Tavily
+(Sprint 3b, ADR-017) each have one; ip-api gets its in Phase 4. Langfuse
 deliberately does NOT get one (Sprint 3a.4) — its SDK delivers on a background
 thread, so there's no request-path failure to guard against; see ADR-016. All
 state mutation happens under an
@@ -101,3 +101,9 @@ groq_breaker = CircuitBreaker("groq", fail_threshold=5, failure_window_s=120, re
 # Groq) with its own independent failure mode — Groq being down shouldn't open
 # this one and vice versa.
 hf_breaker = CircuitBreaker("hf_prompt_guard", fail_threshold=5, failure_window_s=120, recover_timeout_s=60)
+
+# ADR-017 (Sprint 3b): guards the Tavily web-search call in web_scout.py. Same
+# thresholds as the other two — no scale evidence yet to justify a different
+# tuning. Tavily down means research falls back to doc-only with a banner, it
+# never blocks or 500s (see web_scout.py's fail-open path).
+tavily_breaker = CircuitBreaker("tavily", fail_threshold=5, failure_window_s=120, recover_timeout_s=60)

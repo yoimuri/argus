@@ -29,12 +29,34 @@ def _confidence_section(flags: list[dict], loop_count: int) -> str:
 async def reporter_node(state: ResearchState) -> dict:
     chunks = state["chunks"]
     answer = state["answer"]
+    web_snippets = state.get("web_snippets") or []
     badge = _confidence_section(state.get("confidence_flags") or [], state.get("loop_count", 0))
 
-    if not chunks:
-        report = f"## Answer\n\n{answer}\n{badge}"
+    # Only shown when web search was actually wanted but couldn't happen
+    # (Tavily down/unconfigured) — not when the Orchestrator judged it
+    # unnecessary (web_status stays "not_run", no banner, nothing to explain).
+    banner = ""
+    if state.get("web_status") == "unavailable":
+        banner = ("\n*Live web search was unavailable for this run — answering from your "
+                   "documents only.*\n")
+
+    source_lines = [f"- Chunk {c['chunk_index']} (id: {c['id']})" for c in chunks]
+    seen_urls = set()
+    for s in web_snippets:
+        url = s.get("url") or ""
+        if url in seen_urls:
+            continue
+        seen_urls.add(url)
+        title = s.get("title") or url or "web result"
+        source_lines.append(f"- [{title}]({url})" if url else f"- {title}")
+
+    if not source_lines:
+        report = f"## Answer\n\n{answer}\n{banner}{badge}"
         return {"report": report, "trace_detail": f"report length {len(report)} chars, no sources"}
 
-    sources = "\n".join(f"- Chunk {c['chunk_index']} (id: {c['id']})" for c in chunks)
-    report = f"## Answer\n\n{answer}\n\n## Sources\n\n{sources}\n{badge}"
-    return {"report": report, "trace_detail": f"report length {len(report)} chars"}
+    sources = "\n".join(source_lines)
+    report = f"## Answer\n\n{answer}\n\n## Sources\n\n{sources}\n{banner}{badge}"
+    return {
+        "report": report,
+        "trace_detail": f"report length {len(report)} chars, {len(web_snippets)} web sources",
+    }

@@ -118,7 +118,7 @@ down as ADR-000 and being able to say what you'd do differently at real producti
 |---|---|---|---|
 | Orchestrator | Parses query, dispatches agents | Query + session context | Dispatch plan |
 | Retriever | Hybrid search (pgvector + BM25 + reranker) | Query + plan | Ranked chunks, `trust_level=RETRIEVED` |
-| Web Scout | Real-time web search | Query fragments | Snippets, `trust_level=WEB_SCRAPED` |
+| Web Scout | Real-time web search (Tavily) | Query, only when the Orchestrator judges a document alone won't answer it | Snippets, `trust_level=WEB_SCRAPED`, pre-scanned for injection at fetch time |
 | Synthesizer | Combines chunks + web into draft | Chunks + snippets | Draft + citations; neutralizes any `content_as_instruction` |
 | Critic | Validates synthesis against sources | Draft + chunks | Confidence flags |
 | Reporter | Formats final report | Validated draft | Markdown report + **confidence badge per section** |
@@ -323,7 +323,7 @@ the app at that moment.
 
 | Risk | Status | Implementation |
 |---|---|---|
-| LLM01:2025 Prompt Injection | ✅ | Injection guard (2-layer, fail-closed) + trust_level tagging |
+| LLM01:2025 Prompt Injection | ✅ | Injection guard (2-layer, fail-closed) + trust_level tagging; Sprint 3b extends the same shared regex scan + trust_level framing to live web results (`trust_level=web_scraped`), same honest ceiling as document chunks — see ADR-017 |
 | LLM02:2025 Sensitive Info Disclosure | ✅ | RLS: users see only their own data |
 | LLM03:2025 Supply Chain | ⏳ Phase 5 | Manual `pip-audit`/`npm audit` done (ADR-010); automated CI gate + Dependabot + MCP allowlist NOT built yet |
 | LLM04:2025 Data/Model Poisoning | ◐ Partial | Synthesis-time chunk scan live (Lock #2); pre-insert vector shadow detection is Sprint 2.3, not yet built |
@@ -412,7 +412,7 @@ refusal. See `docs/PHASE3.md` for the sprint status.
 **Phase 4: SOC Dashboard (weeks 11–13)**
 Supabase Realtime subscriptions · ExecutionTimeline UI (Debug Diary frontend) · live request feed
 · world map · IP intelligence panel · remaining circuit breaker (ip-api; HF has one since ADR-012,
-Tavily ships with Web Scout in 3b, Langfuse deliberately never gets one, see ADR-016).
+Tavily's shipped with Web Scout in Sprint 3b, Langfuse deliberately never gets one, see ADR-016).
 
 **Phase 5: MCP Server, CI/CD, Polish (weeks 14–16)**
 MCP server as separate FastAPI app · full GitHub Actions pipeline (test + adversarial + build +

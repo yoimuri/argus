@@ -9,7 +9,8 @@ _client = AsyncGroq(api_key=os.environ["GROQ_API_KEY"], timeout=30.0)
 SYSTEM_PROMPT = (
     "You classify a research question and break it into concrete sub-queries for a "
     "document search system. Respond with JSON only, no other text, in this exact "
-    "shape: {\"intent\": \"specific\"|\"broad\"|\"meta\", \"refined_queries\": [\"...\"]}.\n\n"
+    "shape: {\"intent\": \"specific\"|\"broad\"|\"meta\", \"refined_queries\": [\"...\"], "
+    "\"use_web\": true|false}.\n\n"
     "- \"specific\": the question already names a concrete topic, figure, or entity "
     "(example: \"What was Q3 revenue?\"). refined_queries should contain just that one "
     "question, unchanged.\n"
@@ -26,6 +27,14 @@ SYSTEM_PROMPT = (
     "'specific', and a missing one does not make it 'meta' — judge intent only by "
     "whether the wording names a concrete topic. \"summarize for me\" and "
     "\"summarize for me?\" must be classified identically.\n\n"
+    "\"use_web\": true only when the question is very unlikely to be answerable from an "
+    "uploaded document alone — it asks about something current/recent (today's date, "
+    "this week's news, the latest version of something), or general real-world knowledge "
+    "that a report or PDF would not contain (e.g. \"who is the current CEO of X\", "
+    "\"what's the latest CVE for Y\"). Default to false: a question about the document's "
+    "own subject matter, even a broad or meta one, should stay false — searching the web "
+    "costs real time and money, only ask for it when the document plausibly cannot answer "
+    "on its own.\n\n"
     "Always return at least one refined query. Never include commentary, markdown, or "
     "text outside the JSON object."
 )
@@ -76,21 +85,32 @@ async def orchestrator_node(state: ResearchState) -> dict:
         if not refined_queries:
             raise ValueError("refined_queries empty after cleaning")
 
-        print(f"[ARGUS] orchestrator intent={intent!r} refined_queries={refined_queries!r}")
+        # bool(...) rather than a strict isinstance check: some Groq JSON responses
+        # come back with "true"/"false" as strings despite the prompt's exact-shape
+        # instruction. Missing key defaults to False (conservative — a parse gap
+        # must not silently widen the request to the web).
+        use_web = bool(parsed.get("use_web", False))
+
+        print(f"[ARGUS] orchestrator intent={intent!r} refined_queries={refined_queries!r} "
+              f"use_web={use_web}")
         return {
             "intent": intent,
             "refined_queries": refined_queries,
-            "trace_detail": f"intent={intent}, {len(refined_queries)} refined queries",
+            "use_web": use_web,
+            "trace_detail": f"intent={intent}, {len(refined_queries)} refined queries, use_web={use_web}",
         }
 
     except Exception as err:
         # Fail-open: the Orchestrator improving retrieval must never block it. Any
         # failure here (Groq down, breaker open, bad/unparseable JSON) falls back to
-        # exactly the pre-Phase-3 behavior — one raw-query retrieval pass.
+        # exactly the pre-Phase-3 behavior — one raw-query retrieval pass. use_web
+        # defaults to False here too: a broken Orchestrator must not widen the
+        # request to an untrusted external source.
         print(f"[ARGUS] orchestrator fallback to raw query: {err!r}")
         return {
             "intent": "specific",
             "refined_queries": [query],
+            "use_web": False,
             "trace_detail": f"fallback to raw query: {err!r}"[:200],
             "trace_status": "fallback",
         }

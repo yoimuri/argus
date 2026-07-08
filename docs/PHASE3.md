@@ -1,16 +1,14 @@
 # ARGUS — Phase 3: Full Agent Pipeline + Observability
 
-**Status:** 🟡 IN PROGRESS. Sprint 3a.1 (Orchestrator + intent retrieval) is ✅ complete and
-live-verified (2026-07-08). Sprint 3a.2 (Debug Diary + meta lead-chunk retrieval fix), the
-document management fix, and Sprint 3a.5 (session read endpoints) are all ✅ live-verified
-(2026-07-08) — see the field notes. Sprint 3a.3 (Critic + bounded re-retrieval loop) has its
-security-critical loop-cap mechanism ✅ verified live; a confidence-badge wording inconsistency
-found on re-test has a fix implemented (deterministic refusal-pattern backstop, `critic.py`) but
-not yet pushed/re-verified, and the happy-path check (step 6) is still unrun — see TC-3a.3-01.
-Sprint 3a.4 (Langfuse) had a first push land 2026-07-08; whether traces actually appear is still
-being checked live. Phase 3b is still ⏳ not started. Every checkbox is ⏳ until the sprint that owns it is
-code-complete (🟡) and then live-verified (✅), per the project's status-marks rule. This file is
-the execution plan, not a status claim.
+**Status:** ✅ PHASE 3a COMPLETE, live-verified 2026-07-08. Every sprint (3a.1 Orchestrator, 3a.2
+Debug Diary, 3a.3 Critic + bounded loop, 3a.4 Langfuse, 3a.5 read endpoints) plus the document
+management fix have run their full `docs/PHASE3-TEST-SCRIPT.md` steps and passed live — see the
+field notes and `docs/ADVERSARIAL-TESTS.md` for every individual result. **Phase 3b (Web Scout) is
+🟡 code-complete as of 2026-07-09** (planned against ADR-017's threat model, built serial and
+Orchestrator-gated — see its section below), not yet live-verified — run
+`docs/PHASE3B-TEST-SCRIPT.md` to close it out. Every checkbox is ⏳ until the sprint that owns it
+is code-complete (🟡) and then live-verified (✅), per the project's status-marks rule. This file
+is the execution plan, not a status claim.
 **Timeline:** Weeks 8–10 (blueprint), realistically paced across the sub-sprints below.
 **SDLC Stages:** Agent Design → Observability → Adversarial Re-test → Re-deploy
 **Prerequisite:** Phase 2 closed and live-verified (✅ 2026-07-07). Confirmed unblocked.
@@ -149,13 +147,20 @@ START → orchestrator → retriever → synthesizer → critic ──(confident
                           └──────(low confidence)────┘   (loop_count += 1)
 ```
 
-**After Phase 3b**. Web Scout runs alongside the Retriever, feeding `web_scraped` chunks into
-the Synthesizer (its own node + a Tavily breaker; doc-only fallback if Tavily is down).
+**Current graph, after Phase 3b**. Web Scout inserted serially, right after the Orchestrator —
+not alongside the Retriever as first sketched (see `docs/ADR-017.md`: that wiring collides with
+the Critic's retry cycle below). Self-skips with no network call when the Orchestrator judged
+`use_web=false`, so it needed no conditional edge of its own:
+```
+START → orchestrator → web_scout → retriever → synthesizer → critic ──(confident OR loop_count≥2)──▶ reporter → END
+                                       ▲                          │
+                                       └──────(low confidence)────┘   (loop_count += 1)
+```
 
 Every node above is wrapped by the **StepWriter** (records entry/exit to `execution_steps`) and
 by **Langfuse** tracing. Both are non-fatal: if either fails, the research call still completes.
-The six-agent target (Orchestrator, Retriever, Web Scout, Synthesizer, Critic, Reporter) is the
-blueprint's original architecture. Phase 3 finally builds all of it except Web Scout (3b).
+The six-agent blueprint target (Orchestrator, Retriever, Web Scout, Synthesizer, Critic, Reporter)
+is now fully built.
 
 ---
 
@@ -174,7 +179,9 @@ is incremental. Each sprint seeds the keys it introduces, in the initial state d
 | `confidence_flags` | `list[dict]` | critic | 3a.3: per-section grounded-ness flags; feeds the confidence badge |
 | `needs_retry` | `bool` | critic | 3a.3: True only when confidence is low AND the critic supplied novel gap queries |
 | `loop_count` | `int` | critic | 3a.3: incremented inside the critic node itself each pass; re-retrieval guard, capped at 2 (ASI10) |
-| `web_snippets` | `list[dict]` | web_scout | 3b: `web_scraped`-tagged snippets merged into synthesis |
+| `use_web` | `bool` | orchestrator | 3b: True only when the question plausibly needs current/external info; gates whether web_scout calls Tavily at all |
+| `web_snippets` | `list[dict]` | web_scout | 3b: `web_scraped`-tagged snippets (`content`/`url`/`title`), already regex-scanned before landing in state |
+| `web_status` | `str` | web_scout | 3b: `"not_run"` (use_web was false) \| `"ok"` \| `"unavailable"` (Tavily down/unconfigured) — drives the reporter's degraded-web banner |
 
 Note: `research_sessions.status` (`'completed'` / `'completed_with_fallback'` / `'error'`) is
 **not** a `ResearchState` field — the `/research` handler derives it from `loop_count` after
@@ -367,13 +374,9 @@ lead-chunk check, TC-3a.2-01 chaos test) all passed. See **Field notes**.
 
 ### Sprint 3a.3 — Critic agent + bounded re-retrieval loop
 
-**Status:** 🟡 Loop-cap mechanism live-verified 2026-07-08 (see TC-3a.3-01 in
-`ADVERSARIAL-TESTS.md`: retry fired, capped at exactly 2 passes, no hang). A recurring
-badge-wording inconsistency found on re-test (same question, two different runs, two different
-badge outcomes) was diagnosed and fixed the same day — `critic.py` now backs the model's own
-grounding judgment with a deterministic refusal-pattern check (see ADR-015's revision) — but the
-fix itself hasn't been pushed/re-verified live yet. Step 6's happy-path check (single pass, no
-retry) also still not separately run. Both are what's holding this at 🟡.
+**Status:** ✅ Live-verified 2026-07-08. Loop-cap mechanism, the confidence-badge refusal
+backstop, and the step 6 happy-path check (well-covered question → single pass, High badge, no
+retry note) all passed. See TC-3a.3-01 in `ADVERSARIAL-TESTS.md`.
 
 **In plain terms:** ARGUS learns to check its own homework. A new Critic agent compares the
 answer to your documents, flags anything not backed by a source, and if it's unsure, tries once
@@ -434,6 +437,11 @@ loop-cap check). → Log any concerns in **Field notes**.
 ---
 
 ### Sprint 3a.4 — Langfuse Cloud observability
+
+**Status:** ✅ Live-verified 2026-07-08. Step 9 (traces appear: one row per agent step, nested
+`AsyncCompletions` generations show `openai/gpt-oss-20b`, every output is a short summary, no raw
+content anywhere) and step 10 (TC-3a.4-01: corrupted `LANGFUSE_SECRET_KEY` on Render, research
+still completed normally with no new trace, real key restored, traces resumed) both passed.
 
 **In plain terms:** plug in a free dashboard that shows every run. How long each agent took,
 how many tokens it used, where it failed. If the dashboard is down, your answers keep working.
@@ -560,27 +568,80 @@ refresh, delete fixes stale retrieval) both passed. See **Field notes**.
 
 ---
 
-## Phase 3b — Web Scout (live web search) — OUTLINE ONLY
+## Phase 3b — Web Scout (live web search)
 
-**In plain terms:** let ARGUS also pull fresh answers from the live web, not just your PDFs.
-Added only once everything above is proven working, because untrusted web text is a new place
-attackers can hide instructions.
+**Status:** 🟡 Code-complete 2026-07-09, not yet live-verified. See `docs/PHASE3B-TEST-SCRIPT.md`.
 
-Build this **only after 3a is fully live-verified.** Full sprint detail + a dedicated injection
-threat model get written when 3b is picked up (own ADR). Sketch:
+**In plain terms:** ARGUS can now also pull fresh answers from the live web, not just your PDFs —
+but only when the question actually needs it. A new "Orchestrator decides" step judges whether the
+uploaded document could plausibly answer the question; only then does it spend an API call and a
+few seconds searching the web.
 
-- **New agent** `backend/app/agents/web_scout.py`. Calls **Tavily** for real-time snippets, tags
-  them `trust_level='web_scraped'`, runs them through the **same** injection guard/shadow scan as
-  document chunks (web text is untrusted; the Synthesizer already frames `web_scraped` as data,
-  but that assumption still needs verifying).
-- **New breaker** `tavily_breaker` in `circuit_breaker.py` (5 fails / 2 min / 60 s → doc-only
-  fallback). **Fix the stale comment** at `circuit_breaker.py:3` assigning Tavily's breaker to
-  Phase 4.
-- **Graph**. Web Scout alongside the Retriever, both feeding the Synthesizer; Tavily down →
-  proceed doc-only with a banner.
-- **Env**. Add `TAVILY_API_KEY` to `.env.example` + Render.
-- **New adversarial gates** (GATE-14+). Injection via a web result must be neutralized exactly
-  like a poisoned chunk; a Tavily outage must degrade, not 500.
+**Concept, revised from the original sketch (see `docs/ADR-017.md` for the full reasoning):** the
+sketch above (written before Sprint 3a.3's Critic existed) had Web Scout running *alongside* the
+Retriever, both feeding the Synthesizer. That collides with the Critic's retry cycle, which loops
+back to the Retriever only — a parallel fan-in would need a LangGraph state reducer and would
+either re-run Web Scout pointlessly on a retry or leave the Synthesizer waiting on a predecessor
+that never fires again. Built **serial** instead: `orchestrator → web_scout → retriever →
+synthesizer`. Web Scout runs at most once per research call, always before retrieval, never as
+part of the retry loop.
+
+**Also revised: gated, not always-on.** Searching the web on every query would mean a billable
+Tavily call, added latency, and a fresh untrusted-input surface even on questions the user's own
+PDF fully answers. The Orchestrator now also judges `use_web: true|false` per query (does this
+plausibly need current/external info a document wouldn't contain?) as part of its existing
+classification call — no second Groq call. `web_scout_node` self-skips immediately (no network
+call) when `use_web` is false, so gating needed no conditional graph edge — the graph stays linear.
+
+**Built (2026-07-09):**
+- `backend/app/agents/state.py` — three new fields: `use_web: bool`, `web_snippets: list[dict]`,
+  `web_status: str` (`"not_run" | "ok" | "unavailable"`).
+- `backend/app/agents/orchestrator.py` — `SYSTEM_PROMPT` extended with the `use_web` judgment;
+  defaults to `False` in both the parsed-JSON path and the fail-open path (a broken Orchestrator
+  must not silently widen the request to an untrusted external source).
+- `backend/app/services/circuit_breaker.py` — new `tavily_breaker` (same 5-fail/120s-window/60s-
+  recover thresholds as `groq_breaker`/`hf_breaker`, no scale evidence yet to justify different
+  tuning).
+- `backend/app/agents/web_scout.py` (new). `async def web_scout_node(state) -> dict`: self-skips
+  when `use_web` is false or `TAVILY_API_KEY` is unset; otherwise calls Tavily's `/search` (raw
+  `httpx`, not a new SDK — `search_depth="basic"`, `max_results=5`) through `tavily_breaker`. Each
+  result is scanned with the **same shared regex** already used for document chunks
+  (`injection_patterns.matches_any`) before it ever reaches the Synthesizer — a match is dropped
+  and logged to `security_events` as `event_type="web_content_as_instruction"`, exactly mirroring
+  the upload-time chunk scanner. Clean snippets are truncated (~500 chars) and tagged
+  `trust_level="web_scraped"`. **Fail-open** on any failure (Tavily down, breaker open, not
+  configured) → empty snippets, `web_status="unavailable"`, research proceeds doc-only. Never
+  raises.
+- `backend/app/agents/graph.py` — `web_scout` node inserted: `orchestrator → web_scout →
+  retriever → synthesizer → critic → {retriever | reporter}`. The critic's retry edge is
+  unchanged — it still points at `retriever` only, so a retry never re-runs Web Scout.
+- `backend/app/agents/synthesizer.py` — `web_snippets` merged into the model context alongside
+  chunks (labeled `trust_level=web_scraped` with their source URL); the "nothing retrieved"
+  short-circuit now checks `not chunks and not web_snippets` so a web-only answer isn't dropped.
+  No system-prompt change needed — it already framed `web_scraped` content as data, never
+  instructions, anticipating this sprint.
+- `backend/app/agents/critic.py` — `web_snippets` included in the graded context and in the
+  "nothing to grade" guard, so a web-grounded claim isn't falsely flagged unsupported just because
+  it isn't in `state["chunks"]`.
+- `backend/app/agents/reporter.py` — web sources listed in `## Sources` (deduped by URL, as
+  `[title](url)`); a one-line banner (`*Live web search was unavailable for this run...*`) appears
+  only when `web_status == "unavailable"` — not when the Orchestrator judged web search
+  unnecessary in the first place (`"not_run"`, silent, nothing to explain).
+- `backend/main.py` — seeded `use_web/web_snippets/web_status` in the `ainvoke` dict;
+  `/health/circuit-breakers` now also reports `tavily`.
+- `.env.example` (repo root) — `TAVILY_API_KEY=`, documented as optional with a clean degrade.
+
+**Diary step-count change, noted so it isn't mistaken for a regression:** every research run now
+includes a `web_scout` step even when it self-skips (it's still a traced node) — a normal run's
+`execution_steps` is 6 rows, not 5, and a Critic-retry run is 9, not 8. TC-3a.3-01's original
+8-step result (recorded 2026-07-08, before this sprint) is unchanged as a historical record; a
+fresh run of that same test today would show 9.
+
+**Manual step (Clint):** create a Tavily account, set `TAVILY_API_KEY` in Render's backend env;
+git push → Render + Vercel redeploy. No migration — all three new fields are state-only, never
+persisted.
+
+**Verify live:** see `docs/PHASE3B-TEST-SCRIPT.md`. → Log any concerns in **Field notes**.
 
 ---
 
@@ -597,7 +658,8 @@ Everything touching live systems is a manual step. Consolidated:
    the existing unconstrained `status` column, and everything else is application code.
 3. **Langfuse Cloud:** create account and project, copy keys, set `LANGFUSE_*` env on Render.
    Done 2026-07-08. (Sprint 3a.4)
-4. **Tavily:** create account, set `TAVILY_API_KEY` on Render. (Phase 3b only)
+4. **Tavily:** create account, set `TAVILY_API_KEY` on Render. Optional — Web Scout degrades
+   cleanly to doc-only research with a banner if unset. (Sprint 3b)
 5. **Deploys:** every sprint ends with a git push (commits and pushes are always manual); Render
    and Vercel rebuild on push. "Deployed" means the live URLs were re-checked. Render free tier:
    first hit after idle is 30–60 s, not a bug.
@@ -608,21 +670,26 @@ Everything touching live systems is a manual step. Consolidated:
 
 ## Acceptance criteria — what "Phase 3a done" means
 
-Phase 3a closes only when every item below has been run against the **live** deployed app and
-recorded (pass or fail) in `docs/ADVERSARIAL-TESTS.md`:
+**✅ All six met, live-verified 2026-07-08** — see `docs/ADVERSARIAL-TESTS.md` for each recorded
+result. Phase 3a closes only when every item below has been run against the **live** deployed app
+and recorded (pass or fail):
 
-1. **Vague-query fix (the pinned one):** `"summarize for me"` returns a real, representative
-   answer, not a "no information" refusal. (`BACKLOG.md` Item 1 closes with Sprint 3a.1.)
-2. **Debug Diary:** every run writes a `research_sessions` row + ordered `execution_steps` rows;
-   the diary is RLS-scoped and the StepWriter never crashes a session even when its write fails.
-3. **Critic + bounded loop:** low-confidence answers trigger at most one re-retrieval; the loop
-   is hard-capped at 2 (ASI10) with no hang; the report shows a confidence badge.
+1. **Vague-query fix (the pinned one):** ✅ `"summarize for me"` returns a real, representative
+   answer, not a "no information" refusal. (`BACKLOG.md` Item 1 closed with Sprint 3a.1.)
+2. **Debug Diary:** ✅ every run writes a `research_sessions` row + ordered `execution_steps`
+   rows; the diary is RLS-scoped and the StepWriter never crashes a session even when its write
+   fails (TC-3a.2-01).
+3. **Critic + bounded loop:** ✅ low-confidence answers trigger at most one re-retrieval; the loop
+   is hard-capped at 2 (ASI10) with no hang; the report shows a confidence badge backed by a
+   deterministic refusal check, not just the model's own judgment (TC-3a.3-01).
 4. **Observability:** per-agent traces appear in Langfuse; with Langfuse down, research still
-   completes (breaker), and `/health/circuit-breakers` reports all breakers.
-5. **Read API:** `/research/{id}` and `/research/{id}/trace` return correct, ownership-scoped
-   data; someone else's session id → clean 404.
-6. **No regression:** Phase 1/2 flows still pass. Specific queries answer as before, and all 13
-   Phase 2 gates still hold (spot-check the injection gates, since new agents added Groq call sites).
+   completes with no added latency (no breaker needed — a deliberate design choice, see ADR-016,
+   not a gap), and `/health/circuit-breakers` reports all three (`groq`, `hf_prompt_guard`,
+   `langfuse`).
+5. **Read API:** ✅ `/research/{id}` and `/research/{id}/trace` return correct, ownership-scoped
+   data; an invalid/unowned session id → clean 404.
+6. **No regression:** ✅ Phase 1/2 flows still pass — vague-query and injection-blocking spot
+   checks both confirmed live against the current deployed code (step 11).
 
 ---
 
@@ -657,9 +724,12 @@ generic on very large PDFs | future (retrieval tuning) | open`.
 | 2026-07-08 | regression | Double-login-on-first-attempt reconfirmed live during this test session (first login attempt silently fails, second succeeds). Real root cause found (not what `BACKLOG.md` Item 5 originally guessed): `last_active`, the idle-timeout cookie (`frontend/proxy.ts`), is a 7-day cookie only ever deleted inside the idle-timeout's own redirect. Any other way a session ends (explicit logout, or a Supabase session simply expiring) leaves it behind with a stale timestamp; the next login's first authenticated request compares "now" against that stale value, sees >30 minutes, and force-signs-out a session that just started — the false idle-signout is the only thing that deletes the stale cookie, which is why the second attempt always worked. | BACKLOG.md Item 5 | fixed — `last_active` now also cleared in `proxy.ts`'s not-logged-in redirect and in `app/auth/signout/route.ts`; `npm run build` clean; needs a live re-test (log out, wait >30 min or age the cookie manually, log back in once) |
 | 2026-07-08 | 3a.2 / doc mgmt | `docs/PHASE3-TEST-SCRIPT.md` steps 2 ("summarize this for me" answers well) and 4–5 (document list works, deleted PDF's content no longer retrieved) all passed live. | closes 3a.2 + document management verification | PASS |
 | 2026-07-08 | 3a.3 | Forced-retry test (step 7) confirmed the ASI10 loop cap works: retry fired, ran exactly 2 critic passes, terminated cleanly (`status: completed_with_fallback`), retry queries genuinely redirected the second search to different, better chunks. But the final badge read "High" instead of the expected "⚠️ Low" — the draft was still a refusal on both passes, and the Critic's system prompt says a refusal should always grade low, but the model's second-pass judgment treated that refusal as grounded in the new chunks it saw that time. Not a code bug (routing/capping/rendering all did exactly what the code says with whatever verdict the model returned); a real LLM instruction-following inconsistency between passes. | future: consider whether the Critic's system prompt needs a more forceful "always low on refusal, no exceptions" instruction, or whether this behavior is actually reasonable and doesn't need changing | superseded by the next row |
-| 2026-07-08 | 3a.3 | Re-ran the identical question after redeploy: confirmed the badge-wording issue is a recurring pattern, not a fluke — this time the model graded the refusal "High" on the very first pass instead of retrying at all. Fixed same-day: `critic.py` now backs the model's grounding judgment with a deterministic `REFUSAL_PATTERNS` regex, same pattern already used for the injection guard (LLM classifier + regex backstop, ADR-007). Scoped to the badge only — does not force a retry, since a real retry needs the model's own gap-targeted queries, which a regex can't generate. `py_compile` clean, regex verified against both observed refusal wordings. | this sprint (3a.3) | fix implemented, not yet pushed/live-verified |
+| 2026-07-08 | 3a.3 | Re-ran the identical question after redeploy: confirmed the badge-wording issue is a recurring pattern, not a fluke — this time the model graded the refusal "High" on the very first pass instead of retrying at all. Fixed same-day: `critic.py` now backs the model's grounding judgment with a deterministic `REFUSAL_PATTERNS` regex, same pattern already used for the injection guard (LLM classifier + regex backstop, ADR-007). Scoped to the badge only — does not force a retry, since a real retry needs the model's own gap-targeted queries, which a regex can't generate. `py_compile` clean, regex verified against both observed refusal wordings. | this sprint (3a.3) | fix implemented, then pushed and confirmed live same day (see below) |
 | 2026-07-08 | 3a.5 | Step 8 read-endpoints check passed live: `/research/{id}` and `/research/{id}/trace` returned correct, ownership-scoped data (trace showed exactly 8 steps for the retry-loop session), invalid uuid returned a clean 404. | closes 3a.5 verification | PASS |
 | 2026-07-08 | 3a.4 | Checked Langfuse Cloud after the step 7/8 tests — no traces at all. Root cause found via `git status`: none of this session's changes (Langfuse v4 rewrite, login-bug fix) had actually been pushed yet, so the live backend was still running the pre-v4 Langfuse code, which likely still reads the old `LANGFUSE_HOST` env var name. If that was already renamed to `LANGFUSE_BASE_URL` on Render per the earlier instruction, the old deployed code would see it as unset and silently disable Langfuse. Not a new bug — a deploy-sequencing gap in how this session's testing was paced against pushes. | this batch | waiting on `git push`; steps 9-10 to be re-run after redeploy |
+| 2026-07-08 | 3a.3 / 3a.4 | Pushed and redeployed. Re-ran the nation-state-actor question a third time: badge now correctly reads "⚠️ Low — 1 section(s) not fully supported" with the override note — refusal-backstop fix confirmed working live. Also checked Langfuse for the first time since redeploy: traces are appearing correctly in the JP-region dashboard (one row per agent step, nested Groq generation observations showing `openai/gpt-oss-20b`, every output field is a short summary like "confidence=high, 2 flags..." or "5 chunks, top similarity 0...", no raw chunk/answer content visible anywhere in the dashboard). | closes TC-3a.3-01 fully; closes step 9 of 3a.4 | PASS, PASS |
+| 2026-07-08 | 3a.3 / 3a.4 | Closed out the last two open checks: step 6 (well-covered question → single critic pass, High badge, no retry note) and step 10 / TC-3a.4-01 (corrupted `LANGFUSE_SECRET_KEY` on Render, research still completed normally with no new trace, real key restored, traces resumed). Both PASS. This closes every remaining item in the Phase 3a completion batch. | closes 3a.3 and 3a.4 fully; closes Phase 3a | PASS, PASS |
+| 2026-07-09 | 3b | Reviewed the original 3b sketch (written before 3a.3's Critic existed) against the actual post-3a graph and found it unsafe as written: "Web Scout alongside the Retriever" would fan into the Synthesizer at the same time the Critic's retry cycle loops back to the Retriever only — needs a state reducer and can strand the Synthesizer waiting on a predecessor that won't re-fire. Revised to serial wiring (`orchestrator → web_scout → retriever`) and added Orchestrator-gating (`use_web`) that the sketch never specified, closing an always-on cost/latency/attack-surface gap. Built same day: `web_scout.py`, `tavily_breaker`, graph/synthesizer/critic/reporter updates, ADR-017. `py_compile` clean. | this sprint | code-complete; needs `TAVILY_API_KEY` on Render + live test via `docs/PHASE3B-TEST-SCRIPT.md` |
 |  |  |  |  |  |
 
 ---
@@ -671,8 +741,8 @@ generic on very large PDFs | future (retrieval tuning) | open`.
 - **ADR-015.** Bounded re-retrieval loop + Critic. Written 2026-07-08.
 - **ADR-016.** Langfuse Cloud over self-hosted (+ the no-breaker deviation, + the v2-over-v3
   pin). Written 2026-07-08.
-- **(3b) ADR-017. Web Scout + web-content injection handling** (the new untrusted channel) —
-  not yet written; due when 3b is picked up.
+- **ADR-017.** Web Scout + web-content injection handling (the new untrusted channel), the
+  serial-not-parallel graph wiring, and Orchestrator-gating. Written 2026-07-09.
 
 ## Docs to keep in sync (same turn as the code)
 
