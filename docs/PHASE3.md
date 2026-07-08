@@ -1,9 +1,12 @@
 # ARGUS — Phase 3: Full Agent Pipeline + Observability
 
 **Status:** 🟡 IN PROGRESS. Sprint 3a.1 (Orchestrator + intent retrieval) is ✅ complete and
-live-verified (2026-07-08). Sprint 3a.2 (Debug Diary + meta lead-chunk retrieval fix) is 🟡
-code-complete, not yet live-verified — needs migration 008 applied + a git push before testing.
-3a.3–3b are still ⏳ not started. Every checkbox is ⏳ until the sprint that owns it is
+live-verified (2026-07-08). Sprints 3a.2 (Debug Diary + meta lead-chunk retrieval fix), 3a.3
+(Critic + bounded re-retrieval loop), 3a.4 (Langfuse), and 3a.5 (session read endpoints) are all
+🟡 code-complete as of 2026-07-08, bundled into one batch and not yet live-verified. A document
+management fix (per-collection document list + delete) shipped alongside them — see the field
+notes. Run `docs/PHASE3-TEST-SCRIPT.md` top to bottom to verify the whole batch in one sitting.
+Phase 3b is still ⏳ not started. Every checkbox is ⏳ until the sprint that owns it is
 code-complete (🟡) and then live-verified (✅), per the project's status-marks rule. This file is
 the execution plan, not a status claim.
 **Timeline:** Weeks 8–10 (blueprint), realistically paced across the sub-sprints below.
@@ -165,10 +168,16 @@ is incremental. Each sprint seeds the keys it introduces, in the initial state d
 | `intent` | `str` | orchestrator | 3a.1: `'specific'` / `'broad'` / `'meta'`, drives retrieval breadth |
 | `refined_queries` | `list[str]` | orchestrator | 3a.1: the sub-queries the retriever runs (the "3 refined queries") |
 | `session_id` | `str` | `/research` handler | 3a.2: ties every step + trace to one run; returned to the client |
-| `status` | `str` | nodes / handler | 3a.2: `'completed'` / `'completed_with_fallback'` |
+| `step_index` | `int` | `traced()` decorator | 3a.2: continuous step counter across the whole run, including a retry loop |
 | `confidence_flags` | `list[dict]` | critic | 3a.3: per-section grounded-ness flags; feeds the confidence badge |
-| `loop_count` | `int` | retriever/critic edge | 3a.3: re-retrieval guard, capped at 2 (ASI10) |
+| `needs_retry` | `bool` | critic | 3a.3: True only when confidence is low AND the critic supplied novel gap queries |
+| `loop_count` | `int` | critic | 3a.3: incremented inside the critic node itself each pass; re-retrieval guard, capped at 2 (ASI10) |
 | `web_snippets` | `list[dict]` | web_scout | 3b: `web_scraped`-tagged snippets merged into synthesis |
+
+Note: `research_sessions.status` (`'completed'` / `'completed_with_fallback'` / `'error'`) is
+**not** a `ResearchState` field — the `/research` handler derives it from `loop_count` after
+`ainvoke` returns (`loop_count >= 2` means the critic ran twice, which only happens after a retry
+fired), so there's no extra state plumbing for it.
 
 ---
 
@@ -343,16 +352,8 @@ retrieval is untouched — they already have a real topic, so semantic search is
 **Manual step (Clint):** paste migration 008 into the Supabase SQL editor; confirm
 `execution_steps` exists with one `"own execution steps"` policy. Then git push → Render redeploy.
 
-**Verify live:**
-- **Retrieval fix:** summarize the resume collection → the answer now includes the person's
-  name/title. Run a `specific` query on the same collection → unchanged (no lead-chunk injection).
-- Run a normal query → one `research_sessions` row + four `execution_steps` rows
-  (orchestrator/retriever/synthesizer/reporter), RLS-scoped to your user, sane `latency_ms`.
-- **StepWriter-never-crashes test:** temporarily point `record_step` at a bad table name (or
-  simulate a Supabase failure) and confirm the query STILL returns a report (diary fails
-  silently, session survives). This is the blueprint's chaos requirement. Record in
-  `ADVERSARIAL-TESTS.md`.
-- → Log any concerns in **Field notes**.
+**Verify live:** see `docs/PHASE3-TEST-SCRIPT.md` steps 1–3 (baseline diary, meta lead-chunk
+check, TC-3a.2-01 chaos test). → Log any concerns in **Field notes**.
 
 ---
 
@@ -366,40 +367,53 @@ more, with a hard stop so it can never loop forever.
 the retrieved chunks (grounded-ness) and flags weak sections. Low confidence → the graph loops
 back to the Retriever **once**, hard-capped at 2 iterations (OWASP ASI10).
 
-**Build:**
+**Built (2026-07-08):**
+- `backend/app/services/llm_json.py` (new). The JSON-extraction helper (markdown-fence
+  stripping, `{...}` fallback) moved out of `orchestrator.py` — both the Orchestrator and the
+  Critic parse the same Groq JSON-in-text shape, so it's shared instead of duplicated.
 - `backend/app/agents/critic.py` (new). `async def critic_node(state) -> dict`. Groq call
-  (through `groq_breaker`) comparing `state["answer"]` against `state["chunks"]`, returns
-  `confidence_flags` (list of `{section, grounded, note}`) plus `needs_retry: bool`.
-  **Fail-open:** on Groq failure, empty flags + `needs_retry=False` (a broken critic must not
-  block the report).
-- `graph.py`. Insert `critic` after `synthesizer`; add a **conditional edge**:
+  (through `groq_breaker`, `reasoning_effort="medium"`, `max_tokens=1536` — same reasoning-model
+  budget lesson as the Orchestrator/Synthesizer) comparing `state["answer"]` against
+  `state["chunks"]`, returns `confidence_flags` (list of `{section, grounded, note}`, always ≥1
+  entry on success) plus `needs_retry: bool`. **Fail-open:** on any failure (Groq down, breaker
+  open, bad JSON), empty flags + `needs_retry=False` — a broken critic must not block the report.
+  **`loop_count` is incremented inside this node** (`state.get("loop_count", 0) + 1`), not by the
+  graph edge, so it's already part of state by the time the router below runs, and a missed seed
+  can never cause a loop.
+  - **Retry is only meaningful, not automatic.** Re-running the retriever with identical
+    `refined_queries` returns identical chunks, so `needs_retry` is only `True` when the Critic's
+    JSON also supplies 1-2 novel gap-targeted `retry_queries` — the Critic tells the Retriever
+    what was missing, so the second search pass looks for exactly that. Those queries get
+    appended to `refined_queries` (capped at 5 total) for the retry pass.
+- `graph.py`. Inserted `critic` after `synthesizer`; conditional edge:
   ```python
   def route_after_critic(state) -> str:
-      if state.get("needs_retry") and state["loop_count"] < 2:
+      if state.get("needs_retry") and state.get("loop_count", 0) < 2:
           return "retry"
       return "done"
   builder.add_conditional_edges("critic", route_after_critic,
                                 {"retry": "retriever", "done": "reporter"})
   ```
-  On `retry`, increment `loop_count` and set `status='completed_with_fallback'`. This is the
-  graph's **first cycle**. Double-check the guard is bulletproof. Wrap `critic` with `@traced`.
-- `backend/app/agents/reporter.py`. Append a **confidence badge** to the markdown report based
-  on `confidence_flags` (e.g. "⚠️ Low-confidence section" or a "Confidence: high" footer). Keep
-  it pure string formatting (no LLM), as the reporter is today. This satisfies the blueprint's
-  ASI09 close (confidence rendered on the report, not buried in metadata).
-- Seed `confidence_flags` / `loop_count` in the state dict.
+  This is the graph's **first cycle**. On a retry, the diary shows retriever/synthesizer/critic
+  running **twice** with a continuous `step_index` (0-7 total, orchestrator through reporter) —
+  that's the intended, visible record of the self-check loop firing, not a bug. Wrapped `critic`
+  with `traced("critic")` like every other node.
+- `backend/app/agents/reporter.py`. Pure string formatting, no LLM: `flags == []` (Critic skipped
+  or failed open) renders "Not assessed", ungrounded flags render a `⚠️ Low` badge with notes,
+  otherwise `High`. Rendering "High" when the Critic never actually ran would overclaim
+  confidence that was never checked — hence the three-way split instead of defaulting to High.
+- `backend/main.py`. Seeded `confidence_flags: []`, `needs_retry: False`, `loop_count: 0` in the
+  initial state dict. After `ainvoke`, `final_status = "completed_with_fallback" if
+  result.get("loop_count", 0) >= 2 else "completed"` — `status` was never added as a
+  `ResearchState` field (see the state table above); the handler derives it from `loop_count`,
+  which is simpler and avoids a field two different layers would need to keep in sync.
 
-**Manual step (Clint):** git push → Render redeploy.
+**Manual step (Clint):** git push → Render redeploy. No migration —
+`research_sessions.status` is unconstrained text (migration 008), so
+`'completed_with_fallback'` just works.
 
-**Verify live:**
-- Ask something the collection can't fully answer → Critic flags low confidence, the loop fires
-  once, the diary shows the retriever running twice and `status=completed_with_fallback`, the
-  report carries the badge.
-- **Loop-cap test (ASI10):** force `needs_retry=True` and confirm the graph stops after exactly
-  2 retrieval passes, no infinite loop, no hang. Security-relevant gate; record in
-  `ADVERSARIAL-TESTS.md`.
-- A well-answered query shows `Confidence: high` and does NOT loop.
-- → Log any concerns in **Field notes**.
+**Verify live:** see `docs/PHASE3-TEST-SCRIPT.md` steps 6–7 (Critic happy path, forced retry +
+loop-cap check). → Log any concerns in **Field notes**.
 
 ---
 
@@ -411,27 +425,39 @@ how many tokens it used, where it failed. If the dashboard is down, your answers
 **Concept:** Langfuse (free cloud tier, API keys only) records every LLM/agent call. The Debug
 Diary is the quick in-app triage layer; Langfuse is the deep-dive layer. Must be **non-fatal**.
 
-**Build:**
-- `pip` add `langfuse` (pinned) to `backend/requirements.txt`.
-- Env vars in `backend/.env.example`: `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`,
-  `LANGFUSE_HOST` (e.g. `https://cloud.langfuse.com`).
-- `backend/app/services/observability.py` (new). Init the Langfuse client from env; emit a
-  trace keyed by `session_id` and a span per agent step (hook it into the `traced(...)` decorator
-  so diary + Langfuse happen in one place). Guard every Langfuse network call with a new
-  **`langfuse_breaker`** (add to `circuit_breaker.py` next to `groq_breaker`/`hf_breaker`;
-  BLUEPRINT thresholds. 5 fails / 5 min / 300 s). Breaker open or SDK error → no-op + `print()`.
-- Update `/health/circuit-breakers` (`main.py:60-64`) to report **all** breakers (`groq`, `hf`,
-  `langfuse`). It currently only returns `groq` (a small honesty fix: it hides two of them).
+**Built (2026-07-08) — deviates from the original sketch above, see ADR-016:** the original plan
+called for a `langfuse_breaker`. Not built. The Langfuse Python SDK (v2) queues events onto an
+in-process background thread — `trace()`/`span()` calls never do network I/O on the request path,
+and delivery failures never propagate back to the caller. A circuit breaker would guard a call
+that cannot fail in the way breakers guard against; it would be dead code pretending to protect
+something, which is exactly the kind of overclaiming this project's docs rule exists to catch.
+
+- `backend/requirements.txt`: `langfuse==2.60.10` pinned (**v2, not v3** — v3 is
+  OpenTelemetry-based, a real dependency-tree/RAM cost on Render's 512MB tier, and needs 32-hex
+  trace ids; v2 is a small batching client that accepts our session UUID directly via
+  `trace(id=...)`).
+- Env vars live in the **repo-root** `.env.example` (not `backend/.env.example` — that file
+  doesn't exist; this doc's earlier wording was wrong): `LANGFUSE_PUBLIC_KEY`,
+  `LANGFUSE_SECRET_KEY`, `LANGFUSE_HOST`. All optional — absent keys cleanly disable Langfuse
+  (one startup log line), research is unaffected either way.
+- `backend/app/services/observability.py` (new). Lazy-inits the Langfuse client on first emit
+  (imported inside the function, same 512MB reasoning as `langgraph`'s lazy import in `main.py`).
+  `record_step_span(session_id, user_id, agent_name, status, latency_ms, detail)` is synchronous,
+  never raises, and no-ops if keys are absent or init failed. `snapshot()` returns
+  `{"enabled": ..., "disabled": ...}` — "enabled" means configured and initialized, not that
+  Langfuse Cloud is currently reachable (delivery is out-of-band, invisible to this process).
+- `backend/app/services/step_writer.py`. `traced()`'s wrapper calls `record_step_span(...)`
+  right after `record_step(...)` on both the success and exception paths — diary write and
+  Langfuse emit happen in the same place, as originally intended, just without a breaker between
+  them.
+- `/health/circuit-breakers` now reports all three: `groq`, `hf_prompt_guard` (previously
+  hidden), and `langfuse` (the enabled/disabled flag, not a breaker state).
 
 **Manual step (Clint):** (1) create a free Langfuse Cloud account + project, copy the public +
 secret keys; (2) set `LANGFUSE_*` in Render's backend env; (3) git push → Render redeploy.
 
-**Verify live:**
-- Run a query → a trace with per-agent spans appears in Langfuse.
-- **Langfuse-down test:** set an invalid Langfuse key, run a query, confirm it STILL returns a
-  report (breaker trips → no-op) and `/health/circuit-breakers` shows the `langfuse` state.
-  Record in `ADVERSARIAL-TESTS.md`. Restore the key after.
-- → Log any concerns in **Field notes**.
+**Verify live:** see `docs/PHASE3-TEST-SCRIPT.md` steps 9–10 (trace appears, Langfuse-down
+degradation). → Log any concerns in **Field notes**.
 
 ---
 
@@ -444,20 +470,49 @@ The visual timeline that displays them is Phase 4. This sprint just makes the da
 **backend** (blueprint API surface: `/research/{id}`, `/research/{id}/trace`); the timeline UI is
 Phase 4, not now.
 
-**Build:**
-- `backend/main.py`. Two authenticated GETs:
+**Built (2026-07-08):**
+- `backend/main.py`. Two authenticated GETs, plus a shared `_valid_uuid()` helper (an invalid
+  uuid in a PostgREST `eq.` filter would 400 → 502 via `supabase_request`; both endpoints check
+  the id shape first so a garbage id is a clean 404 instead):
   - `GET /research/{id}` → the `research_sessions` row (RLS-scoped via the user's token) +
-    report/status. 404 if not owned/found (reuse the ownership pattern in the existing `/research`
-    collection check).
+    report/status. 404 if not owned/found (not-owned and not-exists look identical — no
+    ownership leak).
   - `GET /research/{id}/trace` → the ordered `execution_steps` rows for that session.
 - No frontend timeline work here. The `/research` response already includes `session_id`
   (backward-compatible from 3a.2); the frontend can ignore it until Phase 4.
 
 **Manual step (Clint):** git push → Render redeploy.
 
-**Verify live:** call both endpoints with your token for a real session id → correct data; call
-with someone else's session id (or a random uuid) → clean 404, no leak. → Log any concerns in
-**Field notes**.
+**Verify live:** see `docs/PHASE3-TEST-SCRIPT.md` step 8 (browser-console fetch snippet, no curl
+needed). → Log any concerns in **Field notes**.
+
+---
+
+## Document management fix (shipped alongside this batch, owner-reported gap)
+
+**In plain terms:** you can now see which PDFs are in a collection and delete one without
+deleting the whole collection.
+
+**Why:** live-testing 3a.2 surfaced two related reports: uploading a new PDF still pulled up
+the old one, and there was no way to see which files were even in a collection. Root cause was
+the same for both — uploads are additive (nothing ever replaced or removed a document's chunks)
+and the frontend showed only a bare `collectionId` string, no document list.
+
+**Built (2026-07-08):**
+- `backend/main.py`. `GET /collections/{id}/documents` (ownership-checked, returns
+  id/filename/status/created_at). `DELETE /documents/{id}` (ownership-checked via RLS,
+  best-effort Storage purge mirroring `delete_collection`'s pattern, then the DB delete — which
+  cascades to `document_chunks` per `001_core_schema.sql`, immediately stopping that PDF's
+  content from being retrieved). Deleting a document mid-research is accepted as harmless:
+  chunks already fetched by an in-flight run stay in that run's own memory.
+- `frontend/app/dashboard/UploadPanel.tsx`. The open-collection view now shows the collection's
+  **name** (previously a bare id) and a document list (filename, status, Delete button),
+  refetched after every upload and delete.
+
+**Manual step (Clint):** none beyond the batch's git push.
+
+**Verify live:** see `docs/PHASE3-TEST-SCRIPT.md` steps 4–5 (document list/upload refresh,
+delete fixes stale retrieval). → Log any concerns in **Field notes**.
 
 ---
 
@@ -493,13 +548,17 @@ Everything touching live systems is a manual step. Consolidated:
    the ivfflat index with HNSW to fix the vague-query zero-recall bug. Verify with a "summarize"
    query returning chunks afterward. (Sprint 3a.1)
 2. **Migration 008 (`execution_steps`):** paste into the Supabase SQL editor by hand; verify
-   `execution_steps` exists with its RLS policy and grants. (Sprint 3a.2)
+   `execution_steps` exists with its RLS policy and grants. (Sprint 3a.2) **No further migration
+   is needed for 3a.3-3a.5 or the document management fix** — `completed_with_fallback` fits in
+   the existing unconstrained `status` column, and everything else is application code.
 3. **Langfuse Cloud:** create account and project, copy keys, set `LANGFUSE_*` env on Render.
-   (Sprint 3a.4)
+   Done 2026-07-08. (Sprint 3a.4)
 4. **Tavily:** create account, set `TAVILY_API_KEY` on Render. (Phase 3b only)
 5. **Deploys:** every sprint ends with a git push (commits and pushes are always manual); Render
    and Vercel rebuild on push. "Deployed" means the live URLs were re-checked. Render free tier:
    first hit after idle is 30–60 s, not a bug.
+6. **Live test:** run `docs/PHASE3-TEST-SCRIPT.md` top to bottom after the push lands; it covers
+   everything in this batch (3a.2 leftover chaos test through 3a.5) in one sequential pass.
 
 ---
 
@@ -546,21 +605,22 @@ generic on very large PDFs | future (retrieval tuning) | open`.
 | 2026-07-08 | 3a.1 | `tldr` gets flagged as possible prompt injection. Confirmed it is NOT the regex layer (no pattern in `injection_patterns.py` matches it) — it's the HF Prompt Guard classifier false-positiving on a short, out-of-distribution slang token. Expected ML failure mode; already an honest documented limitation. Deliberately NOT fixing: the only levers (raise threshold / allowlist the word) either weaken the guard against real attacks or hand attackers a bypass prefix. | future / known-limitation (injection classifier false positives on OOD short inputs) | logged, won't-fix by design; grab the actual `Prompt Guard score=` next time it happens to confirm |
 | 2026-07-08 | 3a.1 | Summarizing a resume: the answer knew the body details but not the person's name. Expected RAG behavior, not a bug — the name lives in the header (chunk 0), and meta sub-queries ("purpose/findings/conclusions") don't rank a name chunk into the top-N, so the model never saw it. Cheap future enhancement: for `meta` intent, always include chunk_index 0 (title/author/intro almost always live there) so "what is this / who wrote it" is answerable. | future (retrieval tuning for meta intent) | implemented in 3a.2 (see below), not yet live-verified |
 | 2026-07-08 | 3a.2 | Built the fix for the row above: `retriever.py` now fetches each document's `chunk_index=0` and prepends it (deduped, capped at 3) whenever `intent == "meta"`, so lead chunks survive the top-N cap. `specific`/`broad` untouched. Also built the Debug Diary: `step_writer.py` (`record_step` + `traced` decorator), all four nodes wrapped, `research_sessions` insert/patch + `execution_steps` rows wired into `main.py`. Every diary write (session insert, both patches, and each `record_step` call) is individually try/except-guarded so a DB hiccup degrades to "no diary this run," never a broken research response — the blueprint's iron rule applied at every layer, not just inside StepWriter. | this sprint | code-complete, py_compile clean; needs migration 008 applied + live test |
+| 2026-07-08 | 3a.2 | Live-tested the happy paths: normal query, injection gate, vague query all PASS. The TC-3a.2-01 chaos test (diary write failure) had not been run yet at that point — folded into this batch's test script instead of testing it in isolation. | this sprint | superseded by the bundled test script below |
+| 2026-07-08 | doc mgmt | Two related reports from live testing: uploading a new PDF into a collection still surfaced the old PDF in answers, and there was no way to see which files were even in a collection. Root cause was one thing, not two — uploads are purely additive (nothing ever deleted or replaced a document's chunks) and the UI showed only a bare collection id. Fixed with a document list + per-document delete (backend `GET .../documents` + `DELETE /documents/{id}`, frontend list in `UploadPanel.tsx`). | this sprint | code-complete; needs live verify |
+| 2026-07-08 | 3a.3/3a.4/3a.5 | Bundled the remaining Phase 3a sprints (Critic + bounded loop, Langfuse, session read endpoints) into one batch with the document-management fix, per Clint's request to test the whole remaining phase in one sitting rather than sprint-by-sprint. One deviation from the original sketch: Langfuse ships without a `langfuse_breaker` — its SDK delivers on a background thread, so there's no request-path failure for a breaker to guard against (see ADR-016). | this sprint | code-complete, py_compile + `npm run build` both clean; needs migration 008 (if not already applied) + live test via `docs/PHASE3-TEST-SCRIPT.md` |
 |  |  |  |  |  |
 
 ---
 
-## ADRs to write (as decisions are made, not retroactively)
+## ADRs
 
-- **ADR-014. Orchestrator intent routing via sub-query expansion + the vector-index fix** (why
-  sub-query merge over an RPC threshold change; the fail-open stance; AND the ivfflat→HNSW index
-  change from Sprint 3a.1 testing, since sub-query fan-out only works once the ANN index actually
-  returns the nearest chunks — the two are one retrieval-quality story).
-- **ADR-015. Bounded re-retrieval loop + Critic** (the ASI10 cap; why the graph's first cycle is
-  safe).
-- **ADR-016. Langfuse Cloud over self-hosted** (records the scope decision above and its tradeoff
-  vs. the blueprint's "self-hosted" wording).
-- **(3b) ADR-017. Web Scout + web-content injection handling** (the new untrusted channel).
+- **ADR-014.** Orchestrator intent routing via sub-query expansion + the vector-index fix.
+  Written 2026-07-08.
+- **ADR-015.** Bounded re-retrieval loop + Critic. Written 2026-07-08.
+- **ADR-016.** Langfuse Cloud over self-hosted (+ the no-breaker deviation, + the v2-over-v3
+  pin). Written 2026-07-08.
+- **(3b) ADR-017. Web Scout + web-content injection handling** (the new untrusted channel) —
+  not yet written; due when 3b is picked up.
 
 ## Docs to keep in sync (same turn as the code)
 

@@ -1,5 +1,6 @@
 import time
 from app.services.supabase_client import supabase_request
+from app.services.observability import record_step_span
 
 
 async def record_step(session_id, user_id, access_token, step_index, agent_name, status, latency_ms, detail):
@@ -48,6 +49,7 @@ def traced(agent_name: str):
                     session_id, user_id, access_token, idx, agent_name,
                     "error", latency_ms, "unhandled exception",
                 )
+                record_step_span(session_id, user_id, agent_name, "error", latency_ms, "unhandled exception")
                 raise
 
             latency_ms = int((time.monotonic() - start) * 1000)
@@ -58,6 +60,7 @@ def traced(agent_name: str):
                 session_id, user_id, access_token, idx, agent_name,
                 status, latency_ms, detail,
             )
+            record_step_span(session_id, user_id, agent_name, status, latency_ms, detail)
 
             result["step_index"] = idx + 1
             return result

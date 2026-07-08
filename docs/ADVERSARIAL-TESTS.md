@@ -262,7 +262,67 @@ report rendered). No 500. `execution_steps` gets zero new rows for that run; Ren
 `[ARGUS] execution_steps write failed ...` print line once per node instead of a raised exception.
 Restore the table/grant afterward.
 
-Status: Not yet run — pending Clint's live test after migration 008 is applied and the backend is
-redeployed. `record_step` (`backend/app/services/step_writer.py`) wraps its entire body in
-try/except and only prints on failure, by construction, but this needs a live run to confirm
-end-to-end, per the project's "compiling is not ✅" rule.
+Status: Not yet run — see `docs/PHASE3-TEST-SCRIPT.md` step 3. `record_step`
+(`backend/app/services/step_writer.py`) wraps its entire body in try/except and only prints on
+failure, by construction, but this needs a live run to confirm end-to-end, per the project's
+"compiling is not ✅" rule.
+
+---
+
+### TC-3a.3-01: Bounded re-retrieval loop cap (OWASP ASI10)
+Risk class: OWASP ASI10 (unbounded agentic loop / self-modifying control flow). An agent that can
+trigger its own retry with no hard ceiling is a resource-exhaustion and hang risk.
+Sprint: 3a.3
+Objective: Verify the Critic's re-retrieval loop fires at most once and the graph always
+terminates, even when the Critic keeps flagging low confidence.
+
+Precondition: Sprint 3a.3 deployed; a normal query already confirmed to return a report with a
+`## Confidence` section.
+
+Test: Ask a question the collection genuinely cannot answer (e.g. a fact that isn't in any
+uploaded document — see `docs/PHASE3-TEST-SCRIPT.md` step 7 for a concrete example). The
+Synthesizer's draft will say the context lacks the information, which the Critic's system prompt
+treats as low confidence by design, making the retry path exercisable on demand rather than by luck.
+
+Expected Result: The graph runs the retriever/synthesizer/critic sequence at most twice total
+(8 execution_steps rows: orchestrator, retriever, synthesizer, critic, retriever, synthesizer,
+critic, reporter — `step_index` 0 through 7, continuous). The response JSON's `status` is
+`completed_with_fallback`. No third pass, no hang, no timeout. The report shows the ⚠️ Low
+confidence badge with the "one automatic re-retrieval pass" note.
+
+Defense in depth (three independent fences, any one of which stops an uncapped loop):
+1. `loop_count` is incremented inside `critic_node` itself before the router ever sees it, so a
+   missed state-seeding bug can't produce a loop that never increments.
+2. `graph.py`'s `route_after_critic` requires `loop_count < 2` to retry.
+3. LangGraph's default `recursion_limit` (25) is the backstop if the router were ever bypassed.
+
+Status: Not yet run — see `docs/PHASE3-TEST-SCRIPT.md` step 7.
+
+---
+
+### TC-3a.4-01: Langfuse-down graceful degradation
+Risk class: Availability / graceful degradation, same family as TC-3a.2-01 but for the
+observability layer added in Sprint 3a.4.
+Sprint: 3a.4
+Objective: Verify that a broken or unreachable Langfuse Cloud connection never affects the
+research response.
+
+Precondition: Sprint 3a.4 deployed with valid `LANGFUSE_*` env vars on Render, confirmed working
+(a trace appears in Langfuse for a normal query).
+
+Test: Corrupt `LANGFUSE_SECRET_KEY` in Render's env (e.g. append a character), let it redeploy,
+then run a normal research query.
+
+Expected Result: The query still returns a full report — no 500, no added latency from a hanging
+network call. No new trace appears in Langfuse. `/health/circuit-breakers` still reports
+`langfuse: {"enabled": true, ...}` (the flag reflects that keys are configured and the client
+initialized, not that Langfuse Cloud is currently reachable — the SDK delivers on a background
+thread with no request-path signal either way; see ADR-016). Restore the key afterward and
+re-confirm traces resume.
+
+Note: unlike `groq_breaker`/`hf_breaker`, there is deliberately no `langfuse_breaker` to trip
+here. Langfuse's v2 SDK batches delivery on a background thread, so failures never reach the
+request path for a breaker to guard against in the first place — this test is verifying that
+absence of impact, not a breaker opening. See ADR-016 for the full reasoning.
+
+Status: Not yet run — see `docs/PHASE3-TEST-SCRIPT.md` step 10.

@@ -1,7 +1,10 @@
 """Sprint 2.4 — circuit breaker for external API calls.
 
-One shared breaker per external service (Groq only for now, per Phase 2 scope;
-HF/Tavily/ip-api get theirs in Phase 4). All state mutation happens under an
+One shared breaker per external service. Groq and HF (ADR-012) each have one
+as of Phase 2/3a; Tavily gets its in Phase 3b, ip-api in Phase 4. Langfuse
+deliberately does NOT get one (Sprint 3a.4) — its SDK delivers on a background
+thread, so there's no request-path failure to guard against; see ADR-016. All
+state mutation happens under an
 asyncio.Lock — the V3 blueprint audit flagged unguarded list mutation under
 async concurrency as a real race. time.monotonic() everywhere: wall-clock
 jumps (NTP sync, DST) must never open or close a breaker.

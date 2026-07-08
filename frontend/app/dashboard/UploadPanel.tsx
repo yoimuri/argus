@@ -13,9 +13,20 @@ interface Collection {
   created_at: string
 }
 
+interface DocumentRow {
+  id: string
+  filename: string
+  status: string
+  created_at: string
+}
+
 export default function UploadPanel() {
   const [collectionName, setCollectionName] = useState('')
   const [collectionId, setCollectionId] = useState<string | null>(null)
+  const [activeCollectionName, setActiveCollectionName] = useState<string | null>(null)
+  // null = loading sentinel (same reasoning as loadingCollections below, but
+  // as part of the value itself since this list only exists once a collection is open)
+  const [documents, setDocuments] = useState<DocumentRow[] | null>(null)
   const [file, setFile] = useState<File | null>(null)
   const [status, setStatus] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -70,8 +81,35 @@ export default function UploadPanel() {
     }
   }, [collectionId, fetchCollections])
 
+  // Same pure-fetch shape as fetchCollections: callable from the mount effect
+  // below AND after a successful upload/delete without setState-gating conflicts.
+  const fetchDocuments = useCallback(async (id: string): Promise<DocumentRow[]> => {
+    const token = await getToken()
+    const res = await fetch(`${API_URL}/collections/${id}/documents`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    return res.ok ? res.json() : []
+  }, [])
+
+  useEffect(() => {
+    if (!collectionId) return
+    let ignore = false
+    fetchDocuments(collectionId)
+      .then((data) => {
+        if (!ignore) setDocuments(data)
+      })
+      .catch(() => {
+        // Best-effort: a failed list fetch must not block upload/research.
+      })
+    return () => {
+      ignore = true
+    }
+  }, [collectionId, fetchDocuments])
+
   function resetToCollectionList() {
     setCollectionId(null)
+    setActiveCollectionName(null)
+    setDocuments(null)
     setFile(null)
     setQuery('')
     setReport(null)
@@ -95,6 +133,7 @@ export default function UploadPanel() {
       }
       const data = await res.json()
       setCollectionName('')
+      setActiveCollectionName(data.name)
       setCollectionId(data.id)
     } catch (err) {
       setError(`Network error: ${err instanceof Error ? err.message : 'unknown'}`)
@@ -199,10 +238,32 @@ export default function UploadPanel() {
           ? `Uploaded. ${data.chunks_created} chunks created. ${quarantined} chunk(s) quarantined as potential prompt injection and not stored.`
           : `Uploaded. ${data.chunks_created} chunks created.`,
       )
+      if (collectionId) setDocuments(await fetchDocuments(collectionId))
     } catch (err) {
       setError(`Network error: ${err instanceof Error ? err.message : 'unknown'}`)
     } finally {
       setUploading(false)
+    }
+  }
+
+  async function handleDeleteDocument(id: string, filename: string) {
+    if (!confirm(`Delete "${filename}"? Its content will no longer be searchable. This cannot be undone.`)) {
+      return
+    }
+    setError(null)
+    try {
+      const token = await getToken()
+      const res = await fetch(`${API_URL}/documents/${id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (!res.ok) {
+        setError(`Failed to delete document (${res.status}).`)
+        return
+      }
+      if (collectionId) setDocuments(await fetchDocuments(collectionId))
+    } catch (err) {
+      setError(`Network error: ${err instanceof Error ? err.message : 'unknown'}`)
     }
   }
 
@@ -270,7 +331,14 @@ export default function UploadPanel() {
                   }}
                 >
                   <span style={{ flex: 1 }}>{c.name}</span>
-                  <button type="button" onClick={() => setCollectionId(c.id)}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDocuments(null)
+                      setActiveCollectionName(c.name)
+                      setCollectionId(c.id)
+                    }}
+                  >
                     Open
                   </button>
                   <button type="button" onClick={() => handleDeleteCollection(c.id, c.name)}>
@@ -286,8 +354,8 @@ export default function UploadPanel() {
           <button type="button" onClick={resetToCollectionList} style={{ marginBottom: 12 }}>
             ← Back to collections
           </button>
+          <h3 style={{ fontSize: 16, marginBottom: 8 }}>{activeCollectionName ?? 'Collection'}</h3>
           <form onSubmit={handleUpload}>
-            <p>Collection ready: {collectionId}</p>
             <input
               type="file"
               accept="application/pdf"
@@ -301,6 +369,34 @@ export default function UploadPanel() {
               {uploading ? 'Uploading and embedding, this can take a minute...' : 'Upload PDF'}
             </button>
           </form>
+
+          <div style={{ marginTop: 16 }}>
+            <h3 style={{ fontSize: 16, marginBottom: 8 }}>Documents</h3>
+            {documents === null && <p style={{ color: '#888' }}>Loading...</p>}
+            {documents !== null && documents.length === 0 && (
+              <p style={{ color: '#888' }}>No documents yet. Upload a PDF above.</p>
+            )}
+            <ul style={{ listStyle: 'none', padding: 0 }}>
+              {(documents ?? []).map((d) => (
+                <li
+                  key={d.id}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    padding: '6px 0',
+                    borderBottom: '1px solid #333',
+                  }}
+                >
+                  <span style={{ flex: 1 }}>{d.filename}</span>
+                  <span style={{ color: '#888', fontSize: 13 }}>{d.status}</span>
+                  <button type="button" onClick={() => handleDeleteDocument(d.id, d.filename)}>
+                    Delete
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
 
           <form onSubmit={handleResearch} style={{ marginTop: 16 }}>
             <input

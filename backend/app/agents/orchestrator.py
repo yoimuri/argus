@@ -1,8 +1,8 @@
-import json
 import os
 from groq import AsyncGroq
 from app.agents.state import ResearchState
 from app.services.circuit_breaker import groq_breaker
+from app.services.llm_json import extract_json
 
 _client = AsyncGroq(api_key=os.environ["GROQ_API_KEY"], timeout=30.0)
 
@@ -29,28 +29,6 @@ SYSTEM_PROMPT = (
     "Always return at least one refined query. Never include commentary, markdown, or "
     "text outside the JSON object."
 )
-
-
-def _extract_json(raw: str) -> dict:
-    """Best-effort JSON parse. Some models wrap the object in a markdown code
-    fence or add a stray sentence before/after it even when told not to — strip
-    a fence and fall back to the first {...} substring before giving up, rather
-    than treating cosmetic wrapping as a hard failure."""
-    text = raw.strip()
-
-    if text.startswith("```"):
-        text = text.strip("`")
-        if text.lower().startswith("json"):
-            text = text[4:]
-        text = text.strip()
-
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        start, end = text.find("{"), text.rfind("}")
-        if start == -1 or end == -1 or end <= start:
-            raise
-        return json.loads(text[start:end + 1])
 
 
 async def orchestrator_node(state: ResearchState) -> dict:
@@ -85,7 +63,7 @@ async def orchestrator_node(state: ResearchState) -> dict:
 
     try:
         raw = await groq_breaker.call(_classify)
-        parsed = _extract_json(raw)
+        parsed = extract_json(raw)
         intent = parsed.get("intent")
         refined_queries = parsed.get("refined_queries")
 

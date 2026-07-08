@@ -4,6 +4,10 @@ PyJWT[crypto]==2.13.0
 PyMuPDF==1.24.7
 httpx==0.27.0
 python-multipart
-httpx
 langgraph==1.2.6
 groq
+# v2, not v3: v3 is OpenTelemetry-based (extra dependency tree, real RAM cost
+# on Render's 512MB tier) and needs 32-hex trace ids. v2 is a small batching
+# client compatible with httpx==0.27.0 above and accepts our session UUID
+# directly via trace(id=...). See docs/ADR-016.md.
+langfuse==2.60.10

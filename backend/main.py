@@ -10,7 +10,8 @@ from app.services.document_processor import extract_chunks_from_pdf_file, iter_e
 from app.services.supabase_client import supabase_request
 from app.services.injection_guard import check_query, InjectionDetected
 from app.services.injection_patterns import matches_any
-from app.services.circuit_breaker import groq_breaker
+from app.services.circuit_breaker import groq_breaker, hf_breaker
+from app.services import observability
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_PUBLISHABLE_KEY")
@@ -37,6 +38,17 @@ class DocumentUploadRequest(BaseModel):
     file_name: str
 
 
+def _valid_uuid(value: str) -> bool:
+    """An invalid uuid in a PostgREST `eq.` filter returns 400, which
+    supabase_request surfaces as a 502 — a garbage id in a URL path should be
+    a clean 404 instead, so every id-taking GET/DELETE checks this first."""
+    try:
+        uuid.UUID(value)
+        return True
+    except ValueError:
+        return False
+
+
 async def _mark_document_failed(document, access_token):
     """Best-effort: flip a document row to 'failed' so a crashed upload doesn't
     leave it stuck at 'processing' forever. Never raises — a failed status write
@@ -59,9 +71,16 @@ def health_check():
 
 @app.get("/health/circuit-breakers")
 async def circuit_breaker_health(request: Request):
-    """Live breaker state. Auth-gated (not public) so it isn't a free recon
-    endpoint. Phase 4's SOC dashboard reads the same snapshot."""
-    return {"groq": await groq_breaker.snapshot()}
+    """Live breaker state — all breakers (used to hide hf_prompt_guard). Langfuse
+    is reported as an enabled/disabled flag, not a breaker (see observability.py:
+    the SDK delivers out-of-band, so there's no request-path failure to guard
+    against). Auth-gated (not public) so it isn't a free recon endpoint. Phase
+    4's SOC dashboard reads the same snapshot."""
+    return {
+        "groq": await groq_breaker.snapshot(),
+        "hf_prompt_guard": await hf_breaker.snapshot(),
+        "langfuse": observability.snapshot(),
+    }
 
 
 @app.post("/collections")
@@ -260,6 +279,54 @@ async def upload_document(collection_id: str, req: DocumentUploadRequest, reques
     }
 
 
+@app.get("/collections/{collection_id}/documents")
+async def list_documents(collection_id: str, request: Request):
+    owned = await supabase_request(
+        "GET", f"collections?id=eq.{collection_id}&select=id", request.state.access_token
+    )
+    if not owned:
+        raise HTTPException(status_code=404, detail="Collection not found.")
+    return await supabase_request(
+        "GET",
+        f"documents?collection_id=eq.{collection_id}"
+        "&select=id,filename,status,created_at&order=created_at.asc",
+        request.state.access_token,
+    )
+
+
+@app.delete("/documents/{document_id}")
+async def delete_document(document_id: str, request: Request):
+    if not _valid_uuid(document_id):
+        raise HTTPException(status_code=404, detail="Document not found.")
+
+    token = request.state.access_token
+    rows = await supabase_request(
+        "GET", f"documents?id=eq.{document_id}&select=id,storage_path", token,
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="Document not found.")
+
+    # Best-effort Storage purge first, same stance as delete_collection: a
+    # missing file must not block the DB delete, which is what actually
+    # removes the chunks from retrieval. Deleting a document mid-research is
+    # harmless — chunks already fetched by that run stay in its own memory.
+    storage_path = rows[0].get("storage_path")
+    if storage_path:
+        async with httpx.AsyncClient() as client:
+            try:
+                await client.delete(
+                    f"{SUPABASE_URL}/storage/v1/object/documents/{storage_path}",
+                    headers={"Authorization": f"Bearer {token}", "apikey": SUPABASE_KEY},
+                )
+            except Exception as storage_err:
+                print(f"[ARGUS] could not delete storage object {storage_path}: {storage_err}")
+
+    # documents row delete cascades to document_chunks (001_core_schema.sql),
+    # which is what stops the old PDF's content from being retrievable.
+    await supabase_request("DELETE", f"documents?id=eq.{document_id}", token)
+    return {"status": "deleted", "document_id": document_id}
+
+
 @app.post("/research")
 async def research(request: Request):
     body = await request.json()
@@ -319,6 +386,9 @@ async def research(request: Request):
             "chunks": [],
             "answer": None,
             "report": None,
+            "confidence_flags": [],
+            "needs_retry": False,
+            "loop_count": 0,
         })
     except Exception:
         # Best-effort status patch: a diary write failing here must not mask the
@@ -334,15 +404,63 @@ async def research(request: Request):
                 print(f"[ARGUS] could not mark session {session_id} as error: {patch_err}")
         raise
 
+    # loop_count >= 2 means the critic ran twice, which only happens after a
+    # retry pass fired (graph.py's route_after_critic) — that alone tells us a
+    # retry happened, no extra state field needed.
+    final_status = "completed_with_fallback" if result.get("loop_count", 0) >= 2 else "completed"
+
     if session_id:
         try:
             await supabase_request(
                 "PATCH", f"research_sessions?id=eq.{session_id}", request.state.access_token,
-                json_body={"report": result["report"], "status": "completed"},
+                json_body={"report": result["report"], "status": final_status},
             )
         except Exception as patch_err:
             # A perfectly good answer must still reach the user even if this final
             # diary write fails — the report was already produced.
             print(f"[ARGUS] could not mark session {session_id} as completed: {patch_err}")
 
-    return {"report": result["report"], "chunks_used": result["chunks"], "session_id": session_id}
+    return {
+        "report": result["report"],
+        "chunks_used": result["chunks"],
+        "session_id": session_id,
+        "status": final_status,
+    }
+
+
+@app.get("/research/{session_id}")
+async def get_research_session(session_id: str, request: Request):
+    if not _valid_uuid(session_id):
+        raise HTTPException(status_code=404, detail="Session not found.")
+    # RLS scopes the select to the caller's own rows, so "not owned" and
+    # "doesn't exist" both come back empty -> identical 404, no ownership leak
+    # (same pattern as the collection ownership checks above).
+    rows = await supabase_request(
+        "GET",
+        f"research_sessions?id=eq.{session_id}"
+        "&select=id,collection_id,query,report,status,created_at",
+        request.state.access_token,
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="Session not found.")
+    return rows[0]
+
+
+@app.get("/research/{session_id}/trace")
+async def get_research_trace(session_id: str, request: Request):
+    if not _valid_uuid(session_id):
+        raise HTTPException(status_code=404, detail="Session not found.")
+    owned = await supabase_request(
+        "GET", f"research_sessions?id=eq.{session_id}&select=id",
+        request.state.access_token,
+    )
+    if not owned:
+        raise HTTPException(status_code=404, detail="Session not found.")
+    steps = await supabase_request(
+        "GET",
+        f"execution_steps?session_id=eq.{session_id}"
+        "&select=step_index,agent_name,status,latency_ms,detail,created_at"
+        "&order=step_index.asc",
+        request.state.access_token,
+    )
+    return {"session_id": session_id, "steps": steps}

@@ -256,7 +256,7 @@ class CircuitBreaker:
 | HuggingFace | 3 | 1 min | 120s | `sentence-transformers` local CPU |
 | Tavily | 5 | 2 min | 60s | Doc-context-only, noted in Debug Diary |
 | ip-api.com | 10 | 5 min | 300s | `ip_country = "unknown"` |
-| Langfuse | 5 | 5 min | 300s | No-op trace; local log file |
+| Langfuse | — | — | — | **No breaker** (ADR-016): the SDK delivers on a background thread, so its failures never reach the request path for a breaker to guard; emit calls are wrapped try/except and no-op on failure instead |
 
 **Chaos engineering (free, local):**
 1. **Kill Groq mid-session**. `iptables -A OUTPUT -d api.groq.com -j DROP`; verify breaker trips, session completes with fallback, no 500.
@@ -331,7 +331,7 @@ the app at that moment.
 | LLM06:2025 Excessive Agency | ✅ | No tool access beyond defined LangGraph outputs |
 | LLM07:2025 System Prompt Leakage | ✅ | Server-side only; guard rejects extraction attempts |
 | LLM08:2025 Vector/Embedding Weaknesses | ◐ Partial | trust_level plumbing live (migration 004); dedicated shadow detection pending Sprint 2.3 |
-| LLM09:2025 Misinformation | ⏳ Phase 3 | RAGAS + Critic agent not yet built |
+| LLM09:2025 Misinformation | 🟡 Phase 3a | Critic agent built (Sprint 3a.3), grounded-ness flags + confidence badge, not yet live-verified; RAGAS scoring stays deferred (ADR noted in PHASE3.md, avoids the extra dependency + per-query LLM-call cost for now) |
 | LLM10:2025 Unbounded Consumption | ⏳ Planned | Redis rate limiting + circuit breakers specified but NOT yet implemented in code |
 | ASI01–ASI08:2026 | ◐ Partial | trust_level tagging + JWT auth live; per-service circuit breakers not yet implemented (Sprint 2.4+) |
 | ASI09:2026 Human-Agent Trust Exploitation | ✅ **[V3 closed]** | Confidence badge rendered on report output, not buried in metadata |
@@ -411,7 +411,8 @@ refusal. See `docs/PHASE3.md` for the sprint status.
 
 **Phase 4: SOC Dashboard (weeks 11–13)**
 Supabase Realtime subscriptions · ExecutionTimeline UI (Debug Diary frontend) · live request feed
-· world map · IP intelligence panel · remaining circuit breakers (HF, Tavily, ip-api, Langfuse).
+· world map · IP intelligence panel · remaining circuit breaker (ip-api; HF has one since ADR-012,
+Tavily ships with Web Scout in 3b, Langfuse deliberately never gets one, see ADR-016).
 
 **Phase 5: MCP Server, CI/CD, Polish (weeks 14–16)**
 MCP server as separate FastAPI app · full GitHub Actions pipeline (test + adversarial + build +
