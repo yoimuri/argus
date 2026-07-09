@@ -22,11 +22,6 @@ function resolve(pref: ThemePreference): ResolvedTheme {
   return pref === 'system' ? (systemPrefersDark() ? 'dark' : 'light') : pref
 }
 
-function readStoredPreference(): ThemePreference {
-  const stored = window.localStorage.getItem(STORAGE_KEY)
-  return stored === 'light' || stored === 'dark' || stored === 'system' ? stored : 'system'
-}
-
 // Found live 2026-07-09: an earlier version read localStorage inside
 // useState's lazy initializer. That function runs fresh on the server
 // (window undefined -> falls back to "system") AND on the client's first
@@ -38,30 +33,36 @@ function readStoredPreference(): ThemePreference {
 // and runs entirely outside React, so it was never subject to this
 // mismatch -- only the React-rendered toggle was.
 //
-// Fix: both the server render and the client's first render now start from
-// the SAME fixed default (no environment-dependent branching in the initial
-// render at all), and the real value is read client-only inside an effect,
-// a one-time correction that runs after mount. This causes no visible
-// flash -- the colors were already correct before this effect even runs.
+// Fix (round 2): layout.tsx's inline script now ALSO stamps the raw
+// preference onto <html data-theme-pref>, before <body> ever parses. These
+// initializers read that attribute back (not localStorage directly) so the
+// client's first hydration render already has the real value -- no
+// after-mount correction, no visible flash. This reintroduces a hydration
+// mismatch against the server-rendered markup (server always says
+// "system"), which is expected and handled: ThemeToggle.tsx applies
+// suppressHydrationWarning to the elements whose highlighted state depends
+// on this, the officially sanctioned escape hatch for exactly this
+// client-only-UI case (same pattern next-themes uses).
+function readInitialPreference(): ThemePreference {
+  if (typeof document === 'undefined') return 'system'
+  const attr = document.documentElement.getAttribute('data-theme-pref')
+  return attr === 'light' || attr === 'dark' || attr === 'system' ? attr : 'system'
+}
+
+function readInitialResolved(): ResolvedTheme {
+  if (typeof document === 'undefined') return 'light'
+  return document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light'
+}
+
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [preference, setPreferenceState] = useState<ThemePreference>('system')
-  const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme>('light')
+  const [preference, setPreferenceState] = useState<ThemePreference>(readInitialPreference)
+  const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme>(readInitialResolved)
 
   const applyTheme = useCallback((pref: ThemePreference) => {
     const next = resolve(pref)
     setResolvedTheme(next)
     document.documentElement.setAttribute('data-theme', next)
-  }, [])
-
-  useEffect(() => {
-    try {
-      const stored = readStoredPreference()
-      setPreferenceState(stored)
-      setResolvedTheme(resolve(stored))
-    } catch {
-      // Private browsing / storage disabled: stay on the "system" default
-      // this render already started from.
-    }
+    document.documentElement.setAttribute('data-theme-pref', pref)
   }, [])
 
   const setPreference = useCallback((pref: ThemePreference) => {

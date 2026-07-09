@@ -85,13 +85,23 @@ def health_check():
     return {"status": "ok"}
 
 
-@app.get("/health/circuit-breakers")
+@app.get("/status/breakers")
 async def circuit_breaker_health(request: Request):
     """Live breaker state — all breakers (used to hide hf_prompt_guard). Langfuse
     is reported as an enabled/disabled flag, not a breaker (see observability.py:
     the SDK delivers out-of-band, so there's no request-path failure to guard
     against). Auth-gated (not public) so it isn't a free recon endpoint. Phase
-    4's SOC dashboard reads the same snapshot."""
+    4's SOC dashboard reads the same snapshot.
+
+    Was /health/circuit-breakers until 2026-07-09: EasyPrivacy (shipped by
+    default in Brave Shields, uBlock Origin, and most privacy extensions)
+    carries the rule `||onrender.com/health`, which silently blocks any
+    browser fetch to a /health* path on any Render-hosted app — the SOC
+    panel's request died client-side with net::ERR_BLOCKED_BY_CLIENT before
+    ever reaching the network. Renamed so the panel works for every visitor;
+    /status/* was verified clean against EasyList/EasyPrivacy/uBlock filters.
+    The bare /health above is only hit server-to-server (Render's checks),
+    where filter lists don't exist, so it keeps its conventional name."""
     return {
         "groq": await groq_breaker.snapshot(),
         "hf_prompt_guard": await hf_breaker.snapshot(),

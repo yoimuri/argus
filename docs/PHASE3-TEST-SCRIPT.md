@@ -234,8 +234,10 @@ document content shows up in a span.
 character is enough), save (Render auto-redeploys). Once redeployed, run a query.
 
 **PASS:** You still get a full, normal report — no error, no added delay. No new trace appears in
-Langfuse for that query. Check `/health/circuit-breakers` the same way as step 8's snippet
-(`GET ${API}/health/circuit-breakers`) — it still returns `groq`, `hf_prompt_guard`, and
+Langfuse for that query. Check `/status/breakers` (renamed from `/health/circuit-breakers`
+2026-07-09 — privacy filter lists block `/health*` on Render domains in the browser; see
+`docs/PHASE4.md`) the same way as step 8's snippet
+(`GET ${API}/status/breakers`) — it still returns `groq`, `hf_prompt_guard`, and
 `langfuse: {"enabled": true, ...}`. That `enabled: true` means the keys are configured and the
 client initialized, not that Langfuse Cloud is actually reachable right now — there's no breaker
 here on purpose (see `docs/ADR-016.md`).

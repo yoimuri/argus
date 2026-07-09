@@ -74,7 +74,10 @@ export default function BreakerPanel() {
 
   const fetchHealth = useCallback(async () => {
     try {
-      const data = await apiJson<BreakerHealth>('/health/circuit-breakers')
+      // /status/breakers, NOT /health/*: EasyPrivacy's `||onrender.com/health`
+      // rule (default-on in Brave, uBlock Origin, etc.) silently blocks any
+      // browser fetch to /health* on Render-hosted apps (found live 2026-07-09).
+      const data = await apiJson<BreakerHealth>('/status/breakers')
       setHealth(data)
       setError(null)
     } catch (err) {

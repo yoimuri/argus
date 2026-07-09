@@ -76,7 +76,7 @@ class CircuitBreaker:
         return result
 
     async def snapshot(self) -> dict:
-        """State for /health/circuit-breakers and, later, the Phase 4 SOC view."""
+        """State for /status/breakers and the Phase 4 SOC view."""
         async with self._lock:
             return {
                 "state": self._state,

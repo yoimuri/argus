@@ -29,6 +29,13 @@ export default function ThemeToggle() {
             aria-checked={active}
             title={opt.title}
             onClick={() => setPreference(opt.value)}
+            // ThemeProvider's initial state is read from a DOM attribute the
+            // inline script set before hydration (layout.tsx), which is
+            // usually already correct on the client's first render --
+            // deliberately different from the server-rendered "system"
+            // default. suppressHydrationWarning is the React-sanctioned
+            // escape hatch for that specific, expected mismatch.
+            suppressHydrationWarning
             className={
               'rounded-full px-2.5 py-1 font-medium transition-colors ' +
               (active

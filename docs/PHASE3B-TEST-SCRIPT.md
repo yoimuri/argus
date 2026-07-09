@@ -121,8 +121,9 @@ need the web (same style as step 2).
 
 **PASS:** You still get a full, normal report — no error, no hang. The report includes the
 `*Live web search was unavailable for this run — answering from your documents only.*` banner.
-No web sources in `## Sources`. Check `/health/circuit-breakers` the same way as
-`docs/PHASE3-TEST-SCRIPT.md` step 8's snippet (`GET ${API}/health/circuit-breakers`) — it now also
+No web sources in `## Sources`. Check `/status/breakers` (renamed from
+`/health/circuit-breakers` 2026-07-09, see `docs/PHASE4.md`) the same way as
+`docs/PHASE3-TEST-SCRIPT.md` step 8's snippet (`GET ${API}/status/breakers`) — it now also
 returns a `tavily` entry.
 
 **FAIL:** The query errors out, hangs, or the banner doesn't appear despite `use_web` clearly

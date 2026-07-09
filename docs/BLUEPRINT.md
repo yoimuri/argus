@@ -414,7 +414,7 @@ CREATE POLICY "own documents" ON documents USING (user_id = auth.uid());
 `/auth/*` backend route — the frontend calls Supabase directly and forwards the resulting JWT):
 
 ```
-/health [GET] · /health/circuit-breakers [GET]
+/health [GET] · /status/breakers [GET]
 /collections [POST,GET] · /collections/{id} [DELETE]
 /collections/{id}/documents [POST,GET] · /documents/{id} [DELETE]
 /research [POST,GET] · /research/{id} [GET] · /research/{id}/trace [GET]
@@ -467,7 +467,8 @@ refusal. See `docs/PHASE3.md` for the sprint status.
 **Phase 4: read-only per-user dashboard (weeks 11–13) — split from the original sketch, see
 `docs/ADR-018.md` Part 3.**
 Supabase Realtime subscriptions (per-user `security_events` feed, migration 009) · breaker
-health panel (`/health/circuit-breakers`, already built in Phase 2/3) · ExecutionTimeline UI
+health panel (`/status/breakers`, built in Phase 2/3 as `/health/circuit-breakers`, renamed in
+4.2 — EasyPrivacy blocks browser fetches to `/health*` on Render domains) · ExecutionTimeline UI
 (Debug Diary frontend, consuming the Phase 3a `/research/{id}/trace` endpoint) · session history
 list (`GET /research`, Sprint 4.1) · theme system · public landing page · Google sign-in with
 owner-editable usage limits. No admin role, no cross-user visibility — everything here is scoped

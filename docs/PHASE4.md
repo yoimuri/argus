@@ -140,8 +140,9 @@ correctly (see "Verify live" below for exactly what still needs a real login ses
   slimmed accordingly (no longer does its own auth check). Note: `Sessions` links to
   `/dashboard/sessions`, which doesn't exist until Sprint 4.3 — a known, temporary 404 until next
   sprint, not an oversight.
-- `frontend/app/dashboard/soc/page.tsx` + `BreakerPanel.tsx` (polls `/health/circuit-breakers`
-  every 20s + on window focus; status cards colored via the fixed status palette; Langfuse
+- `frontend/app/dashboard/soc/page.tsx` + `BreakerPanel.tsx` (polls `/status/breakers` —
+  originally `/health/circuit-breakers`, renamed same sprint, see the filter-list write-up
+  below — every 20s + on window focus; status cards colored via the fixed status palette; Langfuse
   enabled/disabled chip; renders its own fetch-failure state instead of going silently stale) +
   `SecurityEventsFeed.tsx` (initial 50-row select + Supabase Realtime `postgres_changes` INSERT
   subscription, `supabase.realtime.setAuth(token)` before subscribing so Realtime evaluates RLS
@@ -158,26 +159,52 @@ is the exact tradeoff Next's own CSP docs describe ("all pages must be dynamical
 nonce-based CSP) and is worth re-examining in Sprint 4.4, once `/` becomes the real public
 marketing page where static caching would otherwise matter.
 
-**Real bug found live and fixed, 2026-07-09:** the theme toggle stayed visually stuck on
-"System" after a page refresh even when Dark had been explicitly chosen and the actual colors
-correctly stayed dark. Root cause: a hydration mismatch — `ThemeProvider`'s `useState` lazy
-initializer read `localStorage` fresh on both the server render (`window` undefined, falls back
-to `"system"`) and the client's first hydration render (`window` defined, reads the real stored
-value); the moment a non-default preference was stored these disagreed, and React left the
-*toggle UI's* state stuck on the server's guess. The actual rendered colors were never affected,
-since those come from the separate inline script in `layout.tsx`, which mutates `data-theme`
-directly and sits entirely outside React's hydration reconciliation. Fixed by starting both the
-server and the client's first render from an identical fixed default and reading the real
-preference client-only inside a `useEffect` (a one-time, imperceptible correction after mount —
-no visible flash, since the colors were already correct before that effect even runs). `npm run
-build` clean after the fix.
+**Real bug found live and fixed, 2026-07-09 (two rounds):** the theme toggle stayed visually
+stuck on "System" after a page refresh even when Dark had been explicitly chosen and the actual
+colors correctly stayed dark. Root cause: a hydration mismatch — `ThemeProvider`'s `useState`
+lazy initializer read `localStorage` fresh on both the server render (`window` undefined, falls
+back to `"system"`) and the client's first hydration render (`window` defined, reads the real
+stored value); the moment a non-default preference was stored these disagreed, and React left
+the *toggle UI's* state stuck on the server's guess. The actual rendered colors were never
+affected, since those come from the separate inline script in `layout.tsx`, which mutates
+`data-theme` directly and sits entirely outside React's hydration reconciliation.
 
-**Reported but not yet diagnosed:** the breaker panel showed "Breaker health unavailable: Failed
-to fetch" once live. `/health/circuit-breakers` requires the same Bearer-token auth every other
-working endpoint uses (checked `app/middleware/auth.py` — no path-specific handling bug found),
-and the panel's own 20s poll should retry automatically without a manual refresh. Likely Render's
-free-tier cold-start (30-60s after idle) rather than a real bug, but not confirmed — needs a
-Render log window from around the failure, or confirmation it self-recovered within a minute.
+Round 1 fixed the stuck state by starting both the server and the client's first render from an
+identical fixed default and correcting to the real preference client-only inside a `useEffect`
+after mount. That closed the bug but left a live-reported side effect: the toggle would briefly
+flash "System" before snapping to the real choice on every refresh. Round 2 removed the flash:
+`layout.tsx`'s inline script (which already runs before paint to set `data-theme` for the
+colors) now also stamps the raw preference onto `<html data-theme-pref>`; `ThemeProvider`'s
+lazy initializers read that attribute back on the client's first render instead of correcting
+after mount, so the toggle paints correctly highlighted immediately. This reintroduces a
+same-render hydration mismatch against the server's static markup by design — `ThemeToggle.tsx`
+marks the affected buttons `suppressHydrationWarning`, React's sanctioned escape hatch for
+exactly this client-only-UI case (the same pattern the `next-themes` library uses). `npm run
+build` clean after both rounds.
+
+**Real bug found live, root-caused against the actual filter lists, and fixed:** the breaker
+panel showed "Breaker health unavailable: Failed to fetch" live. Backend investigation
+(`app/middleware/auth.py`, the CORS config in `main.py`, the route itself) found nothing
+route-specific — every other endpoint on the same origin worked. The browser Console showed the
+real reason: `net::ERR_BLOCKED_BY_CLIENT` on the `/health/circuit-breakers` request specifically,
+with 0 bytes transferred in ~1ms — a request cancelled by the browser itself before it ever
+reached the network. It reproduced under two independent blockers (Brave's default Shields, then
+a separate extension in a normal Chrome profile) while working fine in Incognito with zero code
+change — a shared-filter-list signal, not a one-off extension quirk. An early draft of this entry
+called that "not an app bug, tell visitors to disable their extension"; that was wrong and got
+corrected — Brave ships blocking on by default, so this would silently break the SOC panel for a
+meaningful share of real visitors to a public demo.
+
+Verified against the real lists, not guessed: downloading EasyList, EasyPrivacy, and both uBlock
+Origin filter sets and searching them found the exact rule — **EasyPrivacy contains
+`||onrender.com/health`**, which blocks any browser request to a `/health*` path on *any* app
+hosted on Render (someone presumably added it because a tracking service hosted there exposed a
+`/health` endpoint). EasyPrivacy ships enabled by default in Brave Shields, uBlock Origin, and
+most privacy extensions, so the block applies to all of them at once. Fix: renamed the endpoint
+`/health/circuit-breakers` → `/status/breakers` (backend route + `BreakerPanel.tsx` + docs); the
+replacement path was checked against all four downloaded lists and matches nothing. The bare
+`/health` endpoint keeps its name — it's only called server-to-server (Render's own checks),
+where browser filter lists don't exist. No browser-side workaround needed from any visitor.
 
 **Verify live (manual steps, Clint's):**
 1. `git push` (Sprint 4.2's frontend files, including this fix) — Vercel redeploys.
@@ -185,9 +212,11 @@ Render log window from around the failure, or confirmation it self-recovered wit
    across a reload, and "System" follows your OS setting live if you change it while the tab is open.
 3. Open `/dashboard/soc` — confirm breaker cards render with real data (not stuck on "Loading"),
    colors match state (green closed / amber half_open / red open), and the Langfuse chip shows
-   correctly. Trigger a query that gets blocked (a known injection payload) and confirm the
-   security event appears in the feed **live**, without a page reload — this is GATE-20 from
-   `docs/ADVERSARIAL-TESTS.md`, now actually testable.
+   correctly. Do this in a normal browser window WITH your usual extensions / Brave Shields on —
+   that's the regression check for the `/status/breakers` rename (the old `/health/*` path was
+   blocked by EasyPrivacy, see write-up above). Trigger a query that gets blocked (a known
+   injection payload) and confirm the security event appears in the feed **live**, without a
+   page reload — this is GATE-20 from `docs/ADVERSARIAL-TESTS.md`, now actually testable.
 4. DevTools console: confirm no CSP violation errors (the `wss://` connect-src entry is what this
    check verifies).
 5. Optional: restart Claude Code so the `ui-ux-pro-max` plugin (installed but not yet loaded this

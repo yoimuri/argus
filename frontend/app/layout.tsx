@@ -19,10 +19,15 @@ export const metadata: Metadata = {
   description: "Multi-agent AI research assistant with built-in prompt injection defense.",
 };
 
-// Must match ThemeProvider.tsx's storage key and fallback logic exactly --
-// same source, read twice (once here before paint, once by React on mount),
-// so they never disagree (D11; see Next's flash-prevention guide, "Themes").
-const THEME_INIT_SCRIPT = `(function(){try{var t=localStorage.getItem("argus-theme");var resolved=(t==="light"||t==="dark")?t:(window.matchMedia&&window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light");document.documentElement.setAttribute("data-theme",resolved)}catch(e){}})();`;
+// Must match ThemeProvider.tsx's storage key and fallback logic exactly.
+// Stamps two attributes on <html> before the body ever parses: data-theme
+// (resolved light/dark, for CSS) and data-theme-pref (the raw stored
+// preference, including "system"). ThemeProvider's lazy useState initializers
+// read data-theme-pref/data-theme back on the client's first hydration
+// render, so the toggle paints correctly-highlighted immediately instead of
+// snapping over a moment later -- see ThemeToggle.tsx's suppressHydrationWarning
+// for why this doesn't reintroduce the 2026-07-09 stuck-toggle hydration bug.
+const THEME_INIT_SCRIPT = `(function(){try{var t=localStorage.getItem("argus-theme");var pref=(t==="light"||t==="dark"||t==="system")?t:"system";var resolved=(pref==="light"||pref==="dark")?pref:(window.matchMedia&&window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light");document.documentElement.setAttribute("data-theme",resolved);document.documentElement.setAttribute("data-theme-pref",pref)}catch(e){}})();`;
 
 export default async function RootLayout({
   children,

@@ -189,7 +189,7 @@ def mark_span(span, status: str, detail):
 
 
 def snapshot() -> dict:
-    """For /health/circuit-breakers. Not a breaker: 'enabled' means keys are
+    """For /status/breakers. Not a breaker: 'enabled' means keys are
     configured and init succeeded, not that Langfuse Cloud is reachable right
     now — the SDK delivers out-of-band, so reachability is invisible here."""
     return {"enabled": _client is not None, "disabled": _disabled}

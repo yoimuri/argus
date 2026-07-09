@@ -95,7 +95,8 @@ implied as built. Full reasoning: `docs/ADR-018.md` Part 3.
   agents — ADR-018 Part 1), migration 009 (Realtime publication for `security_events`), this
   doc pass.
 - **4.2 — Theme system + SOC page.** Dark/light/system theme toggle; per-user breaker health
-  panel (`/health/circuit-breakers`, already built in Phase 2/3, now with a UI) + a live
+  panel (`/status/breakers`, built in Phase 2/3 as `/health/circuit-breakers`, renamed in 4.2
+  because privacy filter lists block `/health*` on Render domains in the browser) + a live
   `security_events` feed via Supabase Realtime.
 - **4.3 — Sessions, timeline, report UX, cancel.** Session history list + deep-linkable
   session URLs; `ExecutionTimeline` UI (the Debug Diary's frontend, consuming
