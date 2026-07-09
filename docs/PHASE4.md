@@ -158,8 +158,29 @@ is the exact tradeoff Next's own CSP docs describe ("all pages must be dynamical
 nonce-based CSP) and is worth re-examining in Sprint 4.4, once `/` becomes the real public
 marketing page where static caching would otherwise matter.
 
+**Real bug found live and fixed, 2026-07-09:** the theme toggle stayed visually stuck on
+"System" after a page refresh even when Dark had been explicitly chosen and the actual colors
+correctly stayed dark. Root cause: a hydration mismatch — `ThemeProvider`'s `useState` lazy
+initializer read `localStorage` fresh on both the server render (`window` undefined, falls back
+to `"system"`) and the client's first hydration render (`window` defined, reads the real stored
+value); the moment a non-default preference was stored these disagreed, and React left the
+*toggle UI's* state stuck on the server's guess. The actual rendered colors were never affected,
+since those come from the separate inline script in `layout.tsx`, which mutates `data-theme`
+directly and sits entirely outside React's hydration reconciliation. Fixed by starting both the
+server and the client's first render from an identical fixed default and reading the real
+preference client-only inside a `useEffect` (a one-time, imperceptible correction after mount —
+no visible flash, since the colors were already correct before that effect even runs). `npm run
+build` clean after the fix.
+
+**Reported but not yet diagnosed:** the breaker panel showed "Breaker health unavailable: Failed
+to fetch" once live. `/health/circuit-breakers` requires the same Bearer-token auth every other
+working endpoint uses (checked `app/middleware/auth.py` — no path-specific handling bug found),
+and the panel's own 20s poll should retry automatically without a manual refresh. Likely Render's
+free-tier cold-start (30-60s after idle) rather than a real bug, but not confirmed — needs a
+Render log window from around the failure, or confirmation it self-recovered within a minute.
+
 **Verify live (manual steps, Clint's):**
-1. `git push` (Sprint 4.2's frontend files) — Vercel redeploys.
+1. `git push` (Sprint 4.2's frontend files, including this fix) — Vercel redeploys.
 2. Log in, confirm the theme toggle (Light/Dark/System) actually changes the page, persists
    across a reload, and "System" follows your OS setting live if you change it while the tab is open.
 3. Open `/dashboard/soc` — confirm breaker cards render with real data (not stuck on "Loading"),
