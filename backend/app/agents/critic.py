@@ -3,7 +3,7 @@ import re
 from groq import AsyncGroq
 from app.agents.state import ResearchState
 from app.services.circuit_breaker import groq_breaker
-from app.services.llm_json import extract_json
+from app.services.llm_json import extract_json, call_reasoning_json
 
 _client = AsyncGroq(api_key=os.environ["GROQ_API_KEY"], timeout=30.0)
 
@@ -92,8 +92,16 @@ async def critic_node(state: ResearchState) -> dict:
     ]
     context = "\n\n".join(context_parts)
 
-    async def _grade():
-        completion = await _client.chat.completions.create(
+    try:
+        # Token-budget/truncation handling now lives in call_reasoning_json
+        # (see llm_json.py) -- one retry at lower effort, ReasoningTruncated
+        # if still cut off. max_tokens=1536 and effort='medium' unchanged
+        # (a judgment task like this needs a budget large enough that a long
+        # reasoning pass can't starve the JSON). Any failure here, including
+        # ReasoningTruncated, falls into the except block below and fails
+        # open -- a broken Critic must never block the report.
+        raw = await call_reasoning_json(
+            _client, groq_breaker,
             model="openai/gpt-oss-20b",
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
@@ -101,18 +109,8 @@ async def critic_node(state: ResearchState) -> dict:
                     f"Question: {state['query']}\n\nContext:\n{context}\n\nDraft answer:\n{answer}"},
             ],
             max_tokens=1536,
-            # Same reasoning-model trap as orchestrator.py/synthesizer.py: hidden
-            # reasoning tokens share max_tokens with the visible JSON. 'medium'
-            # effort for a judgment task like this, with a budget large enough
-            # that a long reasoning pass can't starve the JSON. Worst case if it
-            # still does: extract_json raises below and the except block fails
-            # open — a broken Critic must never block the report.
-            extra_body={"reasoning_effort": "medium"},
+            reasoning_effort="medium",
         )
-        return completion.choices[0].message.content
-
-    try:
-        raw = await groq_breaker.call(_grade)
         parsed = extract_json(raw)
 
         confidence = parsed.get("confidence")

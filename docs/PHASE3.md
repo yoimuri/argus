@@ -4,9 +4,9 @@
 Debug Diary, 3a.3 Critic + bounded loop, 3a.4 Langfuse, 3a.5 read endpoints) plus the document
 management fix have run their full `docs/PHASE3-TEST-SCRIPT.md` steps and passed live — see the
 field notes and `docs/ADVERSARIAL-TESTS.md` for every individual result. **Phase 3b (Web Scout) is
-🟡 code-complete as of 2026-07-09** (planned against ADR-017's threat model, built serial and
-Orchestrator-gated — see its section below), not yet live-verified — run
-`docs/PHASE3B-TEST-SCRIPT.md` to close it out. Every checkbox is ⏳ until the sprint that owns it
+✅ live-verified as of 2026-07-09** (planned against ADR-017's threat model, built serial and
+Orchestrator-gated — see its section below); all of `docs/PHASE3B-TEST-SCRIPT.md` ran against the
+live app, results in `docs/ADVERSARIAL-TESTS.md`. Every checkbox is ⏳ until the sprint that owns it
 is code-complete (🟡) and then live-verified (✅), per the project's status-marks rule. This file
 is the execution plan, not a status claim.
 **Timeline:** Weeks 8–10 (blueprint), realistically paced across the sub-sprints below.
@@ -570,7 +570,14 @@ refresh, delete fixes stale retrieval) both passed. See **Field notes**.
 
 ## Phase 3b — Web Scout (live web search)
 
-**Status:** 🟡 Code-complete 2026-07-09, not yet live-verified. See `docs/PHASE3B-TEST-SCRIPT.md`.
+**Status:** ✅ Live-verified 2026-07-09. All four gates (GATE-14 through GATE-17,
+`docs/ADVERSARIAL-TESTS.md`) run against the live deployed app: GATE-15 (Tavily outage), GATE-16
+(benign web-augmented query), and GATE-17 (orchestrator gating) all PASS with real diary evidence;
+GATE-14 (web-content injection) is an honestly-documented **inconclusive** — the mechanism is
+proven (real Tavily fetches, correctly scanned and cited) but no live-fetched snippet happened to
+contain the trigger phrase within its excerpt this round, the same accepted non-determinism already
+noted for GATE-14 in `docs/ADVERSARIAL-TESTS.md`. A real regression was also found and fixed during
+this verification round — see field notes below.
 
 **In plain terms:** ARGUS can now also pull fresh answers from the live web, not just your PDFs —
 but only when the question actually needs it. A new "Orchestrator decides" step judges whether the
@@ -731,6 +738,8 @@ generic on very large PDFs | future (retrieval tuning) | open`.
 | 2026-07-08 | 3a.3 / 3a.4 | Closed out the last two open checks: step 6 (well-covered question → single critic pass, High badge, no retry note) and step 10 / TC-3a.4-01 (corrupted `LANGFUSE_SECRET_KEY` on Render, research still completed normally with no new trace, real key restored, traces resumed). Both PASS. This closes every remaining item in the Phase 3a completion batch. | closes 3a.3 and 3a.4 fully; closes Phase 3a | PASS, PASS |
 | 2026-07-09 | 3b | Reviewed the original 3b sketch (written before 3a.3's Critic existed) against the actual post-3a graph and found it unsafe as written: "Web Scout alongside the Retriever" would fan into the Synthesizer at the same time the Critic's retry cycle loops back to the Retriever only — needs a state reducer and can strand the Synthesizer waiting on a predecessor that won't re-fire. Revised to serial wiring (`orchestrator → web_scout → retriever`) and added Orchestrator-gating (`use_web`) that the sketch never specified, closing an always-on cost/latency/attack-surface gap. Built same day: `web_scout.py`, `tavily_breaker`, graph/synthesizer/critic/reporter updates, ADR-017. `py_compile` clean. | this sprint | code-complete; needs `TAVILY_API_KEY` on Render + live test via `docs/PHASE3B-TEST-SCRIPT.md` |
 | 2026-07-09 | 3b | First live test round (GATE-14/16/17 PASS or acceptable-inconclusive, GATE-15 not actually exercised) found a real regression, not a Tavily problem: 2 of 4 test sessions show the Orchestrator's Groq call returning truncated JSON and failing open to `use_web=False`, queried directly from `execution_steps` via Supabase MCP rather than guessed at. Cause: the `use_web` prompt addition grew the system prompt enough to trip the same reasoning-token-budget class of bug ADR-014 already documented for this model — the token budget wasn't defensively raised when the prompt grew, even though every prior instance of this exact bug in this file says to do exactly that. Fixed same day: `max_tokens` 768→1024 in `orchestrator.py`. GATE-16/17 confirmed genuinely working (real Tavily fetch with 5 cited sources; real correct self-skip) via the sessions that didn't hit the truncation bug — the mechanism itself is proven, only the gating reliability needed the fix. | this sprint | bug found + fixed same day; GATE-15 needs a genuine re-run after this deploys, GATE-14 optionally worth one more attempt |
+| 2026-07-09 | 3b | Second GATE-15 attempt (post-fix) still didn't reach the Tavily-down path, but for a legitimate reason this time, not a bug: the Orchestrator's classifier judged `use_web=False` for that exact phrasing (confirmed via a clean, non-truncated `execution_steps` row) — self-skip is correct behavior, just not the scenario under test. Confirms the `max_tokens` fix holds and that the reasoning-model classifier can legitimately swing on near-identical phrasings, which is expected variance from `reasoning_effort="medium"`, not a defect. | this sprint | closes GATE-16 cleanly (dedicated pass, session `b10d0fa2...`, 5 real web sources); GATE-15 needed one more attempt with a query already confirmed to set `use_web=True` |
+| 2026-07-09 | 3b | Third GATE-15 attempt, with `TAVILY_API_KEY` deliberately set to an invalid value: two sessions both got `use_web=True` and `web_scout` made a real Tavily call that came back `401 Unauthorized` (`HTTPStatusError`), fail-opened cleanly, and the pipeline finished normally — 0 web snippets, doc-only report, no 500, the "live web search was unavailable" banner rendered correctly in both. Real key restored after. This closes the last open gate. | this sprint | GATE-15 PASS — closes Phase 3b live verification |
 |  |  |  |  |  |
 
 ---

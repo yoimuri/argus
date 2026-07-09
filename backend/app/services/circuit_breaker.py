@@ -107,3 +107,13 @@ hf_breaker = CircuitBreaker("hf_prompt_guard", fail_threshold=5, failure_window_
 # tuning. Tavily down means research falls back to doc-only with a banner, it
 # never blocks or 500s (see web_scout.py's fail-open path).
 tavily_breaker = CircuitBreaker("tavily", fail_threshold=5, failure_window_s=120, recover_timeout_s=60)
+
+# Sprint 4.1 (D7, BACKLOG 6): guards the HF feature-extraction call in
+# document_processor.py. Deliberately its OWN instance, separate from
+# hf_breaker above -- injection_guard.py:36-41 treats hf_breaker opening as
+# "skip the AI classifier layer, fall back to regex-only", which is a safe
+# degradation for the security guard. Sharing this breaker would mean an
+# embedding-endpoint outage (upload/query embedding calls) could trip that
+# same breaker and silently downgrade the injection guard as a side effect --
+# two unrelated failure modes must not share one circuit.
+hf_embedding_breaker = CircuitBreaker("hf_embedding", fail_threshold=5, failure_window_s=120, recover_timeout_s=60)

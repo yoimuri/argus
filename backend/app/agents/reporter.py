@@ -55,7 +55,15 @@ async def reporter_node(state: ResearchState) -> dict:
         return {"report": report, "trace_detail": f"report length {len(report)} chars, no sources"}
 
     sources = "\n".join(source_lines)
-    report = f"## Answer\n\n{answer}\n\n## Sources\n\n{sources}\n{banner}{badge}"
+    # Sprint 4.1 (D6): banner moves right after the answer instead of sitting
+    # between Sources and Confidence -- it explains something about how the
+    # answer was produced (web search unavailable), not about the sources
+    # list, so it read oddly stuck below a Sources heading. report.ts
+    # (frontend, Sprint 4.3) tolerates both orders for older stored sessions.
+    if banner:
+        report = f"## Answer\n\n{answer}\n{banner}\n## Sources\n\n{sources}\n{badge}"
+    else:
+        report = f"## Answer\n\n{answer}\n\n## Sources\n\n{sources}\n{badge}"
     return {
         "report": report,
         "trace_detail": f"report length {len(report)} chars, {len(web_snippets)} web sources",

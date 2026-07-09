@@ -19,8 +19,9 @@ change makes any doc stale, fix it in the same turn.
 | Phase 1 — Core RAG pipeline | ✅ |
 | Phase 2 — Security hardening | ✅ |
 | Phase 3a — Full agent pipeline + observability (all sprints + document management) | ✅ live-verified 2026-07-08 |
-| Phase 3b — Web Scout | 🟡 code-complete 2026-07-09, awaiting `docs/PHASE3B-TEST-SCRIPT.md` |
-| Phase 4 — SOC Dashboard | ⏳ not started |
+| Phase 3b — Web Scout | ✅ live-verified 2026-07-09 |
+| Phase 4 — Dashboard, sessions, public landing, chatbot, multimodal | 🟡 in progress, started 2026-07-09 |
+| Phase 4b — Admin-role SOC features (parking lot, not scheduled) | ⏳ not started |
 | Phase 5 — MCP Server, CI/CD, Polish | ⏳ not started |
 
 ---
@@ -34,7 +35,7 @@ is ✅.
 
 ---
 
-## Phase 3b — Web Scout (live web search) — code-complete 2026-07-09
+## Phase 3b — Web Scout (live web search) — closed 2026-07-09
 
 **Why it was gated:** web text is a new untrusted input channel. Everything built through 3a
 assumes the only untrusted content is inside a user's own uploaded PDF; a live web result is
@@ -61,21 +62,59 @@ reasoning in ADR-017):
   web-augmented query lists web sources; a purely document-answerable question doesn't call
   Tavily at all (gating actually works).
 
-**Exit condition:** `docs/PHASE3B-TEST-SCRIPT.md`, same discipline as 3a — run live, record every
-result in `docs/ADVERSARIAL-TESTS.md`, flip `docs/PHASE3.md`'s §3b from 🟡 to ✅ once it passes.
+**Exit condition — met 2026-07-09:** `docs/PHASE3B-TEST-SCRIPT.md` ran live against the deployed
+app. GATE-15 (Tavily outage), GATE-16 (benign web-augmented query), and GATE-17 (orchestrator
+gating) all PASS with real `execution_steps` diary evidence, recorded in `docs/ADVERSARIAL-TESTS.md`.
+GATE-14 (web-content injection) is an honestly-documented **inconclusive** — the mechanism is
+proven (real Tavily fetches, scanned and cited correctly) but no live-fetched snippet happened to
+contain the trigger phrase within its excerpt, the same accepted non-determinism GATE-14 already
+allows for. A real regression was found and fixed mid-verification: the `use_web` prompt addition
+grew the Orchestrator's system prompt enough to trip a reasoning-token-budget truncation bug
+(same class as ADR-014); fixed same day with `max_tokens` 768→1024 in `orchestrator.py`. Full story
+in `docs/PHASE3.md` field notes and `docs/ADR-017.md`'s revision section.
 
 ---
 
 ## Phase 4 — Make it visible
 
-**SOC dashboard** (per `docs/BLUEPRINT.md`): a live view of the system's own health and security
-events — breaker states (already exposed via `/health/circuit-breakers`), a `security_events`
-feed, IP intelligence / world map, Supabase Realtime subscriptions for live updates. The last
-remaining circuit breaker (`ip-api.com`) ships here.
+**Full plan:** `docs/PHASE4.md` (sprint-by-sprint build log, mirrors `docs/PHASE3.md`'s
+structure) and the approved planning doc at
+`C:\Users\muri\.claude\plans\okay-now-plan-the-deep-eich.md`. Locked decisions and design
+rationale for every sprint live in `docs/ADR-018.md` (Sprint 4.1) and later per-sprint ADRs.
 
-**Research timeline UI**: a frontend view of a past session's Debug Diary, consuming the
-`/research/{id}` and `/research/{id}/trace` endpoints that already shipped in Sprint 3a.5. The
-backend data is ready; this phase is purely the visual layer on top of it.
+**Scope, locked 2026-07-09: Phase 4 is a read-only, per-user dashboard — no admin role, no
+cross-user visibility.** `docs/BLUEPRINT.md`'s original Phase 4 sketch (world map, global
+request feed, IP intelligence, `admin_settings` kill-switch) assumed an admin role and tables
+that don't exist; that scope moves to an explicitly-named **Phase 4b**, not scheduled, not
+implied as built. Full reasoning: `docs/ADR-018.md` Part 3.
+
+**Six sprints:**
+- **4.1 — Backend hardening + honest-docs split.** `hf_embedding_breaker` (closes BACKLOG Item
+  6), `GET /research` session-list endpoint, reporter banner reorder, the shared
+  `call_reasoning_json()` helper (ends a token-truncation bug that independently hit three
+  agents — ADR-018 Part 1), migration 009 (Realtime publication for `security_events`), this
+  doc pass.
+- **4.2 — Theme system + SOC page.** Dark/light/system theme toggle; per-user breaker health
+  panel (`/health/circuit-breakers`, already built in Phase 2/3, now with a UI) + a live
+  `security_events` feed via Supabase Realtime.
+- **4.3 — Sessions, timeline, report UX, cancel.** Session history list + deep-linkable
+  session URLs; `ExecutionTimeline` UI (the Debug Diary's frontend, consuming
+  `/research/{id}/trace`, live since Sprint 3a.5); Sources/Confidence moved behind a "show
+  details" toggle; upload/research cancel support; in-browser PDF preview before upload commits.
+- **4.4 — Public landing + Google sign-in + usage limits.** `/` becomes a public marketing
+  page (today it force-redirects to `/dashboard`); Google OAuth signup; per-user
+  `usage_limits`, owner-editable in Supabase Studio, visible in the UI.
+- **4.5 — Project Q&A chatbot + rate limiting** (own threat-model planning pass first — a
+  public unauthenticated LLM endpoint is a new attack surface).
+- **4.6 — Multimodal PDF ingestion + Report Generation** (own threat-model planning pass
+  first — image-borne injection is a new, currently-uncovered attack surface; see
+  `docs/BACKLOG.md` Item 4).
+
+**What's buildable in 4.1–4.4 with zero new admin machinery:** every user already has RLS
+row-level access to their own `security_events` and `research_sessions`; Realtime honors that
+same policy per subscriber. A per-user events feed, breaker panel, and session history need no
+role system at all — see `docs/ADR-018.md` Part 3 for exactly which BLUEPRINT-sketched features
+require 4b instead.
 
 ---
 
@@ -105,11 +144,12 @@ a real sprint plan when its phase comes up; don't let it sit here forever unaddr
 
 | Date | Note | Status |
 |---|---|---|
-| 2026-07-08 | Idea: viewing multiple reports/sessions together (comparing runs side by side), raised while scoping the document management fix. Not designed yet — needs its own UX thinking, likely a Phase 4 concern once the timeline UI exists. | open |
+| 2026-07-08 | Idea: viewing multiple reports/sessions together (comparing runs side by side), raised while scoping the document management fix. | enabled-but-deferred 2026-07-09: Phase 4.1's `GET /research` + deep-linkable session URLs (Sprint 4.3) make this possible via two browser tabs; a dedicated compare view stays an owner note for 4b+ |
 | 2026-07-08 | `tldr` gets flagged as possible prompt injection by the HF Prompt Guard classifier (false positive on a short, out-of-distribution slang token). Deliberately won't-fix: the only levers (raise threshold / allowlist the word) either weaken the guard against real attacks or hand attackers a bypass prefix. | won't-fix by design |
-| 2026-07-09 | UX/product question raised while live-testing Sprint 3a.3: is showing the raw `## Sources` chunk list and the `## Confidence` section to the end user appropriate for a released/recruiter-facing product, or is that developer-stage debug info that should be hidden (or moved to an optional "show details" toggle) before any public release? Not decided — needs a product call, not just a code change. | open, needs Opus/product decision |
-| 2026-07-09 | Idea: an in-browser PDF preview step before a document is committed to a collection — user sees the PDF and explicitly approves/rejects/re-selects the file, instead of upload going straight from file picker to processing. Raised alongside the document management fix (Sprint 3a.2-3a.5 batch). Not designed. | open, future phase |
-| 2026-07-09 | Reminder (not new, re-flagged so it doesn't get lost): PyMuPDF only reads text, so images/figures/charts inside a PDF are invisible to ARGUS today; Google sign-in is still email/password only. Both already tracked in `docs/BACKLOG.md` from earlier sessions — noting here too since they came up again this session. | open, tracked in BACKLOG.md |
+| 2026-07-09 | UX/product question raised while live-testing Sprint 3a.3: is showing the raw `## Sources` chunk list and the `## Confidence` section to the end user appropriate for a released/recruiter-facing product, or is that developer-stage debug info? | decided + scheduled 2026-07-09: moves behind a "show details" toggle in Sprint 4.3, normal users see a clean answer + confidence badge |
+| 2026-07-09 | Idea: an in-browser PDF preview step before a document is committed to a collection — user sees the PDF and explicitly approves/rejects/re-selects the file, instead of upload going straight from file picker to processing. | scheduled 2026-07-09: pulled into Sprint 4.3 |
+| 2026-07-09 | Reminder (not new, re-flagged so it doesn't get lost): PyMuPDF only reads text, so images/figures/charts inside a PDF are invisible to ARGUS today; Google sign-in is still email/password only. | scheduled 2026-07-09: Google sign-in graduates into Sprint 4.4; image/figure reading graduates into Sprint 4.6 with its own threat-model planning pass (image-borne injection is a new channel) |
+| 2026-07-09 | n8n/Zapier automation, raised while scoping Phase 4. No concrete use case named yet. | parked — no build without an established need |
 |  |  |  |
 
 ---
@@ -123,9 +163,12 @@ session evaluates each on its merits rather than defaulting to "add it because i
 practice." This project's own rule applies here: no overengineering unless a need is genuinely
 established first.
 
-- **Rate limiting** — per-user or per-IP request throttling on the backend. Nothing like this
-  exists today. Whether it's warranted depends on real traffic patterns, which don't exist yet
-  outside personal/demo use.
+- **Rate limiting** — per-user or per-IP request throttling on the backend. **Graduated 2026-07-09:
+  the need is now established.** Sprint 4.5's public, unauthenticated chatbot endpoint is a real
+  attack/cost surface a login wall doesn't cover, so it ships bundled with rate limiting (in-process
+  per-IP sliding window + a persisted global daily cap). Scoped to that one public endpoint —
+  authenticated-route limiting (research/upload) is still deferred, no traffic evidence yet to
+  justify it there.
 - **Re-authentication** — forcing a fresh login before sensitive actions. Raised generally, not
   tied to a specific ARGUS flow yet — needs a concrete "which action, why" before it's a spec.
 - **Caching repeated requests with Redis** — would need a demonstrated case where the same query
@@ -144,7 +187,10 @@ established first.
 - `docs/PHASE3.md` — the detailed Phase 3 sprint-by-sprint build log and field notes.
 - `docs/PHASE3-TEST-SCRIPT.md` — the Phase 3a live verification walkthrough.
 - `docs/PHASE3B-TEST-SCRIPT.md` — the Phase 3b (Web Scout) live verification walkthrough.
+- `docs/PHASE4.md` — the Phase 4 sprint-by-sprint build log, same structure as PHASE3.md.
 - `docs/ADVERSARIAL-TESTS.md` — the running adversarial/chaos test suite.
 - `docs/BLUEPRINT.md` — the original target architecture and OWASP/ASI risk map.
 - `docs/ADR-017.md` — the Web Scout threat model, graph-wiring, and gating decisions.
+- `docs/ADR-018.md` — the shared reasoning-JSON helper, the HF embedding breaker, and the
+  Phase 4 / 4b split.
 - `CONTINUITY.md` (repo root, gitignored) — the private working log between sessions.

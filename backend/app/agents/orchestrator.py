@@ -2,7 +2,7 @@ import os
 from groq import AsyncGroq
 from app.agents.state import ResearchState
 from app.services.circuit_breaker import groq_breaker
-from app.services.llm_json import extract_json
+from app.services.llm_json import extract_json, call_reasoning_json
 
 _client = AsyncGroq(api_key=os.environ["GROQ_API_KEY"], timeout=30.0)
 
@@ -43,44 +43,24 @@ SYSTEM_PROMPT = (
 async def orchestrator_node(state: ResearchState) -> dict:
     query = state["query"]
 
-    async def _classify():
-        completion = await _client.chat.completions.create(
+    try:
+        # Token-budget/truncation handling now lives in call_reasoning_json
+        # (see llm_json.py) -- one retry at lower effort, ReasoningTruncated
+        # if still cut off. max_tokens=1024 and effort='medium' unchanged
+        # from Sprint 3b (medium: terse/lazy inputs like a bare "summarize"
+        # need real judgment, not just pattern-matching SYSTEM_PROMPT's
+        # examples). Any failure here, including ReasoningTruncated, falls
+        # into the except block below and fails open to a raw-query pass.
+        raw = await call_reasoning_json(
+            _client, groq_breaker,
             model="openai/gpt-oss-20b",
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": query},
             ],
             max_tokens=1024,
-            # Same reasoning-model trap as the synthesizer (see synthesizer.py): the
-            # hidden reasoning tokens and the JSON output share the max_tokens budget.
-            # At the old 300 with uncapped reasoning, a long reasoning pass could leave
-            # no room for the JSON, producing empty content -> _extract_json fails ->
-            # fail-open to raw query.
-            #
-            # Raised 768 -> 1024 (Sprint 3b): live-tested and caught the SAME failure
-            # mode recurring after the use_web addition below grew the system prompt by
-            # a full paragraph, which measurably increased how often reasoning ran long
-            # enough to truncate the JSON mid-object (JSONDecodeError, fail-open to
-            # use_web=False regardless of whether the web was actually needed). Two of
-            # four live test runs hit this the same day the field was added. The lesson
-            # from every prior instance of this bug applies again: any time a
-            # reasoning-model prompt grows, the token budget needs headroom bumped
-            # defensively, not just left alone because the added field "looks small."
-            #
-            # 'medium' (not 'low'): terse/lazy inputs with no few-shot match (e.g. a
-            # bare "summarize", no punctuation, no named topic) need actual judgment,
-            # not just pattern-matching the examples in SYSTEM_PROMPT. 'low' was too
-            # tight a leash for that. This reopens the original variability (reasoning
-            # can swing, same as the pre-fix default effort did). Worst
-            # case if reasoning still overruns: _extract_json fails and the except
-            # block below fails open to a raw-query pass, same as any other Orchestrator
-            # failure. It does not reproduce the Synthesizer's blank-answer bug.
-            extra_body={"reasoning_effort": "medium"},
+            reasoning_effort="medium",
         )
-        return completion.choices[0].message.content
-
-    try:
-        raw = await groq_breaker.call(_classify)
         parsed = extract_json(raw)
         intent = parsed.get("intent")
         refined_queries = parsed.get("refined_queries")

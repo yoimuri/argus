@@ -20,7 +20,7 @@ closing Phase 2, to make sure nothing here was secretly a Phase 2 requirement:
 |---|---|---|
 | Query intent understanding | Phase 3 (Orchestrator) | Retrieval-quality problem, not security |
 | Edit / mass-delete collections | Post-Phase-2 UX | Feature gap, not security |
-| Google sign-in | Pre-public-launch | Feature + privacy posture, not Phase 2 security |
+| Google sign-in | Sprint 4.4 (scheduled 2026-07-09) | Feature + privacy posture, not Phase 2 security |
 | Image/figure reading | Future phase, own threat model | New injection channel, but the channel doesn't exist yet: nothing for a Phase 2 gate to test |
 
 None of these were hidden Phase 2 blockers. Closing Phase 2 on the 13 gates skipped nothing
@@ -68,7 +68,10 @@ design problem. **Real prerequisite:** `docs/ADR-013.md`'s pre-launch checklist 
 policy, sub-processor disclosure) stops being theoretical once real public users can sign up.
 Sequence this against that checklist, not as a standalone OAuth wire-up.
 
-**Phase:** pre-public-launch.
+**Phase:** Scheduled into Sprint 4.4 (2026-07-09) — the public landing page IS the public
+launch surface, so Google sign-in and the ADR-013 checklist land together. Paired with a new
+`usage_limits` table (owner-editable, visible in the UI) so a public signup surface doesn't
+open unmetered free-tier usage. See `docs/PHASE4.md` and `docs/ROADMAP.md`.
 
 ---
 
@@ -124,21 +127,16 @@ that gets picked up.
 
 ## Item 6 — Embedding calls have no circuit breaker or retry (cold-start resilience)
 
-`embed_query` and `embed_chunks` (`backend/app/services/document_processor.py`) call the
-HuggingFace Inference API directly with no `hf_breaker` wrap and no retry/backoff. The HF
-serverless endpoint cold-starts and can return a 5xx or a "model loading" payload on the
-first hit after idle. As of the 2026-07-08 hardening, `embed_query` now *validates* its
-result and raises loudly on a bad shape (so the failure is visible instead of a silent bad
-vector), but there is still no graceful degradation: a cold-start surfaces as a failed
-research request rather than a retried or degraded one.
-
-The real fix mirrors what already exists for the injection classifier: wrap the HF call in
-`hf_breaker` (`backend/app/services/circuit_breaker.py`) and add one retry with short backoff
-for the model-loading case. Deferred deliberately so the diagnostic hardening could ship tight;
-this is the resilience layer on top of it.
-
-**Phase:** Phase 3 observability/resilience, or whenever a cold-start failure is actually
-observed live. Not urgent until the retriever logs show it happening.
+**Closed, Sprint 4.1 (2026-07-09).** `embed_query` and `embed_chunks`
+(`backend/app/services/document_processor.py`) now route through a dedicated
+`hf_embedding_breaker` (`backend/app/services/circuit_breaker.py`, separate from the
+prompt-injection classifier's `hf_breaker` — see `docs/ADR-018.md` Part 2 for why they don't
+share one), with one retry nested inside the breaker call. The `embed_chunks`/batch path,
+which previously had zero response validation at all (unlike `embed_query`), now shares the
+same cold-start `{"error": "..."}` detection via `_hf_embedding_once()`. A real outage now
+surfaces as a clean `503` with a retry hint on `/research` and upload, not a `500` or a silent
+bad vector. Per-attempt HTTP timeout also dropped 60s → 30s. Full design: `docs/ADR-018.md`
+Part 2; live verification: GATE-22 in `docs/ADVERSARIAL-TESTS.md`.
 
 ---
 

@@ -5,7 +5,30 @@
 **GitHub:** github.com/yoimuri
 **Status:** Pre-build. Specification phase (V3, audited + re-scoped)
 **Target:** Production-grade portfolio project, AI Automation / Security-aware AI Engineering showcase
-**Last updated:** June 2026
+**Last updated:** July 2026 (Sprint 4.1 doc-honesty pass)
+
+---
+
+## Changelog: V3 → Sprint 4.1 doc pass (July 9, 2026)
+
+This document is the original pre-build specification (June 2026) and is kept largely as
+written for that reason — most of it describes the target architecture, not a live status
+report (`docs/PHASE1.md`–`docs/PHASE4.md` and `docs/ROADMAP.md` are the actual build logs).
+Three sections had drifted far enough from what the code does that leaving them unedited
+would violate this project's own rule (docs never claim more than the code does), so they're
+corrected here rather than left to be discovered by a reader comparing spec to repo:
+
+| Section | What changed | Why |
+|---|---|---|
+| Circuit breaker table + degradation matrix | Real thresholds (all breakers: 5 fail / 120s window / 60s recovery — no traffic evidence yet to justify different tuning per service); HuggingFace's "falls back to local `sentence-transformers`" replaced with the real behavior (503 + breaker + one retry, no local fallback); added `hf_embedding` as its own breaker, separate from the prompt-injection classifier's `hf_prompt_guard` | A ~90MB local model was never actually shippable on a 512MB free-tier Render dyno — see `docs/ADR-018.md` Part 2 |
+| Database schema table | Marked which tables are built vs. Phase 4b-only (`request_log`, `admin_settings`, `circuit_breaker_log` don't exist) | See `docs/ADR-018.md` Part 3 |
+| API Surface | Replaced the aspirational endpoint list with the real current FastAPI routes | `/auth/login` (client-side via Supabase Auth, no backend route), `/soc/*`, `/admin/*`, and the MCP server are not built |
+| Build Roadmap, Phase 4 | Split into Phase 4 (read-only per-user dashboard, shipping now) and Phase 4b (admin-role SOC features: world map, IP intel, global feed, kill-switch) | See `docs/ADR-018.md` Part 3 and `docs/ROADMAP.md` |
+
+Everything else in this document (agent table, trust-level design, MCP server sketch, OWASP
+map's still-⏳ rows) is unchanged from V3 and should still be read as target-state, not
+current-state — check `docs/ROADMAP.md`'s "Where the project stands" table for what's
+actually live.
 
 ---
 
@@ -222,10 +245,11 @@ the quick-triage layer; Langfuse is the deep-dive layer. Different use cases, bo
 |---|---|---|
 | Groq | "AI temporarily unavailable" banner | Login, document library, saved reports |
 | pgvector | Falls back to BM25-only | Research runs, less semantically accurate |
-| HuggingFace embeddings | Falls back to local `sentence-transformers` | Slower, no SPOF |
+| HuggingFace embeddings (query/chunk) | Clean `503` with a retry hint, no local fallback (Sprint 4.1) | Everything not needing a fresh embedding — login, document library, saved reports |
+| HuggingFace prompt-injection classifier | Query guard falls back to regex-only (fails closed, not open) | Everything else |
 | Web Scout (Tavily) | Doc-context-only research, banner shown | All core RAG |
 | Langfuse | Traces stop; local log fallback | Debug Diary unaffected |
-| Redis | Rate limiting/cache disabled | Everything works, no burst protection |
+| Redis | Not built — no rate limiting or cache exists yet, so there's nothing to degrade | Everything (this is a "not yet built" row, not a live fallback) |
 | Supabase | Maintenance page | Nothing: acknowledged SPOF (see above) |
 
 **Circuit breaker**. Wraps every external call; opens after N failures in a window, returns
@@ -250,12 +274,18 @@ class CircuitBreaker:
             return fallback()
 ```
 
+**Real thresholds (as shipped, not as originally sketched):** every breaker below uses the
+same 5-fail / 120s-window / 60s-recovery tuning — there's no traffic evidence yet at this
+project's scale to justify tuning any one of them differently, so they intentionally match
+rather than each getting an invented number.
+
 | Service | Fail threshold | Window | Recovery wait | Fallback |
 |---|---|---|---|---|
-| Groq | 5 | 2 min | 60s | Local regex scan only; banner |
-| HuggingFace | 3 | 1 min | 120s | `sentence-transformers` local CPU |
-| Tavily | 5 | 2 min | 60s | Doc-context-only, noted in Debug Diary |
-| ip-api.com | 10 | 5 min | 300s | `ip_country = "unknown"` |
+| Groq (`groq_breaker`) | 5 | 2 min | 60s | Graceful "AI temporarily unavailable" banner; retrieved chunks/report still shown where possible |
+| HF prompt-injection classifier (`hf_breaker`, ADR-012) | 5 | 2 min | 60s | Query guard falls back to regex-only (fails closed) |
+| HF embeddings (`hf_embedding_breaker`, Sprint 4.1, ADR-018 Part 2 — separate from `hf_breaker` on purpose) | 5 | 2 min | 60s | Clean `503` with a retry hint on `/research` and upload; no local fallback (a `sentence-transformers` local model doesn't fit a 512MB free-tier dyno, so this row was corrected from the original V3 sketch, not left aspirational) |
+| Tavily (`tavily_breaker`, Sprint 3b) | 5 | 2 min | 60s | Doc-context-only, noted in Debug Diary + a report banner |
+| ip-api.com | — | — | — | **Not built.** Part of the Phase 4b "IP intelligence" scope (ADR-018 Part 3) — no code calls this service yet, so there is nothing to guard |
 | Langfuse | — | — | — | **No breaker** (ADR-016): the SDK delivers on a background thread, so its failures never reach the request path for a breaker to guard; emit calls are wrapped try/except and no-op on failure instead |
 
 **Chaos engineering (free, local):**
@@ -349,14 +379,23 @@ yet configured.
 
 ## Database Schema (core tables — full SQL generated at build time)
 
+**Built and live:**
+
 | Table | Purpose |
 |---|---|
 | `user_profiles`, `collections`, `documents`, `document_chunks` | Standard auth-scoped RAG data; `document_chunks` uses `vector(384)` + HNSW index (migration 007; was IVFFlat, changed for recall on small collections) |
-| `research_sessions` | One row per query; stores report, citations, RAGAS scores |
+| `research_sessions` | One row per query; stores report + status (`running`/`completed`/`completed_with_fallback`/`error`). No RAGAS columns — RAGAS scoring stays deferred, see `docs/ROADMAP.md` |
 | `execution_steps` | **The Debug Diary.** One row per agent step per session, written live by StepWriter |
-| `circuit_breaker_log` | Breaker state transitions, for SOC historical view |
-| `security_events`, `request_log` | Feed the SOC dashboard via Realtime |
-| `admin_settings` | `maintenance_mode` toggle, flippable from SOC UI |
+| `security_events` | Injection/quarantine event log. Feeds the Phase 4 per-user events feed via Realtime (migration 009) |
+
+**Phase 4b, not built** (see `docs/ADR-018.md` Part 3 — these all assume an admin role that
+doesn't exist yet):
+
+| Table | Purpose |
+|---|---|
+| `circuit_breaker_log` | Breaker state *transition history* for a historical view. Live breaker *state* is already served without a table (`/health/circuit-breakers` reads in-process breaker objects directly) |
+| `request_log` | Global cross-user request feed for a SOC "who's hitting the system" view |
+| `admin_settings` | `maintenance_mode` toggle + kill-switch, needs a role to gate who can flip it |
 
 RLS pattern (applied consistently across all user-scoped tables):
 ```sql
@@ -371,11 +410,27 @@ CREATE POLICY "own documents" ON documents USING (user_id = auth.uid());
 
 ## API Surface (FastAPI)
 
+**As actually built** (backend/main.py; auth is Supabase Auth client-side, so there is no
+`/auth/*` backend route — the frontend calls Supabase directly and forwards the resulting JWT):
+
 ```
-/auth/login · /health · /health/circuit-breakers
+/health [GET] · /health/circuit-breakers [GET]
 /collections [POST,GET] · /collections/{id} [DELETE]
-/documents/upload · /documents/{id}/status · /documents/{id} [DELETE]
-/research [POST] · /research/{id} · /research/{id}/report · /research/{id}/trace
+/collections/{id}/documents [POST,GET] · /documents/{id} [DELETE]
+/research [POST,GET] · /research/{id} [GET] · /research/{id}/trace [GET]
+```
+
+`GET /research` (Sprint 4.1) lists the caller's own sessions (`?collection_id=&limit=&offset=`)
+for the Phase 4 session-history UI — metadata only (`id, collection_id, query, status,
+created_at`), no `report` field, so opening the list doesn't pull every stored report over
+the wire.
+
+**Not built** — the original V3 sketch's `/soc/*`, `/admin/*`, and the MCP server all assume
+either an admin role (Phase 4b, see `docs/ADR-018.md` Part 3) or a service not yet started
+(MCP server, Phase 5). Listed here for traceability against the original spec, not as
+in-progress work:
+
+```
 /soc/events · /soc/requests · /soc/metrics · /soc/sessions/{user_id}/debug
 /soc/sessions/{user_id}/summarize [POST] · /soc/circuit-breakers
 /admin/settings [GET,PUT]
@@ -409,10 +464,23 @@ understood by intent and routed to broad, representative retrieval rather than a
 top-5-by-raw-query-similarity sample, producing a real answer instead of a "not enough information"
 refusal. See `docs/PHASE3.md` for the sprint status.
 
-**Phase 4: SOC Dashboard (weeks 11–13)**
-Supabase Realtime subscriptions · ExecutionTimeline UI (Debug Diary frontend) · live request feed
-· world map · IP intelligence panel · remaining circuit breaker (ip-api; HF has one since ADR-012,
-Tavily's shipped with Web Scout in Sprint 3b, Langfuse deliberately never gets one, see ADR-016).
+**Phase 4: read-only per-user dashboard (weeks 11–13) — split from the original sketch, see
+`docs/ADR-018.md` Part 3.**
+Supabase Realtime subscriptions (per-user `security_events` feed, migration 009) · breaker
+health panel (`/health/circuit-breakers`, already built in Phase 2/3) · ExecutionTimeline UI
+(Debug Diary frontend, consuming the Phase 3a `/research/{id}/trace` endpoint) · session history
+list (`GET /research`, Sprint 4.1) · theme system · public landing page · Google sign-in with
+owner-editable usage limits. No admin role, no cross-user visibility — everything here is scoped
+by the same RLS "own rows" policies already in place.
+
+**Phase 4b (not scheduled): admin-role SOC features**, moved out of Phase 4 because they need a
+role system and tables that don't exist yet — see `docs/ADR-018.md` Part 3 for the full
+reasoning: world map · global cross-user request feed (`request_log`) · IP intelligence panel ·
+`admin_settings` maintenance kill-switch · `circuit_breaker_log` history table · AI session
+summarizer · the `ip-api.com` breaker (nothing calls that service yet, so there's nothing to
+guard until this phase). Tavily's breaker shipped with Web Scout in Sprint 3b; HF's shipped in
+Phase 2 (classifier, ADR-012) and Sprint 4.1 (embeddings, ADR-018 Part 2); Langfuse deliberately
+never gets one, see ADR-016.
 
 **Phase 5: MCP Server, CI/CD, Polish (weeks 14–16)**
 MCP server as separate FastAPI app · full GitHub Actions pipeline (test + adversarial + build +

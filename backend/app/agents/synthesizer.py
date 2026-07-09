@@ -4,6 +4,7 @@ from app.agents.state import ResearchState
 from app.services.supabase_client import supabase_request
 from app.services.injection_patterns import matches_any
 from app.services.circuit_breaker import groq_breaker, CircuitBreakerOpen
+from app.services.llm_json import call_reasoning_json
 
 _client = AsyncGroq(api_key=os.environ["GROQ_API_KEY"], timeout=30.0)
 
@@ -106,33 +107,30 @@ async def synthesizer_node(state: ResearchState) -> dict:
     ]
     context = "\n\n".join(context_parts)
 
-    async def _synthesize():
-        completion = await _client.chat.completions.create(
+    # Sprint 2.4: run the synthesis call through the same Groq breaker as the
+    # query guard. If Groq is down/slow/open, return a graceful banner answer
+    # instead of a 500 — Phase 2 acceptance criterion #3 (no 500 when Groq is
+    # unreachable; the session must not hang).
+    #
+    # max_tokens=1024 caps output so a single research call can't run up
+    # unbounded token cost. reasoning_effort='low' pins gpt-oss-20b's hidden
+    # reasoning tokens to a small budget (they share max_tokens with the
+    # visible answer — the July 2026 vague-query bug was this budget getting
+    # starved). call_reasoning_json (llm_json.py) now checks finish_reason
+    # and retries once before raising ReasoningTruncated, caught below by the
+    # same generic except that already handles any other Groq failure.
+    trace_status = "ok"
+    try:
+        answer = await call_reasoning_json(
+            _client, groq_breaker,
             model="openai/gpt-oss-20b",
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {state['query']}"},
             ],
-            max_tokens=1024,  # cap output so a single research call can't run up unbounded token cost
-            # gpt-oss-20b is a REASONING model: it spends hidden "reasoning tokens"
-            # before any visible content, and max_tokens caps the two COMBINED. With
-            # default effort, reasoning varied 350-550+ tokens run-to-run on the same
-            # prompt and sometimes ate the whole budget — finish_reason='length', empty
-            # content, which surfaced as a blank "no answer" on perfectly-retrieved
-            # context (the July 2026 vague-query bug). 'low' pins reasoning to <70
-            # tokens, so the answer always fits. Passed via extra_body to stay robust
-            # across groq-sdk versions (requirements pins none).
-            extra_body={"reasoning_effort": "low"},
+            max_tokens=1024,
+            reasoning_effort="low",
         )
-        return completion.choices[0].message.content
-
-    # Sprint 2.4: run the synthesis call through the same Groq breaker as the
-    # query guard. If Groq is down/slow/open, return a graceful banner answer
-    # instead of a 500 — Phase 2 acceptance criterion #3 (no 500 when Groq is
-    # unreachable; the session must not hang).
-    trace_status = "ok"
-    try:
-        answer = await groq_breaker.call(_synthesize)
     except CircuitBreakerOpen:
         answer = ("The AI service is temporarily unavailable (too many recent failures). "
                   "Your documents and retrieved context are fine — please try again shortly.")

@@ -1,6 +1,7 @@
 import os
 import uuid
 import httpx
+from typing import Optional
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -10,7 +11,7 @@ from app.services.document_processor import extract_chunks_from_pdf_file, iter_e
 from app.services.supabase_client import supabase_request
 from app.services.injection_guard import check_query, InjectionDetected
 from app.services.injection_patterns import matches_any
-from app.services.circuit_breaker import groq_breaker, hf_breaker, tavily_breaker
+from app.services.circuit_breaker import groq_breaker, hf_breaker, hf_embedding_breaker, tavily_breaker, CircuitBreakerOpen
 from app.services import observability
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -64,6 +65,21 @@ async def _mark_document_failed(document, access_token):
         print(f"[ARGUS] could not mark document {document.get('id')} as failed: {patch_err}")
 
 
+async def _mark_session_error(session_id, access_token):
+    """Same never-crash stance as _mark_document_failed above: a diary write
+    failing here must not mask the real error that triggered the caller's
+    except block."""
+    if not session_id:
+        return
+    try:
+        await supabase_request(
+            "PATCH", f"research_sessions?id=eq.{session_id}", access_token,
+            json_body={"status": "error"},
+        )
+    except Exception as patch_err:
+        print(f"[ARGUS] could not mark session {session_id} as error: {patch_err}")
+
+
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
@@ -79,6 +95,7 @@ async def circuit_breaker_health(request: Request):
     return {
         "groq": await groq_breaker.snapshot(),
         "hf_prompt_guard": await hf_breaker.snapshot(),
+        "hf_embedding": await hf_embedding_breaker.snapshot(),
         "tavily": await tavily_breaker.snapshot(),
         "langfuse": observability.snapshot(),
     }
@@ -262,6 +279,15 @@ async def upload_document(collection_id: str, req: DocumentUploadRequest, reques
         # sit at 'processing' forever.
         await _mark_document_failed(document, request.state.access_token)
         raise
+    except CircuitBreakerOpen as cb_err:
+        # HF embedding breaker open (Sprint 4.1, D7/GATE-22): a clean 503 with a
+        # retry hint, not a 500 -- the document row is marked failed so it
+        # doesn't sit at 'processing' forever, same as any other upload failure.
+        await _mark_document_failed(document, request.state.access_token)
+        raise HTTPException(
+            status_code=503,
+            detail=f"Embedding service is temporarily unavailable, retry in ~{cb_err.retry_in_s:.0f}s.",
+        )
     except Exception as e:
         import traceback
         traceback.print_exc()  # full detail stays in Render's logs only
@@ -394,18 +420,21 @@ async def research(request: Request):
             "web_snippets": [],
             "web_status": "not_run",
         })
+    except CircuitBreakerOpen as cb_err:
+        # HF embedding breaker open (Sprint 4.1, D7/GATE-22): the retriever's
+        # embed_query call raises this straight out of the graph -- a clean
+        # 503 with a retry hint, not a 500. See circuit_breaker.py for why
+        # embedding gets its own breaker separate from hf_breaker.
+        await _mark_session_error(session_id, request.state.access_token)
+        raise HTTPException(
+            status_code=503,
+            detail=f"Embedding service is temporarily unavailable, retry in ~{cb_err.retry_in_s:.0f}s.",
+        )
     except Exception:
         # Best-effort status patch: a diary write failing here must not mask the
         # real error that triggered this except block (same never-crash rule as
         # StepWriter — see app/services/step_writer.py).
-        if session_id:
-            try:
-                await supabase_request(
-                    "PATCH", f"research_sessions?id=eq.{session_id}", request.state.access_token,
-                    json_body={"status": "error"},
-                )
-            except Exception as patch_err:
-                print(f"[ARGUS] could not mark session {session_id} as error: {patch_err}")
+        await _mark_session_error(session_id, request.state.access_token)
         raise
 
     # loop_count >= 2 means the critic ran twice, which only happens after a
@@ -430,6 +459,37 @@ async def research(request: Request):
         "session_id": session_id,
         "status": final_status,
     }
+
+
+@app.get("/research")
+async def list_research_sessions(
+    request: Request,
+    collection_id: Optional[str] = None,
+    limit: int = 20,
+    offset: int = 0,
+):
+    """Sprint 4.1 (D5): session list for the Phase 4 sessions UI. No `/soc/*`
+    surface -- this is a plain resource list, same shape as GET /collections.
+    Explicit user_id=eq. filter double-scopes on top of RLS's "own sessions"
+    policy (GATE-18); an unowned/foreign collection_id just yields no rows
+    from that same filter, no separate ownership check needed (GATE-19).
+    No report field -- history is metadata-only until a session is opened."""
+    limit = max(1, min(limit, 50))
+    offset = max(0, offset)
+
+    filters = f"user_id=eq.{request.state.user_id}"
+    if collection_id:
+        if not _valid_uuid(collection_id):
+            return []
+        filters += f"&collection_id=eq.{collection_id}"
+
+    return await supabase_request(
+        "GET",
+        f"research_sessions?{filters}"
+        "&select=id,collection_id,query,status,created_at"
+        f"&order=created_at.desc&limit={limit}&offset={offset}",
+        request.state.access_token,
+    )
 
 
 @app.get("/research/{session_id}")

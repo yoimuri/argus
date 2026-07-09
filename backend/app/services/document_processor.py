@@ -3,6 +3,8 @@ import re
 import httpx
 import fitz  # PyMuPDF
 
+from app.services.circuit_breaker import hf_embedding_breaker
+
 HF_TOKEN = os.environ["HF_TOKEN"]
 HF_EMBEDDING_URL = "https://router.huggingface.co/hf-inference/models/sentence-transformers/all-MiniLM-L6-v2/pipeline/feature-extraction"
 
@@ -43,15 +45,46 @@ def extract_chunks_from_pdf_file(file_path: str) -> list[str]:
     return chunk_text(full_text)
 
 
-async def _call_hf_embedding(inputs):
-    async with httpx.AsyncClient(timeout=60) as client:
+async def _hf_embedding_once(inputs):
+    async with httpx.AsyncClient(timeout=30) as client:
         response = await client.post(
             HF_EMBEDDING_URL,
             headers={"Authorization": f"Bearer {HF_TOKEN}"},
             json={"inputs": inputs},
         )
         response.raise_for_status()
-        return response.json()
+        result = response.json()
+
+    # HF's cold start (~20s model load) returns a 200 with an {"error": "..."}
+    # body, which raise_for_status() does not catch. Checked once here so both
+    # callers below (embed_chunks and embed_query) get it for free -- until
+    # Sprint 4.1, embed_chunks had NO validation at all, so this dict would
+    # silently reach iter_embedded_chunk_batches's zip() and iterate the
+    # dict's KEYS as if they were embedding vectors (BACKLOG 6).
+    if isinstance(result, dict) and "error" in result:
+        raise ValueError(f"HF embedding error response: {result['error']}")
+    return result
+
+
+async def _hf_embedding_with_retry(inputs):
+    """One retry before raising -- HF cold starts are common enough that a
+    bare first-attempt failure is often transient, not a real outage.
+
+    Retries INSIDE this function, which is itself the single unit passed to
+    hf_embedding_breaker.call() by _call_hf_embedding below -- so a real HF
+    outage counts as ONE breaker failure per request, not two. Wrapping it
+    the other way (breaker around each individual attempt) would double-count
+    every real outage and reach the fail_threshold twice as fast as intended.
+    """
+    try:
+        return await _hf_embedding_once(inputs)
+    except Exception as first_err:
+        print(f"[ARGUS] HF embedding call failed, retrying once: {first_err!r}")
+        return await _hf_embedding_once(inputs)
+
+
+async def _call_hf_embedding(inputs):
+    return await hf_embedding_breaker.call(_hf_embedding_with_retry, inputs)
 
 
 async def embed_chunks(chunks: list[str]) -> list[list[float]]:

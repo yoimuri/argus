@@ -21,8 +21,10 @@ DevOps roles, with security treated as a full build phase, not an afterthought.
 3. The backend extracts the text, splits it into chunks, embeds each chunk, stores it in a
    vector database
 4. Ask a question about that document
-5. A 3-agent pipeline retrieves the relevant chunks, drafts an answer grounded only in that
-   content, and formats a cited markdown report
+5. A multi-agent pipeline plans the search, pulls in a live web result when the question needs
+   current information the document wouldn't contain, retrieves the relevant chunks, drafts an
+   answer grounded only in that content, checks its own draft for unsupported claims, and formats
+   a cited markdown report with a confidence rating
 
 ## Stack
 
@@ -31,37 +33,48 @@ DevOps roles, with security treated as a full build phase, not an afterthought.
 | Frontend | Next.js 16, deployed on Vercel |
 | Backend | FastAPI, deployed on Render |
 | Database | Supabase (Postgres + pgvector + Auth + Storage) |
-| Agent orchestration | LangGraph (Retriever -> Synthesizer -> Reporter) |
+| Agent orchestration | LangGraph, 6-agent pipeline with a bounded self-check retry loop (Orchestrator -> Web Scout -> Retriever -> Synthesizer -> Critic -> Reporter) |
 | LLM inference | Groq (openai/gpt-oss-20b) |
+| Live web search | Tavily, called only when a question needs current or external information |
 | Embeddings | Hugging Face hosted Inference API (all-MiniLM-L6-v2) |
 | Prompt injection detection | Hugging Face hosted Inference API (protectai/deberta-v3-base-prompt-injection-v2) |
+| Observability | Langfuse (per-agent tracing) plus a Postgres execution log |
 | PDF extraction | PyMuPDF |
 
 ## Status
 
-- **Phase 1, MVP Core: complete.** Full pipeline works end to end on the live deployed URLs
-  above, not just localhost.
-- **Phase 2, Security Hardening: in progress, verified live, not just written.** Sprint 2.1
-  (document-level injection defense) and Sprint 2.2 (query-text injection guard) are
-  deployed and tested against the real app, not just code-complete. See `docs/PHASE2.md`
-  for exact current status, `docs/ADVERSARIAL-TESTS.md` for real pass/fail
-  results, and `docs/SECURITY-RESEARCH-LOG.md` for how current external CVEs and OWASP
-  guidance were checked against this specific codebase.
+Every phase below is verified live on the deployed URLs above, not just written: each was
+tested against the real app, and the results, pass and fail alike, are recorded in
+`docs/ADVERSARIAL-TESTS.md`.
 
-This project follows a deliberate 5-phase build plan, shipping and deploying after every
-phase instead of building everything at once. Full plan in `docs/BLUEPRINT.md`.
+- **Phase 1, MVP Core: complete.** Full retrieve-answer-report pipeline, end to end.
+- **Phase 2, Security Hardening: complete.** Document-level injection defense, a two-layer
+  query-text guard, trust-level tagging, and the circuit breakers. See `docs/PHASE2.md` and
+  `docs/SECURITY-RESEARCH-LOG.md`.
+- **Phase 3, Full Agent Pipeline + Observability: complete.** The Orchestrator (query
+  planning), the Critic with a bounded self-check retry loop, Langfuse tracing, the Postgres
+  execution log, and the Web Scout live-web-search agent, each behind its own threat model.
+  See `docs/PHASE3.md`.
+- **Phase 4, dashboard + public landing: in progress.** A live view of the system's own health
+  and security events, a research-session timeline UI, a public landing page, and Google
+  sign-up. Six sprints; the first (backend hardening) is code-complete but not yet live. Scope
+  in `docs/ROADMAP.md` and `docs/PHASE4.md`.
+
+This project follows a deliberate phased build plan, shipping and deploying after every phase
+instead of building everything at once. Full plan in `docs/BLUEPRINT.md`, current roadmap in
+`docs/ROADMAP.md`.
 
 ## Security approach
 
 The design assumes detection will sometimes miss, so it leans on containment as much as
-detection. Everything the agents see is labeled by origin. Uploaded document, web search, the
-user's own question, and the agents are instructed to treat reference content as data to
+detection. Everything the agents see is labeled by origin — uploaded document, live web result,
+the user's own question — and the agents are instructed to treat reference content as data to
 summarize, never as instructions to follow. Document content is scanned for injection patterns
-both before storage and again before the model reads it. Direct attacks in the query box go
-through a two-layer check: a purpose-built classifier that judges intent (so reworded attacks
-are caught, not just known keywords), backed by a regex fallback that fails closed if the
-classifier is unreachable. The point is that even a missed injection is still handled as data,
-never executed.
+both before storage and again before the model reads it, and the same scan runs on every live
+web result before it reaches the model. Direct attacks in the query box go through a two-layer
+check: a purpose-built classifier that judges intent (so reworded attacks are caught, not just
+known keywords), backed by a regex fallback that fails closed if the classifier is unreachable.
+The point is that even a missed injection is still handled as data, never executed.
 
 Around that sit the operational safeguards: database-level authorization (Postgres Row Level
 Security) rather than app-code checks alone, circuit breakers on every external AI call so an
@@ -77,13 +90,15 @@ argus/
 ├── frontend/               Next.js app (Vercel)
 ├── backend/
 │   └── app/
-│       ├── agents/          LangGraph pipeline: retriever, synthesizer, reporter
+│       ├── agents/          LangGraph pipeline: orchestrator, web_scout, retriever,
+│       │                    synthesizer, critic, reporter
 │       ├── middleware/      JWT auth (Supabase ES256/JWKS)
-│       └── services/        PDF processing, Supabase client, injection guard
+│       └── services/        PDF processing, Supabase client, injection guard, circuit
+│                            breakers, observability, step writer
 ├── supabase/
 │   └── migrations/          SQL, run in order in the Supabase SQL editor
-└── docs/                    ADRs, adversarial test suite, security research log,
-                             BLUEPRINT.md (full spec), PHASE1.md / PHASE2.md (build logs)
+└── docs/                    ADRs, adversarial test suite, security research log, ROADMAP.md,
+                             BLUEPRINT.md (full spec), PHASE1-4 build logs
 ```
 
 ## Known limitations (accepted, not hidden)
@@ -95,10 +110,6 @@ argus/
 - Render's free tier has a cold-start delay after inactivity
 - No keyword list or classifier catches every possible attack phrasing, this is a
   structural limit of the approach, not a bug, see `docs/ADVERSARIAL-TESTS.md`
-- Vague or meta questions ("summarize for me") can return "no relevant information found"
-  instead of a real answer. Retrieval currently pulls a fixed top-5-by-similarity sample
-  with no query-intent understanding. Planned fix is Phase 3's Orchestrator agent, not a
-  quick prompt patch, see `docs/BLUEPRINT.md`
 
 ## Privacy
 
@@ -125,8 +136,10 @@ fill in your own Supabase, Hugging Face, and Groq credentials.
 
 ## Documentation
 
-- `docs/BLUEPRINT.md`, full technical specification and roadmap
-- `docs/PHASE1.md`, `docs/PHASE2.md`, sprint-by-sprint build plan and build log
+- `docs/BLUEPRINT.md`, full technical specification; `docs/ROADMAP.md`, the current
+  phase-by-phase plan for everything left to build
+- `docs/PHASE1.md`, `docs/PHASE2.md`, `docs/PHASE3.md`, `docs/PHASE4.md`, sprint-by-sprint build
+  plan and log
 - `docs/ADR-*.md`, individual architecture decisions, including real bugs and how they
   were found and fixed
 - `docs/ADVERSARIAL-TESTS.md`, security test cases and real results, pass and fail alike
