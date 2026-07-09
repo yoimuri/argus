@@ -65,22 +65,31 @@ export async function proxy(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser()
 
-  if (
-    !user &&
-    !request.nextUrl.pathname.startsWith('/login') &&
-    !request.nextUrl.pathname.startsWith('/auth')
-  ) {
-    const url = request.nextUrl.clone()
-    url.pathname = '/login'
-    const redirectResponse = NextResponse.redirect(url)
-    redirectResponse.headers.set('Content-Security-Policy', cspHeader)
-    // Drop any stale last_active left over from a prior session. Without this,
-    // logging back in right here reuses that old timestamp on the very next
-    // authenticated request, the idle check below sees it's >30 min old, and
-    // force-signs-out a session that just started (bug: "first login fails,
-    // second works" - the false idle-signout is what deletes the stale cookie).
-    redirectResponse.cookies.delete('last_active')
-    return redirectResponse
+  if (!user) {
+    // Any unauthenticated request is a good place to drop a stale
+    // last_active left over from a prior session. The July 8 fix only
+    // cleared this in the redirect branch below (a protected page bouncing
+    // an unauthenticated visitor to /login) -- it missed the case where the
+    // browser lands on /login or /auth directly (typed URL, bookmark, a
+    // client-side redirect after a 401), which never passes through that
+    // branch at all. In that missed case the stale cookie survives the next
+    // login, and the very first authenticated request afterward sees it's
+    // >30 min old and force-signs the brand-new session back out -- the same
+    // "works on attempt two, not one" bug, reached by a different route than
+    // the one already fixed. Found live 2026-07-09.
+    supabaseResponse.cookies.delete('last_active')
+
+    if (
+      !request.nextUrl.pathname.startsWith('/login') &&
+      !request.nextUrl.pathname.startsWith('/auth')
+    ) {
+      const url = request.nextUrl.clone()
+      url.pathname = '/login'
+      const redirectResponse = NextResponse.redirect(url)
+      redirectResponse.headers.set('Content-Security-Policy', cspHeader)
+      redirectResponse.cookies.delete('last_active')
+      return redirectResponse
+    }
   }
 
   // Idle timeout, checked on whatever the next request happens to be, not a

@@ -103,17 +103,25 @@ the project's gaps table. Two are now resolved (below), two are still open:
   chunk when it contains an injected tail, even if most of the chunk is legitimate content.
   Fails safe, but loses legitimate retrievable content as collateral. `backend/main.py` upload
   handler (Sprint 2.3). Still open.
-- ~~**Double login on first attempt.**~~ **Fixed 2026-07-08.** Root cause: `last_active`
-  (the idle-timeout cookie, `frontend/proxy.ts`) is a 7-day cookie but was only ever deleted
-  inside the idle-timeout's own redirect. Any other way a session ended — the `/auth/signout`
-  route, or a Supabase session simply expiring — left it behind with a stale timestamp. The
-  next login's first authenticated request compared "now" against that stale timestamp, saw
-  >30 minutes, and force-signed-out a session that had just started; that false idle-signout
-  was the only thing that deleted the stale cookie, which is why the second attempt always
-  worked. Fix: delete `last_active` in `frontend/proxy.ts`'s "not logged in" redirect branch
-  and in `frontend/app/auth/signout/route.ts`, so no login ever inherits a stale idle timestamp.
-  Code-complete, `npm run build` clean. Needs a live re-test (log out, wait past 30 min or
-  manually age the cookie, log back in once) to flip to verified.
+- ~~**Double login on first attempt.**~~ **Fixed 2026-07-08, gap found + closed 2026-07-09.**
+  Root cause: `last_active` (the idle-timeout cookie, `frontend/proxy.ts`) is a 7-day cookie
+  but was only ever deleted inside the idle-timeout's own redirect. Any other way a session
+  ended — the `/auth/signout` route, or a Supabase session simply expiring — left it behind
+  with a stale timestamp. The next login's first authenticated request compared "now" against
+  that stale timestamp, saw >30 minutes, and force-signed-out a session that had just started;
+  that false idle-signout was the only thing that deleted the stale cookie, which is why the
+  second attempt always worked. The July 8 fix (delete `last_active` in `frontend/proxy.ts`'s
+  "not logged in, redirected from a protected page" branch, and in
+  `frontend/app/auth/signout/route.ts`) had never been live-verified and turned out to only
+  cover one of two routes into this state. **Found live 2026-07-09** (Clint hit `reason=idle`
+  on a genuinely first login attempt, not via the redirect-from-protected-page path): landing
+  on `/login` directly — typed URL, bookmark, or a client-side redirect after a 401 — skips
+  that branch entirely, so a stale cookie from a session that ended >30 min earlier was never
+  cleared before the next login. Fixed same day: `proxy.ts` now clears `last_active` for
+  *any* unauthenticated request, not just the redirect-into-`/login` case. `npm run build`
+  clean. Still needs a live re-test (log out or let idle timeout fire, wait 30+ min, then log
+  in via a direct `/login` visit — not via being bounced there — and confirm it succeeds on
+  the first try) before flipping to fully verified.
 - ~~**No per-collection file list.**~~ **Fixed and live-verified 2026-07-08**, as part of the
   Phase 3a document-management fix (`docs/PHASE3.md`) — opening a collection now shows its name
   and document list.
