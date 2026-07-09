@@ -13,7 +13,7 @@ _client = AsyncGroq(api_key=os.environ["GROQ_API_KEY"], timeout=30.0)
 # the merge CONTINUITY.md said to do once a third caller appeared.
 
 
-async def scan_chunks(chunks: list[dict], user_id: str, access_token: str) -> list[dict]:
+async def scan_chunks(chunks: list[dict], user_id: str, access_token: str, user_agent: str = "") -> list[dict]:
     """
     Runs before the model sees anything. Checks each chunk for injection phrases.
     Flagged chunks get logged to security_events and removed from the stack.
@@ -41,6 +41,7 @@ async def scan_chunks(chunks: list[dict], user_id: str, access_token: str) -> li
                     "event_type": "content_as_instruction",
                     "source": f"chunk:{chunk.get('id', 'unknown')}",
                     "detail": content[:300],
+                    "user_agent": user_agent[:300],
                 },
             )
         except Exception as log_err:
@@ -86,7 +87,7 @@ async def synthesizer_node(state: ResearchState) -> dict:
 
     # Lock #2: scan before the model sees anything. Flagged chunks are logged
     # to security_events and stripped here. Model only ever gets the clean list.
-    chunks = await scan_chunks(chunks, state["user_id"], state["access_token"])
+    chunks = await scan_chunks(chunks, state["user_id"], state["access_token"], state.get("user_agent", ""))
 
     if not chunks and not web_snippets:
         # Every retrieved chunk was flagged, and there's no web content to

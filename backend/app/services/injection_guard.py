@@ -9,7 +9,7 @@ class InjectionDetected(Exception):
     pass
 
 
-async def check_query(query: str, user_id: str, access_token: str) -> None:
+async def check_query(query: str, user_id: str, access_token: str, user_agent: str = "") -> None:
     """Two-layer, fail-closed query guard.
 
     ADR-012: the intent layer used to be a general-purpose Groq LLM prompted to
@@ -69,6 +69,7 @@ async def check_query(query: str, user_id: str, access_token: str) -> None:
                 "event_type": "query_injection_blocked",
                 "source": f"{layer}:score={score:.4f}" if score is not None else layer,
                 "detail": query[:300],
+                "user_agent": user_agent[:300],
             },
         )
     except Exception as log_err:

@@ -122,6 +122,7 @@ async def web_scout_node(state: ResearchState) -> dict:
                         "event_type": "web_content_as_instruction",
                         "source": f"web_scraped:{url}",
                         "detail": content[:300],
+                        "user_agent": state.get("user_agent", "")[:300],
                     },
                 )
             except Exception as log_err:

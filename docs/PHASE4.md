@@ -206,6 +206,27 @@ replacement path was checked against all four downloaded lists and matches nothi
 `/health` endpoint keeps its name — it's only called server-to-server (Render's own checks),
 where browser filter lists don't exist. No browser-side workaround needed from any visitor.
 
+**Added, same session: browser/OS on each security event.** Clint asked, live-testing the SOC
+page, whether the event detail was thin for a "SOC" dashboard — no IP, no browser, no way to
+tell what triggered a flagged query beyond the query text itself. Fair question. `security_events`
+rows previously stored only `event_type`, `source`, `detail` (first 300 chars), `user_id`, and a
+timestamp. Migration `010_security_event_user_agent.sql` adds a `user_agent` column. All four
+write sites now capture it: `check_query()`'s query-injection block (`injection_guard.py`, now
+takes `user_agent` as a parameter, threaded from `/research`'s request headers),
+`vector_shadow_quarantined` at upload time (`main.py`), `content_as_instruction` in the
+synthesizer's chunk scan, and `web_content_as_instruction` in Web Scout — the latter two read it
+off `ResearchState["user_agent"]`, set once in `/research` and passed straight through
+`research_graph.ainvoke`. `SecurityEventsFeed.tsx` selects and renders it (raw string, truncated,
+same treatment as `detail`). No UA-parsing library — raw string is enough, adding one would be
+over-engineering a cosmetic display concern.
+
+IP address and a genuinely tamper-evident (service-key) write path were deliberately NOT added
+here — they're still Phase 4b, as the original plan scoped: the party being logged currently
+writes these rows with their own login token (migration 004's INTEGRITY CAVEAT), so IP capture
+alone wouldn't be trustworthy forensic data, just data that looks more forensic than it is.
+User-Agent doesn't have that problem — it's contextual, not evidentiary — which is why it moved
+now and IP didn't.
+
 **Verify live (manual steps, Clint's):**
 1. `git push` (Sprint 4.2's frontend files, including this fix) — Vercel redeploys.
 2. Log in, confirm the theme toggle (Light/Dark/System) actually changes the page, persists
@@ -216,7 +237,9 @@ where browser filter lists don't exist. No browser-side workaround needed from a
    that's the regression check for the `/status/breakers` rename (the old `/health/*` path was
    blocked by EasyPrivacy, see write-up above). Trigger a query that gets blocked (a known
    injection payload) and confirm the security event appears in the feed **live**, without a
-   page reload — this is GATE-20 from `docs/ADVERSARIAL-TESTS.md`, now actually testable.
+   page reload — this is GATE-20 from `docs/ADVERSARIAL-TESTS.md`, now actually testable. Also
+   confirm the new event row shows a browser/OS line under the detail text (migration 010 — paste
+   it into the Supabase SQL editor first if you haven't).
 4. DevTools console: confirm no CSP violation errors (the `wss://` connect-src entry is what this
    check verifies).
 5. Optional: restart Claude Code so the `ui-ux-pro-max` plugin (installed but not yet loaded this

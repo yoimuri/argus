@@ -6,6 +6,7 @@ class ResearchState(TypedDict):
     collection_id: str
     access_token: str
     user_id: str
+    user_agent: str        # raw request header, logged onto security_events rows
     session_id: str
     step_index: int
     intent: str

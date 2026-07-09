@@ -10,6 +10,7 @@ interface SecurityEvent {
   event_type: string
   source: string | null
   detail: string | null
+  user_agent: string | null
   created_at: string
 }
 
@@ -42,7 +43,7 @@ export default function SecurityEventsFeed() {
       // user_id filter needed for a direct Supabase read like this one.
       const { data, error } = await supabase
         .from('security_events')
-        .select('id,user_id,event_type,source,detail,created_at')
+        .select('id,user_id,event_type,source,detail,user_agent,created_at')
         .order('created_at', { ascending: false })
         .limit(INITIAL_LIMIT)
 
@@ -121,6 +122,11 @@ export default function SecurityEventsFeed() {
                 {event.detail && (
                   <p className="mt-1 truncate text-xs text-ink-secondary" title={event.detail}>
                     {event.detail}
+                  </p>
+                )}
+                {event.user_agent && (
+                  <p className="mt-0.5 truncate text-xs text-ink-muted" title={event.user_agent}>
+                    {event.user_agent}
                   </p>
                 )}
               </div>

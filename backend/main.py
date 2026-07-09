@@ -184,7 +184,8 @@ async def upload_document(collection_id: str, req: DocumentUploadRequest, reques
         raise HTTPException(status_code=404, detail="Collection not found.")
 
     token = request.state.access_token
-    
+    user_agent = request.headers.get("user-agent", "")[:300]
+
     storage_url = f"{SUPABASE_URL}/storage/v1/object/documents/{req.file_path}"
     headers = {
         "Authorization": f"Bearer {token}",
@@ -258,6 +259,7 @@ async def upload_document(collection_id: str, req: DocumentUploadRequest, reques
                                 "event_type": "vector_shadow_quarantined",
                                 "source": f"document:{document['id']}:chunk:{c['chunk_index']}",
                                 "detail": c["content"][:300],
+                                "user_agent": user_agent,
                             },
                         )
                     except Exception as log_err:
@@ -376,8 +378,10 @@ async def research(request: Request):
     if not query or not collection_id:
         raise HTTPException(status_code=400, detail="query and collection_id are required.")
 
+    user_agent = request.headers.get("user-agent", "")[:300]
+
     try:
-        await check_query(query, request.state.user_id, request.state.access_token)
+        await check_query(query, request.state.user_id, request.state.access_token, user_agent)
     except InjectionDetected:
         raise HTTPException(status_code=400, detail="Query blocked, possible prompt injection detected.")
 
@@ -416,6 +420,7 @@ async def research(request: Request):
             "collection_id": collection_id,
             "access_token": request.state.access_token,
             "user_id": request.state.user_id,
+            "user_agent": user_agent,
             "session_id": session_id,
             "step_index": 0,
             "intent": "specific",
