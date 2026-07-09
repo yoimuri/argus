@@ -150,6 +150,7 @@ a real sprint plan when its phase comes up; don't let it sit here forever unaddr
 | 2026-07-09 | Idea: an in-browser PDF preview step before a document is committed to a collection — user sees the PDF and explicitly approves/rejects/re-selects the file, instead of upload going straight from file picker to processing. | scheduled 2026-07-09: pulled into Sprint 4.3 |
 | 2026-07-09 | Reminder (not new, re-flagged so it doesn't get lost): PyMuPDF only reads text, so images/figures/charts inside a PDF are invisible to ARGUS today; Google sign-in is still email/password only. | scheduled 2026-07-09: Google sign-in graduates into Sprint 4.4; image/figure reading graduates into Sprint 4.6 with its own threat-model planning pass (image-borne injection is a new channel) |
 | 2026-07-09 | n8n/Zapier automation, raised while scoping Phase 4. No concrete use case named yet. | parked — no build without an established need |
+| 2026-07-09 | Response time on research queries/uploads feels slow, raised during Sprint 4.1 live testing. Not diagnosed yet — plausible contributors: Render free-tier cold start, sequential agent calls (orchestrator → web_scout → retriever → synthesizer → critic → reporter, each a network round trip), Groq reasoning-model latency, HF embedding round trips. No profiling done yet to say which one actually dominates. | open, not designed — needs profiling before any fix is picked, not a guess-and-optimize |
 |  |  |  |
 
 ---

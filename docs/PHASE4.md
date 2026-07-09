@@ -99,13 +99,79 @@ across every touched file.
 
 ### Sprint 4.2 — Theme system + frontend foundation + SOC page
 
-**Status:** ⏳ Not started.
+**Status:** 🟡 Code-complete 2026-07-09, not yet live-verified. `npm run build` clean; dev-server
+smoke test confirmed the CSP nonce wires correctly end to end and auth-gated routes still redirect
+correctly (see "Verify live" below for exactly what still needs a real login session).
 
-Planned: dark/light/system theme toggle (CSS-variable tokens, nonce'd inline init script to
-avoid flash-of-wrong-theme); `frontend/utils/api.ts` shared fetch helper; dashboard nav layout;
-`/dashboard/soc` — breaker health cards (poll `/health/circuit-breakers`) + a live
-`security_events` feed via Supabase Realtime (migration 009 makes this possible). Full detail in
-the approved planning doc.
+**What was built:**
+- Design system generated from the locked design direction (light-first minimal, cyan/blue
+  accent, dense-console SOC variant, dark+light+system) using the `dataviz` skill (already
+  available) rather than only `ui-ux-pro-max` (installed this sprint but needs a Claude Code
+  restart to load — see Clint's manual steps) — status colors, chrome/ink tokens, and contrast
+  checks came from the dataviz skill's validated reference palette and its `validate_palette.js`
+  script; the accent (`#0e7490` light / `#22b8d4` dark) was picked and verified against both
+  surfaces with that same script (5.22:1 / 7.36:1 against their respective surfaces), not
+  eyeballed. `frontend/app/globals.css` — semantic CSS-variable tokens (`--color-surface`,
+  `--color-ink`, `--color-accent`, `--color-good/warning/serious/critical`, etc.) in `:root` +
+  `[data-theme="dark"]`, mapped into Tailwind v4's `@theme inline` so `bg-*`/`text-*`/`border-*`
+  utilities generate automatically; verified present with real hex values in the compiled CSS
+  output, not just assumed from a clean build (Tailwind v4 doesn't error on an unresolved token,
+  it just silently drops the utility).
+- `frontend/components/theme/ThemeProvider.tsx` + `ThemeToggle.tsx` (D11): light/dark/system,
+  all three always visible in a segmented control, `system` reacts live to an OS-level change via
+  `matchMedia` while the tab is open.
+- `frontend/app/layout.tsx`: nonce'd inline theme-init script in `<head>`, reading the same
+  `localStorage` key and fallback logic as `ThemeProvider`'s lazy state initializer so the two
+  can never disagree (confirmed against Next 16's own bundled docs,
+  `node_modules/next/dist/docs/01-app/02-guides/preventing-flash-before-hydration.md` — the
+  pattern matches this project's implementation exactly). Confirmed live in a dev-server request
+  that the script's `nonce` attribute matches the `Content-Security-Policy` header's nonce on the
+  same response.
+- `frontend/utils/api.ts` (D3): `apiFetch`/`apiJson<T>` + `ApiError`. `UploadPanel.tsx` refactored
+  onto it mechanically — every hand-rolled `getToken()`+`fetch()` block replaced, exact original
+  per-call-site error-message wording preserved (a shared `describeError()` helper was corrected
+  mid-build after it would have started showing response bodies in messages that never showed
+  them before — caught by re-reading each original call site's exact format before finalizing,
+  not assumed). No JSX/visual changes (D2's scope: this sprint touches UploadPanel only for the
+  api-helper refactor).
+- `frontend/app/dashboard/layout.tsx` (new, D1): shared nav (Workspace / Sessions / SOC) + theme
+  toggle + logout, hosts the `getUser()` auth check once for every route under `/dashboard`
+  (dual-guard alongside `proxy.ts`) instead of each page repeating it. `dashboard/page.tsx`
+  slimmed accordingly (no longer does its own auth check). Note: `Sessions` links to
+  `/dashboard/sessions`, which doesn't exist until Sprint 4.3 — a known, temporary 404 until next
+  sprint, not an oversight.
+- `frontend/app/dashboard/soc/page.tsx` + `BreakerPanel.tsx` (polls `/health/circuit-breakers`
+  every 20s + on window focus; status cards colored via the fixed status palette; Langfuse
+  enabled/disabled chip; renders its own fetch-failure state instead of going silently stale) +
+  `SecurityEventsFeed.tsx` (initial 50-row select + Supabase Realtime `postgres_changes` INSERT
+  subscription, `supabase.realtime.setAuth(token)` before subscribing so Realtime evaluates RLS
+  per-subscriber; subscription state — connecting/live/reconnecting/disconnected — always
+  rendered, per D4's "a broken feed must be visible" rule).
+- `frontend/proxy.ts`: explicit `wss://` variant of the Supabase URL added to `connect-src` (D9)
+  — confirmed live in the dev-server CSP header, correctly derived from `NEXT_PUBLIC_SUPABASE_URL`.
+
+**A real side effect found, not a regression:** adding `headers()` to the root layout (needed to
+read the CSP nonce for the theme-init script) forces the whole app to dynamic rendering, which
+flipped `/` from a statically-generated page to server-rendered-per-request (confirmed in the
+build output route list). Harmless today since `/` is just a redirect to `/dashboard`, but this
+is the exact tradeoff Next's own CSP docs describe ("all pages must be dynamically rendered" with
+nonce-based CSP) and is worth re-examining in Sprint 4.4, once `/` becomes the real public
+marketing page where static caching would otherwise matter.
+
+**Verify live (manual steps, Clint's):**
+1. `git push` (Sprint 4.2's frontend files) — Vercel redeploys.
+2. Log in, confirm the theme toggle (Light/Dark/System) actually changes the page, persists
+   across a reload, and "System" follows your OS setting live if you change it while the tab is open.
+3. Open `/dashboard/soc` — confirm breaker cards render with real data (not stuck on "Loading"),
+   colors match state (green closed / amber half_open / red open), and the Langfuse chip shows
+   correctly. Trigger a query that gets blocked (a known injection payload) and confirm the
+   security event appears in the feed **live**, without a page reload — this is GATE-20 from
+   `docs/ADVERSARIAL-TESTS.md`, now actually testable.
+4. DevTools console: confirm no CSP violation errors (the `wss://` connect-src entry is what this
+   check verifies).
+5. Optional: restart Claude Code so the `ui-ux-pro-max` plugin (installed but not yet loaded this
+   session) is available for a second design-system pass if you want one — not required, the
+   design system already shipped via the `dataviz` skill + manual synthesis.
 
 ---
 

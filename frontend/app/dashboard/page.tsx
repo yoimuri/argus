@@ -1,22 +1,18 @@
 import { createClient } from '@/utils/supabase/server'
-import { redirect } from 'next/navigation'
 import UploadPanel from './UploadPanel'
 
+// Auth is already guarded by dashboard/layout.tsx (dual-guard alongside
+// proxy.ts) -- this page only needs the user for the greeting.
 export default async function DashboardPage() {
   const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    redirect('/login')
-  }
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
 
   return (
-    <main style={{ maxWidth: 480, margin: '4rem auto' }}>
-      <h1>Welcome, {user.email}</h1>
-      <form action="/auth/signout" method="post">
-        <button type="submit">Log out</button>
-      </form>
+    <div>
+      <h1 className="text-lg font-semibold text-ink">Welcome, {user?.email}</h1>
       <UploadPanel />
-    </main>
+    </div>
   )
 }

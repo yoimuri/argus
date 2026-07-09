@@ -2,10 +2,22 @@
 
 import { useState, useEffect, useCallback, type FormEvent } from 'react'
 import { createClient } from '@/utils/supabase/client'
+import { apiFetch, apiJson, ApiError } from '@/utils/api'
 import ReactMarkdown from 'react-markdown'
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024 // matches backend; Render free tier is 512 MB RAM
+
+// Same "(status)." vs "(status): body" vs "network error" split every
+// handler below already used before the api.ts refactor (Sprint 4.2, D3) --
+// includeBody defaults false to match the handlers that only ever showed the
+// status code (create/delete collection, delete document); handleUpload and
+// handleResearch pass true since they always showed the raw response text.
+function describeError(err: unknown, prefix: string, includeBody = false): string {
+  if (err instanceof ApiError) {
+    return includeBody ? `${prefix} (${err.status}): ${err.body}` : `${prefix} (${err.status}).`
+  }
+  return `Network error: ${err instanceof Error ? err.message : 'unknown'}`
+}
 
 interface Collection {
   id: string
@@ -42,21 +54,15 @@ export default function UploadPanel() {
   // setState call that runs unconditionally before any await inside an effect).
   const [loadingCollections, setLoadingCollections] = useState(true)
 
-  async function getToken() {
-    const supabase = createClient()
-    const { data: { session } } = await supabase.auth.getSession()
-    return session?.access_token
-  }
-
   // Pure fetch, no setState inside: this can be safely called from both an
   // effect (mount) and a click handler (after create/delete) without either
   // caller's setState-gating rules fighting each other.
   const fetchCollections = useCallback(async (): Promise<Collection[]> => {
-    const token = await getToken()
-    const res = await fetch(`${API_URL}/collections`, {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-    return res.ok ? res.json() : []
+    try {
+      return await apiJson<Collection[]>('/collections')
+    } catch {
+      return []
+    }
   }, [])
 
   useEffect(() => {
@@ -84,11 +90,11 @@ export default function UploadPanel() {
   // Same pure-fetch shape as fetchCollections: callable from the mount effect
   // below AND after a successful upload/delete without setState-gating conflicts.
   const fetchDocuments = useCallback(async (id: string): Promise<DocumentRow[]> => {
-    const token = await getToken()
-    const res = await fetch(`${API_URL}/collections/${id}/documents`, {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-    return res.ok ? res.json() : []
+    try {
+      return await apiJson<DocumentRow[]>(`/collections/${id}/documents`)
+    } catch {
+      return []
+    }
   }, [])
 
   useEffect(() => {
@@ -121,22 +127,15 @@ export default function UploadPanel() {
     e.preventDefault()
     setError(null)
     try {
-      const token = await getToken()
-      const res = await fetch(`${API_URL}/collections`, {
+      const data = await apiJson<Collection>('/collections', {
         method: 'POST',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: collectionName }),
       })
-      if (!res.ok) {
-        setError(`Failed to create collection (${res.status}).`)
-        return
-      }
-      const data = await res.json()
       setCollectionName('')
       setActiveCollectionName(data.name)
       setCollectionId(data.id)
     } catch (err) {
-      setError(`Network error: ${err instanceof Error ? err.message : 'unknown'}`)
+      setError(describeError(err, 'Failed to create collection'))
     }
   }
 
@@ -146,21 +145,13 @@ export default function UploadPanel() {
     }
     setError(null)
     try {
-      const token = await getToken()
-      const res = await fetch(`${API_URL}/collections/${id}`, {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${token}` },
-      })
-      if (!res.ok) {
-        setError(`Failed to delete collection (${res.status}).`)
-        return
-      }
+      await apiFetch(`/collections/${id}`, { method: 'DELETE' })
       if (collectionId === id) {
         resetToCollectionList()
       }
       setCollections(await fetchCollections())
     } catch (err) {
-      setError(`Network error: ${err instanceof Error ? err.message : 'unknown'}`)
+      setError(describeError(err, 'Failed to delete collection'))
     }
   }
 
@@ -192,17 +183,19 @@ export default function UploadPanel() {
 
     setUploading(true)
     try {
+      // Storage upload stays a direct Supabase call (api.ts only wraps the
+      // Render backend) -- still needs its own session/userId for the file
+      // path and the auth check below.
       const supabase = createClient()
       const { data: { session } } = await supabase.auth.getSession()
-      const token = session?.access_token
       const userId = session?.user?.id
 
-      if (!token || !userId) throw new Error('User not authenticated')
+      if (!session || !userId) throw new Error('User not authenticated')
 
       // 1. Upload the file directly to Supabase Storage
       const filePath = `${userId}/${Date.now()}-${file.name}`
       setStatus('Uploading file to storage...')
-      
+
       const { error: uploadError } = await supabase.storage
         .from('documents')
         .upload(filePath, file, {
@@ -214,24 +207,13 @@ export default function UploadPanel() {
 
       // 2. Send ONLY the JSON file path to the Render backend
       setStatus('Processing document...')
-      const res = await fetch(`${API_URL}/collections/${collectionId}/documents`, {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json', 
-          Authorization: `Bearer ${token}` 
+      const data = await apiJson<{ document_id: string; chunks_created: number; chunks_quarantined: number }>(
+        `/collections/${collectionId}/documents`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ file_path: filePath, file_name: file.name }),
         },
-        body: JSON.stringify({
-          file_path: filePath,
-          file_name: file.name
-        }),
-      })
-
-      if (!res.ok) {
-        const text = await res.text()
-        setError(`Upload failed (${res.status}): ${text}`)
-        return
-      }
-      const data = await res.json()
+      )
       const quarantined = data.chunks_quarantined ?? 0
       setStatus(
         quarantined > 0
@@ -240,7 +222,7 @@ export default function UploadPanel() {
       )
       if (collectionId) setDocuments(await fetchDocuments(collectionId))
     } catch (err) {
-      setError(`Network error: ${err instanceof Error ? err.message : 'unknown'}`)
+      setError(describeError(err, 'Upload failed', true))
     } finally {
       setUploading(false)
     }
@@ -252,18 +234,10 @@ export default function UploadPanel() {
     }
     setError(null)
     try {
-      const token = await getToken()
-      const res = await fetch(`${API_URL}/documents/${id}`, {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${token}` },
-      })
-      if (!res.ok) {
-        setError(`Failed to delete document (${res.status}).`)
-        return
-      }
+      await apiFetch(`/documents/${id}`, { method: 'DELETE' })
       if (collectionId) setDocuments(await fetchDocuments(collectionId))
     } catch (err) {
-      setError(`Network error: ${err instanceof Error ? err.message : 'unknown'}`)
+      setError(describeError(err, 'Failed to delete document'))
     }
   }
 
@@ -275,22 +249,13 @@ export default function UploadPanel() {
 
     setResearching(true)
     try {
-      const token = await getToken()
-      const res = await fetch(`${API_URL}/research`, {
+      const data = await apiJson<{ report: string }>('/research', {
         method: 'POST',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ collection_id: collectionId, query }),
       })
-
-      if (!res.ok) {
-        const text = await res.text()
-        setError(`Research query failed (${res.status}): ${text}`)
-        return
-      }
-      const data = await res.json()
       setReport(data.report)
     } catch (err) {
-      setError(`Network error: ${err instanceof Error ? err.message : 'unknown'}`)
+      setError(describeError(err, 'Research query failed', true))
     } finally {
       setResearching(false)
     }

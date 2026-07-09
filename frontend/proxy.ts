@@ -15,13 +15,18 @@ export async function proxy(request: NextRequest) {
   // gain (styles can't execute JS).
   const nonce = Buffer.from(crypto.randomUUID()).toString('base64')
   const isDev = process.env.NODE_ENV === 'development'
+  // Realtime (Sprint 4.2, D9) connects over a websocket to the same Supabase
+  // project, not plain https -- scheme-matching a wss:// connection under an
+  // https:// connect-src source is inconsistent across browsers, so it needs
+  // its own explicit entry rather than relying on the https one to cover it.
+  const supabaseWsUrl = (process.env.NEXT_PUBLIC_SUPABASE_URL ?? '').replace(/^https:/, 'wss:')
   const cspHeader = `
     default-src 'self';
     script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${isDev ? " 'unsafe-eval'" : ''};
     style-src 'self' 'unsafe-inline';
     img-src 'self' data:;
     font-src 'self';
-    connect-src 'self' ${process.env.NEXT_PUBLIC_SUPABASE_URL} ${process.env.NEXT_PUBLIC_API_URL};
+    connect-src 'self' ${process.env.NEXT_PUBLIC_SUPABASE_URL} ${supabaseWsUrl} ${process.env.NEXT_PUBLIC_API_URL};
     object-src 'none';
     base-uri 'self';
     form-action 'self';

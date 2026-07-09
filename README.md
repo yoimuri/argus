@@ -57,8 +57,8 @@ tested against the real app, and the results, pass and fail alike, are recorded 
   See `docs/PHASE3.md`.
 - **Phase 4, dashboard + public landing: in progress.** A live view of the system's own health
   and security events, a research-session timeline UI, a public landing page, and Google
-  sign-up. Six sprints; the first (backend hardening) is code-complete but not yet live. Scope
-  in `docs/ROADMAP.md` and `docs/PHASE4.md`.
+  sign-up. Six sprints; the first two (backend hardening, theme system + SOC page) are
+  code-complete but not yet live. Scope in `docs/ROADMAP.md` and `docs/PHASE4.md`.
 
 This project follows a deliberate phased build plan, shipping and deploying after every phase
 instead of building everything at once. Full plan in `docs/BLUEPRINT.md`, current roadmap in
