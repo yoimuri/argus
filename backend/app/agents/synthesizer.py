@@ -120,6 +120,18 @@ async def synthesizer_node(state: ResearchState) -> dict:
     # starved). call_reasoning_json (llm_json.py) now checks finish_reason
     # and retries once before raising ReasoningTruncated, caught below by the
     # same generic except that already handles any other Groq failure.
+    # On a critic-triggered RETRY pass, state["answer"] still holds the previous
+    # pass's answer (this node hasn't returned its overwrite yet). Live-found
+    # 2026-07-10: a good first-pass answer was being clobbered by a transient
+    # Groq failure on the retry, so a query that had ALREADY succeeded reported
+    # "AI service unavailable" — the retry made the result strictly worse.
+    # Preferring the previous answer when this attempt fails means a flaky retry
+    # can never do worse than not retrying at all. On the first pass this is None
+    # (main.py inits answer=None), so nothing changes there.
+    previous_answer = state.get("answer")
+    generic_fallback = ("The AI service is temporarily unavailable. Your documents and retrieved "
+                        "context are fine — please try again shortly.")
+
     trace_status = "ok"
     try:
         answer = await call_reasoning_json(
@@ -133,13 +145,13 @@ async def synthesizer_node(state: ResearchState) -> dict:
             reasoning_effort="low",
         )
     except CircuitBreakerOpen:
-        answer = ("The AI service is temporarily unavailable (too many recent failures). "
-                  "Your documents and retrieved context are fine — please try again shortly.")
+        answer = previous_answer or (
+            "The AI service is temporarily unavailable (too many recent failures). "
+            "Your documents and retrieved context are fine — please try again shortly.")
         trace_status = "fallback"
     except Exception as groq_err:
         print(f"[ARGUS] synthesis call failed, returning graceful fallback: {groq_err}")
-        answer = ("The AI service is temporarily unavailable. Your documents and retrieved "
-                  "context are fine — please try again shortly.")
+        answer = previous_answer or generic_fallback
         trace_status = "fallback"
 
     # Defence in depth: even with reasoning_effort capped, a completion could still
@@ -148,9 +160,10 @@ async def synthesizer_node(state: ResearchState) -> dict:
     # mode that made retrieval look broken when it wasn't.
     if not answer or not answer.strip():
         print("[ARGUS] synthesis returned empty content — surfacing retry message instead of blank answer.")
-        answer = ("The AI could not produce an answer for this query on this attempt "
-                  "(empty response). Your documents and retrieved context are fine — "
-                  "please try again.")
+        answer = previous_answer or (
+            "The AI could not produce an answer for this query on this attempt "
+            "(empty response). Your documents and retrieved context are fine — "
+            "please try again.")
         trace_status = "fallback"
 
     return {

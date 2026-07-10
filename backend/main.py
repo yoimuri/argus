@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import os
 import uuid
 import httpx
@@ -98,6 +99,24 @@ async def _delete_partial_chunks(document_id, access_token):
         )
     except Exception as del_err:
         print(f"[ARGUS] could not delete partial chunks for document {document_id}: {del_err}")
+
+
+async def _delete_document_fully(document, access_token):
+    """Cancel cleanup (Sprint 4.3 rework, 2026-07-10): on a *cancelled* upload,
+    remove the document ROW entirely, not just mark it 'failed'. Marking failed
+    left a phantom entry that still showed up in the documents list (and, worse,
+    a live-found bug where the phantom read 'ready' and then failed every query)
+    -- a cancelled upload should leave no trace at all. Chunks first (they have
+    no status filter in search), then the row. Never raises."""
+    if not document:
+        return
+    await _delete_partial_chunks(document.get("id"), access_token)
+    try:
+        await supabase_request(
+            "DELETE", f"documents?id=eq.{document['id']}", access_token,
+        )
+    except Exception as del_err:
+        print(f"[ARGUS] could not delete cancelled document {document.get('id')}: {del_err}")
 
 
 @app.get("/health")
@@ -236,7 +255,18 @@ async def upload_document(collection_id: str, req: DocumentUploadRequest, reques
             header = f.read(4)
         if header != b"%PDF":
             raise HTTPException(status_code=400, detail="File does not appear to be a valid PDF.")
-        
+
+        # Cooperative cancel check #1 (2026-07-10 rework): BEFORE the document
+        # row exists. uvicorn does NOT raise CancelledError into a running
+        # handler when the client disconnects -- it only queues an ASGI
+        # http.disconnect that we have to poll for. The old code relied on the
+        # CancelledError that never came, so a "cancelled" upload completed
+        # anyway (live-found 2026-07-10: cancel was an illusion, re-upload
+        # doubled the doc). is_disconnected() is the real, cooperative signal.
+        # Here nothing's created yet, so a clean early return leaves no trace.
+        if await request.is_disconnected():
+            return {"status": "cancelled"}
+
         # 3. Create document record
         doc_rows = await supabase_request(
             "POST", "documents", request.state.access_token,
@@ -267,6 +297,14 @@ async def upload_document(collection_id: str, req: DocumentUploadRequest, reques
         chunks_created = 0
         quarantined = 0
         async for embedded_batch in iter_embedded_chunk_batches(chunk_strings):
+            # Cooperative cancel check #2: between embedding batches (the slow
+            # part of an upload). On disconnect, delete the document ROW and any
+            # chunks already inserted -- a cancelled upload leaves nothing
+            # behind, so it can't show up as a phantom doc or get double-created
+            # on retry (both live-found 2026-07-10).
+            if await request.is_disconnected():
+                await _delete_document_fully(document, request.state.access_token)
+                return {"status": "cancelled"}
             chunk_rows = []
             for c in embedded_batch:
                 if matches_any(c["content"]):
@@ -306,18 +344,14 @@ async def upload_document(collection_id: str, req: DocumentUploadRequest, reques
         )
 
     except asyncio.CancelledError:
-        # Sprint 4.3 (D15): client disconnected (cancel button or navigated
-        # away) mid-upload. CancelledError is a BaseException, not Exception --
-        # needs its own clause, "except Exception" below never catches it.
-        # Reuses "failed" (no new document status) but ALSO deletes any chunks
-        # already embedded before the cancel landed: match_document_chunks has
-        # no documents.status filter (see _delete_partial_chunks), so leaving
-        # them in place would make a "failed" document's content searchable
-        # anyway (GATE-25). Must re-raise -- swallowing cancellation here would
-        # leave the ASGI server's own cancellation machinery in an inconsistent
-        # state.
-        await _mark_document_failed(document, request.state.access_token)
-        await _delete_partial_chunks(document["id"] if document else None, request.state.access_token)
+        # Backstop for the rare case uvicorn DOES cancel the task (server
+        # shutdown, or a future ASGI-server behaviour change). The primary,
+        # reliable cancel path is the two is_disconnected() checks above --
+        # this clause only fires when the coroutine is cancelled outright.
+        # Same full-delete cleanup so a cancelled upload leaves no phantom,
+        # then re-raise (swallowing CancelledError corrupts the server's
+        # cancellation bookkeeping).
+        await _delete_document_fully(document, request.state.access_token)
         raise
     except HTTPException:
         # Re-raise known HTTP exceptions so frontend sees the exact error, but if
@@ -448,35 +482,60 @@ async def research(request: Request):
     except Exception as insert_err:
         print(f"[ARGUS] could not create research_sessions row, diary disabled for this run: {insert_err}")
 
+    # Run the graph as a task we can cancel, and race it against the client
+    # disconnecting. This is the reliable cancel path (2026-07-10 rework):
+    # uvicorn does NOT raise CancelledError into a running handler when the
+    # client aborts the fetch -- it only queues an ASGI http.disconnect we have
+    # to poll. The old code awaited the graph directly and caught a
+    # CancelledError that never came, so a cancelled/navigated-away research
+    # kept running to completion in the background (live-found 2026-07-10).
+    # Polling is_disconnected() and cancelling the task ourselves is what
+    # actually stops the work.
+    graph_task = asyncio.create_task(research_graph.ainvoke({
+        "query": query,
+        "collection_id": collection_id,
+        "access_token": request.state.access_token,
+        "user_id": request.state.user_id,
+        "user_agent": user_agent,
+        "session_id": session_id,
+        "step_index": 0,
+        "intent": "specific",
+        "refined_queries": [query],
+        "chunks": [],
+        "answer": None,
+        "report": None,
+        "confidence_flags": [],
+        "needs_retry": False,
+        "loop_count": 0,
+        "use_web": False,
+        "web_snippets": [],
+        "web_status": "not_run",
+    }))
     try:
-        result = await research_graph.ainvoke({
-            "query": query,
-            "collection_id": collection_id,
-            "access_token": request.state.access_token,
-            "user_id": request.state.user_id,
-            "user_agent": user_agent,
-            "session_id": session_id,
-            "step_index": 0,
-            "intent": "specific",
-            "refined_queries": [query],
-            "chunks": [],
-            "answer": None,
-            "report": None,
-            "confidence_flags": [],
-            "needs_retry": False,
-            "loop_count": 0,
-            "use_web": False,
-            "web_snippets": [],
-            "web_status": "not_run",
-        })
+        while True:
+            done, _ = await asyncio.wait({graph_task}, timeout=0.5)
+            if graph_task in done:
+                break
+            if await request.is_disconnected():
+                graph_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await graph_task
+                # Distinct "cancelled" status (not "error") so the sessions
+                # list tells a user-stopped run apart from a real failure
+                # (GATE-25). The client is already gone, so this response is
+                # discarded -- returning cleanly just avoids a spurious 500 in
+                # the logs and leaves the session correctly marked.
+                await _mark_session_error(session_id, request.state.access_token, status="cancelled")
+                return {"status": "cancelled", "session_id": session_id}
+        result = graph_task.result()
     except asyncio.CancelledError:
-        # Sprint 4.3 (D15): client disconnected (cancel button or navigated
-        # away) mid-run. CancelledError is a BaseException, not Exception --
-        # needs its own clause, "except Exception" below never catches it.
-        # Distinct "cancelled" status (not "error") so the sessions list can
-        # tell a killed request apart from a genuine failure (GATE-25). Must
-        # re-raise -- swallowing cancellation here would leave the ASGI
-        # server's own cancellation machinery in an inconsistent state.
+        # The request coroutine itself was cancelled (server shutdown, or a
+        # future uvicorn that does cancel on disconnect). Tear the graph task
+        # down too, mark the session cancelled, re-raise (swallowing
+        # CancelledError corrupts the server's cancellation bookkeeping).
+        graph_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await graph_task
         await _mark_session_error(session_id, request.state.access_token, status="cancelled")
         raise
     except CircuitBreakerOpen as cb_err:

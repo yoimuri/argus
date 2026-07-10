@@ -30,6 +30,18 @@ function isAbortError(err: unknown): boolean {
   return err instanceof Error && err.name === 'AbortError'
 }
 
+// The query box is a textarea that grows with its content and wraps to the
+// next line as it fills (2026-07-10 fix: it used to be a fixed-width
+// single-line input that ran off the container). Grows up to ~200px, then
+// scrolls -- done in JS rather than the CSS `field-sizing: content` property
+// because that isn't in Firefox/Safari yet, and this must work on every device.
+const QUERY_MAX_HEIGHT = 200
+function autoGrowTextarea(el: HTMLTextAreaElement) {
+  el.style.height = 'auto'
+  el.style.height = `${Math.min(el.scrollHeight, QUERY_MAX_HEIGHT)}px`
+  el.style.overflowY = el.scrollHeight > QUERY_MAX_HEIGHT ? 'auto' : 'hidden'
+}
+
 interface Collection {
   id: string
   name: string
@@ -65,6 +77,7 @@ export default function UploadPanel() {
   const [showDetails, setShowDetails] = useState(false)
   const [researching, setResearching] = useState(false)
   const researchAbortRef = useRef<AbortController | null>(null)
+  const queryRef = useRef<HTMLTextAreaElement>(null)
 
   const [collections, setCollections] = useState<Collection[]>([])
   // Starts true so the first render shows "Loading..." without an effect having
@@ -292,6 +305,12 @@ export default function UploadPanel() {
           : `Uploaded. ${data.chunks_created} chunks created.`,
       )
       if (collectionId) setDocuments(await fetchDocuments(collectionId))
+      // Clear the selection + preview on success so the same file can't be
+      // re-submitted with a second click (an accidental-duplicate vector
+      // separate from the cancel-doubling bug, 2026-07-10).
+      if (previewUrl) URL.revokeObjectURL(previewUrl)
+      setFile(null)
+      setPreviewUrl(null)
     } catch (err) {
       if (isAbortError(err)) setStatus('Upload cancelled.')
       else setError(describeError(err, 'Upload failed', true))
@@ -351,190 +370,215 @@ export default function UploadPanel() {
 
   const parsed = report ? splitReport(report) : null
 
+  const inputClass =
+    'w-full rounded-md border border-hairline bg-surface px-3 py-2 text-sm text-ink placeholder:text-ink-muted focus:border-accent focus:outline-none'
+  const primaryBtn =
+    'rounded-md bg-accent px-4 py-2 text-sm font-medium text-accent-contrast transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50'
+  const ghostBtn =
+    'rounded-md border border-hairline px-3 py-1.5 text-xs text-ink-secondary transition-colors hover:bg-accent-wash hover:text-ink'
+  const cancelBtn =
+    'rounded-md border border-hairline px-4 py-2 text-sm text-ink-secondary transition-colors hover:bg-critical-wash hover:text-critical'
+
   return (
-    <div style={{ marginTop: 24 }}>
+    <div className="mt-6">
       {!collectionId ? (
-        <>
-          <form onSubmit={handleCreateCollection}>
+        <div className="space-y-6">
+          <form onSubmit={handleCreateCollection} className="flex flex-col gap-2 sm:flex-row sm:items-center">
             <input
               type="text"
               placeholder="Collection name"
               value={collectionName}
               onChange={(e) => setCollectionName(e.target.value)}
               required
-              style={{ marginRight: 8 }}
+              className={`${inputClass} sm:flex-1`}
             />
-            <button type="submit">Create collection</button>
+            <button type="submit" className={primaryBtn}>
+              Create collection
+            </button>
           </form>
 
-          <div style={{ marginTop: 20 }}>
-            <h3 style={{ fontSize: 16, marginBottom: 8 }}>Your collections</h3>
-            {loadingCollections && <p style={{ color: '#888' }}>Loading...</p>}
+          <div>
+            <h3 className="mb-2 text-sm font-semibold text-ink-secondary">Your collections</h3>
+            {loadingCollections && <p className="text-sm text-ink-muted">Loading...</p>}
             {!loadingCollections && collections.length === 0 && (
-              <p style={{ color: '#888' }}>No collections yet. Create one above.</p>
+              <p className="text-sm text-ink-muted">No collections yet. Create one above.</p>
             )}
-            <ul style={{ listStyle: 'none', padding: 0 }}>
-              {collections.map((c) => (
-                <li
-                  key={c.id}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 8,
-                    padding: '6px 0',
-                    borderBottom: '1px solid #333',
-                  }}
-                >
-                  <span style={{ flex: 1 }}>{c.name}</span>
+            {collections.length > 0 && (
+              <ul className="divide-y divide-hairline rounded-lg border border-hairline">
+                {collections.map((c) => (
+                  <li key={c.id} className="flex items-center gap-2 p-3">
+                    <span className="min-w-0 flex-1 truncate text-sm text-ink">{c.name}</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDocuments(null)
+                        setActiveCollectionName(c.name)
+                        setCollectionId(c.id)
+                      }}
+                      className={ghostBtn}
+                    >
+                      Open
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteCollection(c.id, c.name)}
+                      className="rounded-md border border-hairline px-3 py-1.5 text-xs text-ink-secondary transition-colors hover:bg-critical-wash hover:text-critical"
+                    >
+                      Delete
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-6">
+          <div className="flex flex-wrap items-center gap-3">
+            <button type="button" onClick={resetToCollectionList} className="text-sm text-accent hover:underline">
+              ← Back to collections
+            </button>
+            <h3 className="text-base font-semibold text-ink">{activeCollectionName ?? 'Collection'}</h3>
+          </div>
+
+          {/* Upload: controls left, live PDF preview to the RIGHT on wide
+              screens (decision #11 + 2026-07-10 layout fix), stacked on mobile. */}
+          <form onSubmit={handleUpload} className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            <div className="space-y-3">
+              <label className="block text-sm font-medium text-ink-secondary">Upload a PDF</label>
+              <input
+                type="file"
+                accept="application/pdf"
+                onChange={(e) => handleFileChange(e.target.files?.[0] ?? null)}
+                className="block w-full text-sm text-ink-secondary file:mr-3 file:rounded-md file:border file:border-hairline file:bg-surface file:px-3 file:py-1.5 file:text-sm file:text-ink hover:file:bg-accent-wash"
+              />
+              <p className="text-xs text-ink-muted">
+                PDFs up to 25 MB. Large reports (e.g. DBIR) may need a compressed export.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <button type="submit" disabled={uploading || !file} className={primaryBtn}>
+                  {uploading ? 'Uploading and embedding…' : 'Upload PDF'}
+                </button>
+                {uploading && (
+                  <button type="button" onClick={handleCancelUpload} className={cancelBtn}>
+                    Cancel
+                  </button>
+                )}
+                {file && !uploading && (
                   <button
                     type="button"
-                    onClick={() => {
-                      setDocuments(null)
-                      setActiveCollectionName(c.name)
-                      setCollectionId(c.id)
-                    }}
+                    onClick={() => handleFileChange(null)}
+                    className="rounded-md border border-hairline px-4 py-2 text-sm text-ink-secondary transition-colors hover:bg-accent-wash hover:text-ink"
                   >
-                    Open
+                    Choose a different file
                   </button>
-                  <button type="button" onClick={() => handleDeleteCollection(c.id, c.name)}>
-                    Delete
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </div>
-        </>
-      ) : (
-        <>
-          <button type="button" onClick={resetToCollectionList} style={{ marginBottom: 12 }}>
-            ← Back to collections
-          </button>
-          <h3 style={{ fontSize: 16, marginBottom: 8 }}>{activeCollectionName ?? 'Collection'}</h3>
-          <form onSubmit={handleUpload}>
-            <input
-              type="file"
-              accept="application/pdf"
-              onChange={(e) => handleFileChange(e.target.files?.[0] ?? null)}
-              required
-            />
-            <p style={{ fontSize: 14, color: '#888', marginTop: 4 }}>
-              PDFs up to 25 MB. Large reports (e.g. DBIR) may need a compressed export.
-            </p>
-            {previewUrl && (
-              <div style={{ marginTop: 8 }}>
-                {/* Decision #11: local object URL, zero network -- confirm this
-                    is the right file before it ever leaves the browser. */}
-                <embed
-                  src={previewUrl}
-                  type="application/pdf"
-                  style={{ width: '100%', height: 320, border: '1px solid #444', borderRadius: 4 }}
-                />
-                <button
-                  type="button"
-                  onClick={() => handleFileChange(null)}
-                  style={{ marginTop: 4 }}
-                  disabled={uploading}
-                >
-                  Choose a different file
-                </button>
+                )}
+              </div>
+            </div>
+
+            {previewUrl ? (
+              <div className="overflow-hidden rounded-lg border border-hairline bg-surface-raised">
+                {/* Decision #11: local blob: URL, zero network -- confirm this is
+                    the right file before it leaves the browser. <iframe> (not
+                    <embed>) so the CSP can allow it via frame-src blob: while
+                    object-src stays 'none' (see proxy.ts). */}
+                <iframe src={previewUrl} title="PDF preview" className="h-[300px] w-full lg:h-full lg:min-h-[300px]" />
+              </div>
+            ) : (
+              <div className="hidden items-center justify-center rounded-lg border border-dashed border-hairline bg-surface-page p-6 text-center text-xs text-ink-muted lg:flex">
+                Choose a PDF and it previews here before you upload it.
               </div>
             )}
-            <div style={{ marginTop: 8 }}>
-              <button type="submit" disabled={uploading}>
-                {uploading ? 'Uploading and embedding, this can take a minute...' : 'Upload PDF'}
+          </form>
+
+          <div>
+            <h3 className="mb-2 text-sm font-semibold text-ink-secondary">Documents</h3>
+            {documents === null && <p className="text-sm text-ink-muted">Loading...</p>}
+            {documents !== null && documents.length === 0 && (
+              <p className="text-sm text-ink-muted">No documents yet. Upload a PDF above.</p>
+            )}
+            {documents && documents.length > 0 && (
+              <ul className="divide-y divide-hairline rounded-lg border border-hairline">
+                {documents.map((d) => (
+                  <li key={d.id} className="flex items-center gap-2 p-3 text-sm">
+                    <span className="min-w-0 flex-1 truncate text-ink">{d.filename}</span>
+                    <span className="shrink-0 text-xs text-ink-muted">{d.status}</span>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteDocument(d.id, d.filename)}
+                      className="rounded-md border border-hairline px-3 py-1.5 text-xs text-ink-secondary transition-colors hover:bg-critical-wash hover:text-critical"
+                    >
+                      Delete
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
+          <form onSubmit={handleResearch} className="space-y-2">
+            <label className="block text-sm font-medium text-ink-secondary">
+              Ask a question about this collection
+            </label>
+            <textarea
+              ref={queryRef}
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onInput={(e) => autoGrowTextarea(e.currentTarget)}
+              rows={1}
+              required
+              placeholder="e.g. What are the top causes of breach in this report?"
+              className={`${inputClass} resize-none overflow-hidden`}
+            />
+            <div className="flex flex-wrap gap-2">
+              <button type="submit" disabled={researching || !query.trim()} className={primaryBtn}>
+                {researching ? 'Thinking…' : 'Ask'}
               </button>
-              {uploading && (
-                <button type="button" onClick={handleCancelUpload} style={{ marginLeft: 8 }}>
+              {researching && (
+                <button type="button" onClick={handleCancelResearch} className={cancelBtn}>
                   Cancel
                 </button>
               )}
             </div>
           </form>
 
-          <div style={{ marginTop: 16 }}>
-            <h3 style={{ fontSize: 16, marginBottom: 8 }}>Documents</h3>
-            {documents === null && <p style={{ color: '#888' }}>Loading...</p>}
-            {documents !== null && documents.length === 0 && (
-              <p style={{ color: '#888' }}>No documents yet. Upload a PDF above.</p>
-            )}
-            <ul style={{ listStyle: 'none', padding: 0 }}>
-              {(documents ?? []).map((d) => (
-                <li
-                  key={d.id}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 8,
-                    padding: '6px 0',
-                    borderBottom: '1px solid #333',
-                  }}
-                >
-                  <span style={{ flex: 1 }}>{d.filename}</span>
-                  <span style={{ color: '#888', fontSize: 13 }}>{d.status}</span>
-                  <button type="button" onClick={() => handleDeleteDocument(d.id, d.filename)}>
-                    Delete
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </div>
-
-          <form onSubmit={handleResearch} style={{ marginTop: 16 }}>
-            <input
-              type="text"
-              placeholder="Ask a question about this collection"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              required
-              style={{ width: '70%', marginRight: 8 }}
-            />
-            <button type="submit" disabled={researching}>
-              {researching ? 'Thinking...' : 'Ask'}
-            </button>
-            {researching && (
-              <button type="button" onClick={handleCancelResearch} style={{ marginLeft: 8 }}>
-                Cancel
-              </button>
-            )}
-          </form>
-
           {parsed && (
-            <div style={{ marginTop: 12, padding: 12, border: '1px solid #444', background: '#111', color: '#fff', borderRadius: 4 }}>
-              <ReactMarkdown>{parsed.answer}</ReactMarkdown>
+            <div className="rounded-lg border border-hairline bg-surface p-4 text-sm text-ink">
+              <div className="space-y-2 leading-relaxed">
+                <ReactMarkdown>{parsed.answer}</ReactMarkdown>
+              </div>
               {parsed.banner && (
-                <p style={{ marginTop: 8, fontStyle: 'italic', color: '#aaa', fontSize: 13 }}>
-                  {parsed.banner.replace(/\*/g, '')}
-                </p>
+                <p className="mt-2 text-xs italic text-ink-muted">{parsed.banner.replace(/\*/g, '')}</p>
               )}
-              <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+              <div className="mt-3 flex flex-wrap items-center gap-3">
                 <ConfidenceBadge level={parsed.confidenceLevel} />
-                <button type="button" onClick={() => setShowDetails((v) => !v)}>
+                <button type="button" onClick={() => setShowDetails((v) => !v)} className={ghostBtn}>
                   {showDetails ? 'Hide details' : 'Show details'}
                 </button>
                 {sessionId && (
-                  <Link href={`/dashboard/sessions/${sessionId}`} style={{ color: '#6cf' }}>
+                  <Link href={`/dashboard/sessions/${sessionId}`} className="text-xs text-accent hover:underline">
                     View execution trace →
                   </Link>
                 )}
               </div>
               {showDetails && (
-                <div style={{ marginTop: 12, borderTop: '1px solid #333', paddingTop: 12 }}>
+                <div className="mt-3 space-y-1 border-t border-hairline pt-3 text-ink-secondary">
                   {parsed.sources && (
                     <>
-                      <h4 style={{ fontSize: 14, marginBottom: 4 }}>Sources</h4>
+                      <h4 className="mb-1 text-xs font-semibold uppercase text-ink-muted">Sources</h4>
                       <ReactMarkdown>{parsed.sources}</ReactMarkdown>
                     </>
                   )}
-                  <h4 style={{ fontSize: 14, marginTop: 12, marginBottom: 4 }}>Confidence</h4>
+                  <h4 className="mb-1 mt-3 text-xs font-semibold uppercase text-ink-muted">Confidence</h4>
                   <ReactMarkdown>{parsed.confidence || 'Not assessed.'}</ReactMarkdown>
                 </div>
               )}
             </div>
           )}
-        </>
+        </div>
       )}
-      {status && <p style={{ color: 'green' }}>{status}</p>}
-      {error && <p style={{ color: 'red' }}>{error}</p>}
+      {status && <p className="mt-3 text-sm text-good">{status}</p>}
+      {error && <p className="mt-3 text-sm text-critical">{error}</p>}
     </div>
   )
 }

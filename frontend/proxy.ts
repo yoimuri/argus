@@ -13,6 +13,13 @@ export async function proxy(request: NextRequest) {
   // use inline style={{}} throughout, and nonces don't apply to style
   // attributes anyway, so nonce-ing styles would break the UI for no security
   // gain (styles can't execute JS).
+  //
+  // frame-src 'self' blob: — the upload PDF preview (Sprint 4.3, decision #11)
+  // renders the locally-chosen file in an <iframe src="blob:...">. Without a
+  // frame-src entry it falls back to default-src 'self', which excludes blob:,
+  // so the preview silently rendered nothing (live-found 2026-07-10). object-src
+  // stays 'none' — an <iframe> is governed by frame-src, so the preview works
+  // without weakening the plugin/Flash hardening that object-src 'none' gives.
   const nonce = Buffer.from(crypto.randomUUID()).toString('base64')
   const isDev = process.env.NODE_ENV === 'development'
   // Realtime (Sprint 4.2, D9) connects over a websocket to the same Supabase
@@ -28,6 +35,7 @@ export async function proxy(request: NextRequest) {
     font-src 'self';
     connect-src 'self' ${process.env.NEXT_PUBLIC_SUPABASE_URL} ${supabaseWsUrl} ${process.env.NEXT_PUBLIC_API_URL};
     object-src 'none';
+    frame-src 'self' blob:;
     base-uri 'self';
     form-action 'self';
     frame-ancestors 'none';

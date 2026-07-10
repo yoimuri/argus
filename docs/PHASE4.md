@@ -3,8 +3,9 @@
 **Status:** ✅ Sprint 4.1 live-verified 2026-07-09. ✅ Sprint 4.2 functionality live-verified
 2026-07-09 — with its cross-user *isolation* gates (GATE-18/19/20/21) still 🟡, pending a second
 test account (the SOC page is proven to show your own data, not yet proven to hide others'; see
-the Sprint 4.2 section). 🟡 Sprint 4.3 code-complete 2026-07-09, not yet live-verified. Sprints
-4.4–4.6 not started. Every checkbox below is ⏳ until its sprint is code-complete (🟡) and then
+the Sprint 4.2 section). 🟡 Sprint 4.3 reworked 2026-07-10 after a live test caught six bugs
+(the cancel feature was an illusion — see its section); all fixed in code, none re-verified live
+yet. Sprints 4.4–4.6 not started. Every checkbox below is ⏳ until its sprint is code-complete (🟡) and then
 confirmed against the live Render + Vercel app (✅), per the project's status-marks rule. This
 file is the execution plan, not a status claim.
 **Timeline:** Weeks 11–13 (blueprint), realistically paced across the six sub-sprints below.
@@ -267,10 +268,64 @@ now and IP didn't.
 
 ### Sprint 4.3 — Sessions, timeline, report UX, cancel
 
-**Status:** 🟡 Code-complete 2026-07-09, not yet live-verified. `npm run build` clean, backend
-`py_compile` clean, new Tailwind utility classes confirmed resolved in the compiled CSS (same
-discipline as Sprint 4.2 — a clean build does not by itself prove a class survived). No test
-credentials in this environment, so nothing below has been clicked through by hand yet.
+**Status:** 🟡 Reworked 2026-07-10 after a live test caught real bugs; still not re-verified.
+First cut was code-complete 2026-07-09; Clint live-tested with a second account 2026-07-10 and
+found six issues (below). The sessions list, execution timeline, per-account isolation (GATE-18
+now effectively passed — the second account saw only its own sessions), report split view, and
+confidence badge all worked. **But the cancel feature was an illusion, exactly as its own 🟡
+caveat warned** — plus four smaller bugs. All six are now fixed in code; `npm run build` clean,
+backend `py_compile` clean, new Tailwind classes confirmed in compiled CSS. **None of the fixes
+has been re-tested live yet** — and given cancel already fooled us once, its re-test is
+load-bearing, not a formality.
+
+**Live test 2026-07-10 — six findings, root causes, and fixes:**
+1. **Cancel was an illusion (the big one).** Root cause confirmed against the deployed stack
+   (uvicorn 0.48, single worker): uvicorn does NOT raise `CancelledError` into a running handler
+   when the client disconnects — it only queues an ASGI `http.disconnect` that the app must
+   actively poll via `request.is_disconnected()`. So the `except asyncio.CancelledError` clauses
+   from the first cut almost never fired; a "cancelled" upload ran to completion (proof: cancel →
+   leave collection → return → the PDF was there anyway), and re-uploading then **doubled** the
+   document. Same for research: it kept running in the background after navigating away. **Fix:**
+   real cooperative cancellation. `/research` now runs the graph as an `asyncio` task and races it
+   against a `request.is_disconnected()` poll (0.5s) — on disconnect it cancels the task itself
+   and marks the session `cancelled`. Upload now checks `is_disconnected()` before creating the
+   document row and between every embedding batch; on disconnect it **fully deletes** the document
+   row + any chunks (new `_delete_document_fully` helper) so a cancelled upload leaves zero trace
+   — no phantom, nothing to double. The `except CancelledError` clauses stay as a backstop. This
+   is the honest fix, but it STILL rests on `is_disconnected()` firing correctly on Render, which
+   is exactly the class of assumption that just burned us — so it is 🟡 until the live re-test.
+2. **PDF preview showed nothing (CSP).** The `<embed>`/blob preview was blocked by
+   `object-src 'none'` (in place since ADR-008). **Fix:** switched the preview to an `<iframe>`
+   and added `frame-src 'self' blob:` to the CSP in `proxy.ts`; `object-src 'none'` stays intact
+   (an iframe is governed by frame-src), so the plugin/Flash hardening is unchanged.
+3. **Phantom "ready" document that failed every query.** A doc left behind by the illusory
+   cancel showed `ready` but returned "AI service unavailable" on query. Largely a compound of
+   #1 (phantom doc) and #4 (see below); the full-delete-on-cancel fix removes the phantom, and #4
+   fixes the misleading error.
+4. **Retry discarded a good answer.** Found in the trace: a first synthesizer pass produced a real
+   2040-char answer, the critic flagged low confidence and triggered a retry, and the retry's Groq
+   call hit a transient failure whose fallback message ("AI service unavailable") **overwrote the
+   good first answer** — the retry made the result strictly worse. **Fix:** `synthesizer.py` now
+   captures the previous pass's answer and, if this attempt's Groq call fails, keeps the previous
+   good answer instead of clobbering it with the fallback. A flaky retry can no longer do worse
+   than not retrying. (Note: if Groq is genuinely down/rate-limited for the whole query, "AI
+   unavailable" is still correct — this only stops a *transient retry blip* from destroying a
+   result that already succeeded.)
+5. **Query box ran off the container.** It was a fixed-width single-line `<input>` at 70% width.
+   **Fix:** it's now an auto-growing `<textarea>` (wraps to the next line, grows to ~200px then
+   scrolls) in a fluid, mobile-first layout.
+6. **Layout not responsive / preview placement.** The whole `UploadPanel` was inline-styled with
+   hardcoded dark colors that ignored the theme and a fixed oversized block. **Fix:** rebuilt on
+   the design tokens (themed light/dark) with a mobile-first responsive layout — the PDF preview
+   now sits side-by-side to the right of the upload controls on wide screens and stacks below on
+   phone/tablet. Used the `ui-ux-pro-max` skill (now installed) plus the existing token system.
+
+Also addressed from the same feedback: the dashboard greeting now prefers a real name
+(`user_metadata.full_name`/`name`) and falls back to email — password accounts still show email,
+Google OAuth (Sprint 4.4) will populate the name with no further change. **Report Generation with
+format** stays Sprint 4.6 (its own planning pass, D17) — noted, not built.
+
+**Original 2026-07-09 build notes (some superseded by the rework above — kept for the trail):**
 
 **What was built:**
 - `backend/main.py` — cancel support (D15). Both `/research` and `/collections/{id}/documents`
@@ -283,19 +338,22 @@ credentials in this environment, so nothing below has been clicked through by ha
   now takes a `status` parameter, defaulting to `"error"` so every existing call site is
   unchanged) is called with `status="cancelled"`, a distinct value from `"error"` so a
   user-initiated stop never reads as a system failure on the sessions list. On upload cancel:
-  `_mark_document_failed()` runs (reuses `"failed"`, no new document status), **and** a new
+  [SUPERSEDED 2026-07-10 → now `_delete_document_fully`, removing the row entirely, see finding #1
+  above] `_mark_document_failed()` runs (reuses `"failed"`, no new document status), **and** a new
   `_delete_partial_chunks()` helper deletes any `document_chunks` rows already embedded before
   the cancel landed — this turned out to be load-bearing, not just tidiness: `match_document_chunks`
   (the vector-search RPC, `004_security_and_trust.sql`) has no `documents.status` filter, so a
   half-embedded "failed" document's chunks would otherwise still be fully retrievable in search.
   Every except-clause re-raises after cleanup — swallowing `CancelledError` would leave the ASGI
   server's own cancellation bookkeeping in an inconsistent state.
-  **Honest caveat, stated per the plan's own instruction:** this all assumes Starlette/uvicorn
-  actually deliver `CancelledError` into the running handler coroutine when the client
-  disconnects. That's the standard behavior for this stack, but it was never verified against
-  *this* app before today, and the plan explicitly flagged it as "verify during build, not
-  assumed." The code is correct regardless of the answer; whether it actually fires is a live
-  test (see "Verify live" below), not something provable by reading source.
+  **Honest caveat, stated per the plan's own instruction [PROVED FALSE 2026-07-10 → see finding
+  #1; uvicorn does NOT deliver CancelledError on disconnect, the mechanism was reworked to
+  cooperative `is_disconnected()` polling]:** this all assumes Starlette/uvicorn actually deliver
+  `CancelledError` into the running handler coroutine when the client disconnects. That's the
+  standard behavior for this stack, but it was never verified against *this* app before today, and
+  the plan explicitly flagged it as "verify during build, not assumed." The code is correct
+  regardless of the answer; whether it actually fires is a live test (see "Verify live" below),
+  not something provable by reading source.
 - `frontend/utils/report.ts` — `splitReport()` (D6, pure function). Walks whichever
   `## Answer` / `## Sources` / `## Confidence` headings are actually present in a
   `research_sessions.report` string, rather than assuming a fixed order — `reporter.py`'s
@@ -315,9 +373,10 @@ credentials in this environment, so nothing below has been clicked through by ha
   forms (`AbortController`, wired through `api.ts`'s existing `signal` pass-through — D3 already
   anticipated this, no `api.ts` change needed), an unmount effect that aborts both in-flight
   requests so navigating away doesn't leave anything running invisibly, and the in-browser PDF
-  preview (decision #11): selecting a file renders it via `<embed>` from a local
-  `URL.createObjectURL()` — zero network — with a "Choose a different file" escape hatch; the
-  actual upload only fires when the existing "Upload PDF" button is pressed.
+  preview (decision #11): selecting a file renders it [SUPERSEDED 2026-07-10 → now `<iframe>` +
+  CSP `frame-src blob:`, see finding #2; the `<embed>` was blocked by `object-src 'none'`] via
+  `<embed>` from a local `URL.createObjectURL()` — zero network — with a "Choose a different file"
+  escape hatch; the actual upload only fires when the existing "Upload PDF" button is pressed.
   **Honest limitation found while building, not assumed away:** the installed
   `@supabase/storage-js` version's `FileOptions` type has no abort-signal field (checked its
   source directly, not memory) — the Storage-upload leg of an upload cannot actually be killed
@@ -341,25 +400,30 @@ credentials in this environment, so nothing below has been clicked through by ha
   treatment as `UploadPanel.tsx`'s live result view, so a historical session and a just-finished
   query read identically.
 
-**Verify live (manual steps, Clint's):**
-1. `git push` — Render + Vercel both redeploy.
-2. **Cancel, the load-bearing test:** start a research query, click Cancel mid-run. Confirm (a)
-   the UI shows "Research cancelled," not an error, and (b) the session's row in `/dashboard/sessions`
-   shows `Cancelled`, not stuck on `Running` forever — this is the actual proof that Starlette/uvicorn
-   deliver the disconnect as `asyncio.CancelledError` in this app, not an assumption. Repeat for an
-   upload: start uploading a document, click Cancel mid-processing, confirm the document does NOT
-   appear as a normal ready document, and that a query against that collection finds nothing from
-   it (proof the partial-chunk delete worked, not just that the row got marked failed).
-3. Upload preview: pick a PDF, confirm it actually renders in the embedded viewer before clicking
-   Upload; try "Choose a different file" and confirm it swaps cleanly with no leftover preview.
-4. Ask a normal question, confirm the new result view: answer, confidence badge with a sensible
-   color, "Show details" reveals Sources + the full Confidence text, "View execution trace →"
-   opens the session's timeline page with all 6 agents shown with real latencies.
-5. Open `/dashboard/sessions`, confirm past sessions list with correct statuses and dates; open
-   one, confirm the trace + report render the same way as a live result.
-6. GATE-21: try `/dashboard/sessions/<some-other-account's-session-id>` — confirm it shows
-   "Session not found," not a leak. (Needs a second test account for a real foreign id; visiting
-   a syntactically-valid-but-nonexistent uuid is a partial substitute.)
+**Verify live (manual steps, Clint's) — the 2026-07-10 rework RE-test:**
+1. `git push` — Render + Vercel both redeploy. (Cancel spans backend + frontend; wait for Render.)
+2. **Cancel, THE load-bearing test — this is what fooled us once, so prove it, don't trust it:**
+   - Research: start a query, click Cancel mid-run (or navigate away). The backend log should show
+     the graph task getting cancelled; the session row in `/dashboard/sessions` must read
+     `Cancelled`, never stuck `Running`. Confirm a report is NOT written afterward.
+   - Upload: start uploading, click Cancel (or leave) mid-processing. The document must NOT appear
+     in the Documents list at all (full delete — not a `failed` phantom), and re-uploading the same
+     file must produce exactly ONE document, not two. Query that collection and confirm nothing
+     from the cancelled upload is retrievable.
+   - If cancel still doesn't actually stop the work, `is_disconnected()` isn't firing on Render as
+     expected — say so and we pursue an explicit `/research/{id}/cancel` flag endpoint instead.
+     Do not re-mark this ✅ on hope.
+3. Preview: pick a PDF — it must actually render in the iframe now (the CSP `frame-src blob:` fix).
+   Confirm the preview sits to the RIGHT of the controls on a wide window and STACKS below on a
+   narrow one (resize the window or use device emulation). Check the query box grows as you type a
+   long question and wraps instead of running off the edge. No CSP violations in the console.
+4. Ask a normal question: answer + confidence badge + "Show details" (Sources/Confidence) +
+   "View execution trace →" opening the timeline (6 agents, real latencies). If a query that has
+   context returns "AI service unavailable," check the trace — a transient retry blip should no
+   longer clobber a good first answer (#4 fix); a full Groq outage legitimately still shows it.
+5. Open `/dashboard/sessions`, confirm statuses/dates; open one, confirm trace + report render.
+6. GATE-21 (second account, now available): as account B, visit `/dashboard/sessions/<A's session
+   id>` and confirm "Session not found," not a leak.
 
 ---
 
