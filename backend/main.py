@@ -1,5 +1,4 @@
 import asyncio
-import contextlib
 import os
 import uuid
 import httpx
@@ -39,6 +38,16 @@ app.add_middleware(
 class DocumentUploadRequest(BaseModel):
     file_path: str
     file_name: str
+    # Cancel rework (2026-07-10): the CLIENT generates the document's uuid and
+    # sends it up front, so its Cancel button can call DELETE /documents/{id}
+    # immediately -- without waiting for this synchronous request to return.
+    # Two disconnect-based cancel designs failed live before this (uvicorn
+    # CancelledError, then request.is_disconnected()): Render's proxy buffers
+    # the request/response cycle and never propagates the client abort, so the
+    # backend provably cannot SEE a disconnect. An explicit DB-visible signal
+    # (the row being deleted) is the only design that doesn't depend on it.
+    # Optional: older clients / curl without an id keep working unchanged.
+    document_id: Optional[str] = None
 
 
 def _valid_uuid(value: str) -> bool:
@@ -72,12 +81,16 @@ async def _mark_session_error(session_id, access_token, status="error"):
     failing here must not mask the real error (or cancellation) that triggered
     the caller's except block. status defaults to "error"; Sprint 4.3's cancel
     support (D15) passes "cancelled" so a killed request is distinguishable
-    from a genuine failure in the sessions list / StatusPill."""
+    from a genuine failure in the sessions list / StatusPill.
+
+    The &status=eq.running filter (2026-07-10) makes running -> X the ONLY
+    transition this helper can perform: once a session is cancelled (or
+    completed), no late error/cleanup path can silently overwrite it."""
     if not session_id:
         return
     try:
         await supabase_request(
-            "PATCH", f"research_sessions?id=eq.{session_id}", access_token,
+            "PATCH", f"research_sessions?id=eq.{session_id}&status=eq.running", access_token,
             json_body={"status": status},
         )
     except Exception as patch_err:
@@ -117,6 +130,22 @@ async def _delete_document_fully(document, access_token):
         )
     except Exception as del_err:
         print(f"[ARGUS] could not delete cancelled document {document.get('id')}: {del_err}")
+
+
+async def _document_still_exists(document_id, access_token) -> bool:
+    """Cooperative cancel signal for uploads (2026-07-10 rework): the client's
+    Cancel button deletes the documents row directly (it knows the id, it
+    generated it), and the processing loop polls THIS between embedding
+    batches. Row gone == user cancelled == stop working. A transient failure
+    of the check itself must never kill a healthy upload, so it errs True."""
+    try:
+        rows = await supabase_request(
+            "GET", f"documents?id=eq.{document_id}&select=id", access_token,
+        )
+        return bool(rows)
+    except Exception as check_err:
+        print(f"[ARGUS] cancel-check failed for document {document_id} (assuming alive): {check_err}")
+        return True
 
 
 @app.get("/health")
@@ -225,16 +254,44 @@ async def upload_document(collection_id: str, req: DocumentUploadRequest, reques
     token = request.state.access_token
     user_agent = request.headers.get("user-agent", "")[:300]
 
+    if req.document_id is not None and not _valid_uuid(req.document_id):
+        raise HTTPException(status_code=400, detail="document_id must be a valid uuid.")
+
     storage_url = f"{SUPABASE_URL}/storage/v1/object/documents/{req.file_path}"
     headers = {
         "Authorization": f"Bearer {token}",
         "apikey": SUPABASE_KEY
     }
-    
+
     temp_path = f"temp_{uuid.uuid4()}.pdf"
     document = None
+    # False until the embedding loop starts. Failures BEFORE any processing
+    # delete the row outright (nothing happened, leave no trace); failures
+    # DURING processing keep the row marked 'failed' (real visibility, and
+    # what GATE-22's embedding-outage test expects).
+    processing_started = False
 
     try:
+        # Create the document row FIRST (2026-07-10 cancel rework) so the
+        # client's Cancel button has a target from ~the first moment of the
+        # request: cancel == DELETE this row, and the loop below notices the
+        # row vanishing between batches. Creating it after the storage
+        # download (as before) left a multi-second window where cancel had
+        # nothing to delete and the upload completed anyway.
+        row_body = {
+            "collection_id": collection_id,
+            "user_id": request.state.user_id,
+            "filename": req.file_name,
+            "storage_path": req.file_path,
+            "status": "processing",
+        }
+        if req.document_id:
+            row_body["id"] = req.document_id
+        doc_rows = await supabase_request("POST", "documents", token, json_body=row_body)
+        if not doc_rows:
+            raise HTTPException(status_code=500, detail="Failed to create document record in database.")
+        document = doc_rows[0]
+
         # 1. Stream download from Supabase Storage to disk (with size limit)
         downloaded_bytes = 0
         async with httpx.AsyncClient() as client:
@@ -256,33 +313,6 @@ async def upload_document(collection_id: str, req: DocumentUploadRequest, reques
         if header != b"%PDF":
             raise HTTPException(status_code=400, detail="File does not appear to be a valid PDF.")
 
-        # Cooperative cancel check #1 (2026-07-10 rework): BEFORE the document
-        # row exists. uvicorn does NOT raise CancelledError into a running
-        # handler when the client disconnects -- it only queues an ASGI
-        # http.disconnect that we have to poll for. The old code relied on the
-        # CancelledError that never came, so a "cancelled" upload completed
-        # anyway (live-found 2026-07-10: cancel was an illusion, re-upload
-        # doubled the doc). is_disconnected() is the real, cooperative signal.
-        # Here nothing's created yet, so a clean early return leaves no trace.
-        if await request.is_disconnected():
-            return {"status": "cancelled"}
-
-        # 3. Create document record
-        doc_rows = await supabase_request(
-            "POST", "documents", request.state.access_token,
-            json_body={
-                "collection_id": collection_id,
-                "user_id": request.state.user_id,
-                "filename": req.file_name,
-                "storage_path": req.file_path,
-                "status": "processing",
-            },
-        )
-        if not doc_rows:
-            raise HTTPException(status_code=500, detail="Failed to create document record in database.")
-            
-        document = doc_rows[0]
-
         # 4. Extract chunks using PyMuPDF
         chunk_strings = extract_chunks_from_pdf_file(temp_path)
         if not chunk_strings:
@@ -296,15 +326,16 @@ async def upload_document(collection_id: str, req: DocumentUploadRequest, reques
         # together they mean poisoned content is caught at write time AND read time.
         chunks_created = 0
         quarantined = 0
+        processing_started = True
         async for embedded_batch in iter_embedded_chunk_batches(chunk_strings):
-            # Cooperative cancel check #2: between embedding batches (the slow
-            # part of an upload). On disconnect, delete the document ROW and any
-            # chunks already inserted -- a cancelled upload leaves nothing
-            # behind, so it can't show up as a phantom doc or get double-created
-            # on retry (both live-found 2026-07-10).
-            if await request.is_disconnected():
-                await _delete_document_fully(document, request.state.access_token)
-                return {"status": "cancelled"}
+            # Cancel check between embedding batches (the slow part): the
+            # client's Cancel deleted the row; row gone means stop. Chunks
+            # already inserted were removed by that delete's FK cascade, and
+            # any straggler insert after it fails on the FK -- either way the
+            # end state is no doc, no chunks, nothing to double on re-upload.
+            if not await _document_still_exists(document["id"], request.state.access_token):
+                print(f"[ARGUS] upload cancelled by client (document {document['id']} deleted), stopping.")
+                return {"status": "cancelled", "document_id": document["id"]}
             chunk_rows = []
             for c in embedded_batch:
                 if matches_any(c["content"]):
@@ -338,26 +369,37 @@ async def upload_document(collection_id: str, req: DocumentUploadRequest, reques
                 )
                 chunks_created += len(chunk_rows)
 
+        # Last cancel check before declaring victory: if the row vanished
+        # after the final batch, honor the cancel instead of "ready"-ing a
+        # deleted doc (the PATCH below would silently no-op on 0 rows, and
+        # we'd return a success payload for a document the user killed).
+        if not await _document_still_exists(document["id"], request.state.access_token):
+            print(f"[ARGUS] upload cancelled by client at finalization (document {document['id']}).")
+            return {"status": "cancelled", "document_id": document["id"]}
+
         await supabase_request(
             "PATCH", f"documents?id=eq.{document['id']}", request.state.access_token,
             json_body={"status": "ready"},
         )
 
     except asyncio.CancelledError:
-        # Backstop for the rare case uvicorn DOES cancel the task (server
-        # shutdown, or a future ASGI-server behaviour change). The primary,
-        # reliable cancel path is the two is_disconnected() checks above --
-        # this clause only fires when the coroutine is cancelled outright.
-        # Same full-delete cleanup so a cancelled upload leaves no phantom,
-        # then re-raise (swallowing CancelledError corrupts the server's
-        # cancellation bookkeeping).
+        # Backstop for the rare case the coroutine IS cancelled outright
+        # (server shutdown; Render's proxy never delivers client aborts, which
+        # is why the row-existence checks above are the primary cancel path).
+        # Full-delete so nothing phantom survives, then re-raise (swallowing
+        # CancelledError corrupts the server's cancellation bookkeeping).
         await _delete_document_fully(document, request.state.access_token)
         raise
     except HTTPException:
-        # Re-raise known HTTP exceptions so frontend sees the exact error, but if
-        # the document row was already created, mark it failed first so it doesn't
-        # sit at 'processing' forever.
-        await _mark_document_failed(document, request.state.access_token)
+        # Known HTTP errors: if processing had begun, keep the row marked
+        # 'failed' (real visibility -- GATE-22's outage test depends on it);
+        # if nothing was processed yet (bad storage fetch, not a PDF, no
+        # text), delete the row outright so an early failure leaves no junk
+        # entry in the documents list.
+        if processing_started:
+            await _mark_document_failed(document, request.state.access_token)
+        else:
+            await _delete_document_fully(document, request.state.access_token)
         raise
     except CircuitBreakerOpen as cb_err:
         # HF embedding breaker open (Sprint 4.1, D7/GATE-22): a clean 503 with a
@@ -446,6 +488,15 @@ async def research(request: Request):
     if not query or not collection_id:
         raise HTTPException(status_code=400, detail="query and collection_id are required.")
 
+    # Cancel rework (2026-07-10): same trick as uploads -- the CLIENT generates
+    # the session uuid and sends it up front, because this endpoint is
+    # synchronous: without this, the client only learns the session_id when
+    # the response returns, which is exactly too late to cancel anything.
+    # Optional; a request without one behaves as before (server-generated id).
+    client_session_id = body.get("session_id")
+    if client_session_id is not None and not _valid_uuid(client_session_id):
+        raise HTTPException(status_code=400, detail="session_id must be a valid uuid.")
+
     user_agent = request.headers.get("user-agent", "")[:300]
 
     try:
@@ -461,6 +512,7 @@ async def research(request: Request):
 
     # Lazy import: langgraph adds ~100MB+ RSS; keep upload path lean on 512MB Render free tier.
     from app.agents.graph import research_graph
+    from app.services.step_writer import ResearchCancelled
 
     # Debug Diary: one research_sessions row per query, patched to its final status
     # once the graph finishes (or errors). Best-effort: if the insert itself fails,
@@ -469,73 +521,62 @@ async def research(request: Request):
     # raising, same never-crash rule applied one level up.
     session_id = None
     try:
+        insert_body = {
+            "user_id": request.state.user_id,
+            "collection_id": collection_id,
+            "query": query,
+            "status": "running",
+        }
+        if client_session_id:
+            insert_body["id"] = client_session_id
         session_rows = await supabase_request(
-            "POST", "research_sessions", request.state.access_token,
-            json_body={
-                "user_id": request.state.user_id,
-                "collection_id": collection_id,
-                "query": query,
-                "status": "running",
-            },
+            "POST", "research_sessions", request.state.access_token, json_body=insert_body,
         )
         session_id = session_rows[0]["id"]
     except Exception as insert_err:
         print(f"[ARGUS] could not create research_sessions row, diary disabled for this run: {insert_err}")
 
-    # Run the graph as a task we can cancel, and race it against the client
-    # disconnecting. This is the reliable cancel path (2026-07-10 rework):
-    # uvicorn does NOT raise CancelledError into a running handler when the
-    # client aborts the fetch -- it only queues an ASGI http.disconnect we have
-    # to poll. The old code awaited the graph directly and caught a
-    # CancelledError that never came, so a cancelled/navigated-away research
-    # kept running to completion in the background (live-found 2026-07-10).
-    # Polling is_disconnected() and cancelling the task ourselves is what
-    # actually stops the work.
-    graph_task = asyncio.create_task(research_graph.ainvoke({
-        "query": query,
-        "collection_id": collection_id,
-        "access_token": request.state.access_token,
-        "user_id": request.state.user_id,
-        "user_agent": user_agent,
-        "session_id": session_id,
-        "step_index": 0,
-        "intent": "specific",
-        "refined_queries": [query],
-        "chunks": [],
-        "answer": None,
-        "report": None,
-        "confidence_flags": [],
-        "needs_retry": False,
-        "loop_count": 0,
-        "use_web": False,
-        "web_snippets": [],
-        "web_status": "not_run",
-    }))
+    # Plain await (2026-07-10, second cancel rework). Two disconnect-based
+    # designs failed live before this: uvicorn never raises CancelledError
+    # into the handler on client abort, and request.is_disconnected() never
+    # flips either, because Render's proxy buffers the request cycle and
+    # doesn't propagate the disconnect. Cancellation is now an explicit
+    # DB-visible signal instead: POST /research/{id}/cancel flips the session
+    # row to 'cancelled', and traced() (step_writer.py) checks that flag
+    # before every agent runs, raising ResearchCancelled to stop the graph.
+    # Nothing here depends on the proxy behaving.
     try:
-        while True:
-            done, _ = await asyncio.wait({graph_task}, timeout=0.5)
-            if graph_task in done:
-                break
-            if await request.is_disconnected():
-                graph_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await graph_task
-                # Distinct "cancelled" status (not "error") so the sessions
-                # list tells a user-stopped run apart from a real failure
-                # (GATE-25). The client is already gone, so this response is
-                # discarded -- returning cleanly just avoids a spurious 500 in
-                # the logs and leaves the session correctly marked.
-                await _mark_session_error(session_id, request.state.access_token, status="cancelled")
-                return {"status": "cancelled", "session_id": session_id}
-        result = graph_task.result()
+        result = await research_graph.ainvoke({
+            "query": query,
+            "collection_id": collection_id,
+            "access_token": request.state.access_token,
+            "user_id": request.state.user_id,
+            "user_agent": user_agent,
+            "session_id": session_id,
+            "step_index": 0,
+            "intent": "specific",
+            "refined_queries": [query],
+            "chunks": [],
+            "answer": None,
+            "report": None,
+            "confidence_flags": [],
+            "needs_retry": False,
+            "loop_count": 0,
+            "use_web": False,
+            "web_snippets": [],
+            "web_status": "not_run",
+        })
+    except ResearchCancelled:
+        # User hit Cancel: the session row already says 'cancelled' (that IS
+        # the signal traced() saw), so there is nothing to patch. The client
+        # has typically aborted its fetch by now; this response just closes
+        # the request cleanly instead of logging a spurious 500.
+        return {"status": "cancelled", "session_id": session_id}
     except asyncio.CancelledError:
-        # The request coroutine itself was cancelled (server shutdown, or a
-        # future uvicorn that does cancel on disconnect). Tear the graph task
-        # down too, mark the session cancelled, re-raise (swallowing
-        # CancelledError corrupts the server's cancellation bookkeeping).
-        graph_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await graph_task
+        # Backstop: the request coroutine itself was cancelled (server
+        # shutdown). Mark cancelled (running->cancelled only, see helper) and
+        # re-raise -- swallowing CancelledError corrupts the server's
+        # cancellation bookkeeping.
         await _mark_session_error(session_id, request.state.access_token, status="cancelled")
         raise
     except CircuitBreakerOpen as cb_err:
@@ -562,8 +603,12 @@ async def research(request: Request):
 
     if session_id:
         try:
+            # &status=eq.running: if the user cancelled in the same instant the
+            # graph finished, 'cancelled' wins -- a completed report is never
+            # silently written over a cancellation (GATE-25: "no report gets
+            # written after"). PATCH on 0 matching rows is a clean no-op.
             await supabase_request(
-                "PATCH", f"research_sessions?id=eq.{session_id}", request.state.access_token,
+                "PATCH", f"research_sessions?id=eq.{session_id}&status=eq.running", request.state.access_token,
                 json_body={"report": result["report"], "status": final_status},
             )
         except Exception as patch_err:
@@ -608,6 +653,56 @@ async def list_research_sessions(
         f"&order=created_at.desc&limit={limit}&offset={offset}",
         request.state.access_token,
     )
+
+
+@app.post("/research/{session_id}/cancel")
+async def cancel_research_session(session_id: str, request: Request):
+    """Cancel rework (2026-07-10): flips the session to 'cancelled' in the DB.
+    This IS the cancel mechanism -- the pipeline's traced() wrapper polls this
+    status before each agent and stops when it flips. Disconnect-based designs
+    can't work here (Render's proxy never propagates client aborts; two
+    attempts failed live). &status=eq.running means only a running session can
+    be cancelled: cancelling an already-completed session is a no-op rather
+    than destroying a finished report's status. RLS + the 404 below keep it
+    scoped to the caller's own sessions, indistinguishable from nonexistent."""
+    if not _valid_uuid(session_id):
+        raise HTTPException(status_code=404, detail="Session not found.")
+    rows = await supabase_request(
+        "GET", f"research_sessions?id=eq.{session_id}&select=id,status",
+        request.state.access_token,
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="Session not found.")
+    updated = await supabase_request(
+        "PATCH", f"research_sessions?id=eq.{session_id}&status=eq.running",
+        request.state.access_token,
+        json_body={"status": "cancelled"},
+    )
+    return {
+        "session_id": session_id,
+        "status": "cancelled" if updated else rows[0]["status"],
+    }
+
+
+@app.delete("/research/{session_id}")
+async def delete_research_session(session_id: str, request: Request):
+    """Session-history delete (Clint's request, 2026-07-10): a user can remove
+    their own past sessions. The row delete cascades to execution_steps
+    (008_execution_steps.sql FK), so the trace goes with it. RLS scopes the
+    lookup, so foreign and nonexistent ids 404 identically (same pattern as
+    every other id-taking route here)."""
+    if not _valid_uuid(session_id):
+        raise HTTPException(status_code=404, detail="Session not found.")
+    rows = await supabase_request(
+        "GET", f"research_sessions?id=eq.{session_id}&select=id",
+        request.state.access_token,
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="Session not found.")
+    await supabase_request(
+        "DELETE", f"research_sessions?id=eq.{session_id}", request.state.access_token,
+    )
+    return {"status": "deleted", "session_id": session_id}
 
 
 @app.get("/research/{session_id}")

@@ -417,13 +417,23 @@ CREATE POLICY "own documents" ON documents USING (user_id = auth.uid());
 /health [GET] · /status/breakers [GET]
 /collections [POST,GET] · /collections/{id} [DELETE]
 /collections/{id}/documents [POST,GET] · /documents/{id} [DELETE]
-/research [POST,GET] · /research/{id} [GET] · /research/{id}/trace [GET]
+/research [POST,GET] · /research/{id} [GET,DELETE] · /research/{id}/trace [GET]
+/research/{id}/cancel [POST]
 ```
 
 `GET /research` (Sprint 4.1) lists the caller's own sessions (`?collection_id=&limit=&offset=`)
 for the Phase 4 session-history UI — metadata only (`id, collection_id, query, status,
 created_at`), no `report` field, so opening the list doesn't pull every stored report over
 the wire.
+
+Cancellation (Sprint 4.3 rework #2, 2026-07-10) is an explicit DB signal, not disconnect
+detection — Render's proxy buffers the request cycle, so the backend can never observe a client
+abort (two disconnect-based designs failed live before this). The client generates ids up front
+(`document_id` in the upload body, `session_id` in the research body — both optional), then
+cancel = `DELETE /documents/{id}` (the upload loop polls its own row's existence between
+embedding batches) or `POST /research/{id}/cancel` (the step tracer checks the session's status
+before each agent runs). `DELETE /research/{id}` (same rework) removes a session and, via FK
+cascade, its execution trace.
 
 **Not built** — the original V3 sketch's `/soc/*`, `/admin/*`, and the MCP server all assume
 either an admin role (Phase 4b, see `docs/ADR-018.md` Part 3) or a service not yet started

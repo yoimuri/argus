@@ -268,15 +268,84 @@ now and IP didn't.
 
 ### Sprint 4.3 — Sessions, timeline, report UX, cancel
 
-**Status:** 🟡 Reworked 2026-07-10 after a live test caught real bugs; still not re-verified.
+**Status:** 🟡 Reworked TWICE (2026-07-10) after live tests; awaiting re-verification.
 First cut was code-complete 2026-07-09; Clint live-tested with a second account 2026-07-10 and
-found six issues (below). The sessions list, execution timeline, per-account isolation (GATE-18
-now effectively passed — the second account saw only its own sessions), report split view, and
-confidence badge all worked. **But the cancel feature was an illusion, exactly as its own 🟡
-caveat warned** — plus four smaller bugs. All six are now fixed in code; `npm run build` clean,
-backend `py_compile` clean, new Tailwind classes confirmed in compiled CSS. **None of the fixes
-has been re-tested live yet** — and given cancel already fooled us once, its re-test is
-load-bearing, not a formality.
+found six issues (first list below). The sessions list, execution timeline, per-account isolation
+(GATE-18 now passed — the second account saw only its own sessions), report split view, and
+confidence badge all worked. The first rework's cancel fix (`request.is_disconnected()` polling)
+**also failed live** — see "Rework #2" below for why, and for the design that replaced it. All
+known issues are now fixed in code; `npm run build` clean, backend `py_compile` clean, new
+Tailwind classes confirmed in compiled CSS. **Nothing re-verified live yet.**
+
+**Rework #2 (2026-07-10, second live test): cancel redesigned around an explicit DB signal.**
+The live re-test showed `is_disconnected()` never fires either — uploads still completed after
+cancel, research ran to completion with no `cancelled` status ever appearing. Conclusion, now
+twice-proven: **the backend cannot observe a client disconnect at all behind Render's proxy**,
+which buffers the whole request/response cycle. Any cancel design that depends on detecting the
+disconnect (exception-based, polling-based, anything) is dead on this platform. The replacement
+puts the cancel signal *in the database*, which the backend can always see:
+
+- **Upload:** the client now generates the document's uuid and sends it in the upload body
+  (`document_id`, optional — old callers unaffected). The backend creates the document row
+  FIRST (so cancel has a target from the first moment), and its embedding loop polls "does my
+  row still exist?" between batches. The Cancel button simply calls the existing
+  `DELETE /documents/{id}` — row vanishes, loop notices, stops; chunks are gone via the FK
+  cascade and any straggler insert fails on the FK. End state after cancel: no document, no
+  chunks, nothing to double on re-upload. Early failures (bad storage fetch, not a PDF) now
+  delete the row instead of leaving a `failed` husk; failures mid-embedding still mark `failed`
+  (GATE-22's expectation, preserved).
+- **Research:** the client generates the session uuid too (`session_id` in the POST body) —
+  necessary because `/research` is synchronous, so without this the client only learns the id
+  when the response returns, exactly too late to cancel. New endpoint
+  `POST /research/{id}/cancel` flips the session row to `cancelled`
+  (`&status=eq.running` — only a running session can be cancelled). The `traced()` wrapper in
+  `step_writer.py` checks that flag before every agent runs and raises `ResearchCancelled`,
+  which `/research` catches and returns quietly — the pipeline actually stops mid-run, within
+  one agent boundary of the click. The final "completed" write is also filtered to
+  `status=eq.running`, so a finished report can never overwrite a cancellation, even in a race.
+  Cost: one small status read per agent (~6–9 per query) — the price of cancellation that
+  actually works on this platform.
+- **Navigate-away:** the panel's unmount hook fires the same two DB-signal calls with
+  `keepalive: true` (survives the page going away), then aborts the local fetches.
+- **Honest residual, stated up front:** every cancel signal is sent three times (immediately,
+  +5s, +30s) to cover the cold-start race — Render's proxy holds a request while the free-tier
+  dyno wakes (30–60s), and until the backend runs, the row the cancel targets doesn't exist yet.
+  A cold start longer than the last retry can still outrun the cancel; in that rare case the
+  work completes normally and the resulting doc/session is simply deleted from its list
+  afterward. No design on a synchronous transport closes this window completely — the async-jobs
+  rearchitecture (deferred, BLUEPRINT) is the real fix for that tail case.
+
+**Also in rework #2 (Clint's 2026-07-10 feedback round):**
+- **Double login, structural fix:** intermittent first-login `?reason=idle` bounces. Root cause
+  never reliably reproducible ("random" per testing), so instead of a fourth guess at where the
+  stale `last_active` cookie leaks from, the fix makes the false positive structurally
+  impossible: new `/auth/activity` route (server-side, the cookie is httpOnly) stamps
+  `last_active = now` the moment sign-in succeeds — `LoginForm` calls it before navigating. A
+  fresh login now starts with a fresh timestamp no matter what any older cookie said. The login
+  page also finally explains an idle signout ("You were signed out after 30 minutes...") instead
+  of a bare `?reason=idle` URL.
+- **Session history delete:** new `DELETE /research/{id}` (RLS-scoped, 404-indistinguishable,
+  cascades to `execution_steps` via 008's FK) + a Delete button per row in the sessions list.
+  Auto-expiry after N days noted as a future owner item (needs pg_cron — not built, not claimed).
+- **App shell (start of the IA Clint asked for):** `/dashboard` is now a real overview — counts
+  (collections/documents/sessions, read via the Supabase server client so RLS scopes them with
+  zero backend round-trip), a numbered how-it-works with a "Get started →" CTA for empty
+  accounts, latest-session card, and the free-tier cold-start note. The workspace
+  (collections/upload/query) moved to `/dashboard/workspace` with its own nav tab. The ARGUS
+  wordmark links back to the dashboard. The theme toggle and logout moved into a new
+  profile-circle dropdown (`ProfileMenu.tsx`) with About/Privacy links (pointing at the public
+  repo docs that actually exist) and a deliberately-disabled "Settings (coming soon)" — no dead
+  links, the docs-honesty rule applied to UI.
+- **SOC explainer:** a plain-words "What is this page?" card for normal users — what breakers
+  are, why seeing blocked events means the defense is working.
+- **Sizing pass:** collections list (max-h-64) and documents list (max-h-56) scroll internally
+  instead of stretching the page; the PDF preview is a fixed 320px viewer on every breakpoint
+  (the PDF scrolls inside it); the query textarea caps at 120px then scrolls internally.
+  **Enter now submits the query** (Shift+Enter for a newline), matching the chat convention.
+- The public landing page and the broader visual polish stay Sprint 4.4 — explicitly not
+  half-built here.
+
+**Live test 2026-07-10 (first round) — six findings, root causes, and fixes:**
 
 **Live test 2026-07-10 — six findings, root causes, and fixes:**
 1. **Cancel was an illusion (the big one).** Root cause confirmed against the deployed stack
@@ -285,15 +354,14 @@ load-bearing, not a formality.
    actively poll via `request.is_disconnected()`. So the `except asyncio.CancelledError` clauses
    from the first cut almost never fired; a "cancelled" upload ran to completion (proof: cancel →
    leave collection → return → the PDF was there anyway), and re-uploading then **doubled** the
-   document. Same for research: it kept running in the background after navigating away. **Fix:**
-   real cooperative cancellation. `/research` now runs the graph as an `asyncio` task and races it
-   against a `request.is_disconnected()` poll (0.5s) — on disconnect it cancels the task itself
-   and marks the session `cancelled`. Upload now checks `is_disconnected()` before creating the
-   document row and between every embedding batch; on disconnect it **fully deletes** the document
-   row + any chunks (new `_delete_document_fully` helper) so a cancelled upload leaves zero trace
-   — no phantom, nothing to double. The `except CancelledError` clauses stay as a backstop. This
-   is the honest fix, but it STILL rests on `is_disconnected()` firing correctly on Render, which
-   is exactly the class of assumption that just burned us — so it is 🟡 until the live re-test.
+   document. Same for research: it kept running in the background after navigating away.
+   **[Fix attempt #2, SUPERSEDED same day → see "Rework #2" above]** cooperative cancellation via
+   a `request.is_disconnected()` poll. The write-up here flagged, verbatim, that it "STILL rests
+   on `is_disconnected()` firing correctly on Render, which is exactly the class of assumption
+   that just burned us" — and the live re-test proved it doesn't fire either (Render's proxy
+   buffers the request cycle; the backend can never observe a client abort in any form). The
+   full-delete cleanup helper (`_delete_document_fully`) survives into the final design; the
+   disconnect polling does not. Current mechanism: explicit DB-signal cancel — Rework #2 above.
 2. **PDF preview showed nothing (CSP).** The `<embed>`/blob preview was blocked by
    `object-src 'none'` (in place since ADR-008). **Fix:** switched the preview to an `<iframe>`
    and added `frame-src 'self' blob:` to the CSP in `proxy.ts`; `object-src 'none'` stays intact
@@ -400,30 +468,37 @@ format** stays Sprint 4.6 (its own planning pass, D17) — noted, not built.
   treatment as `UploadPanel.tsx`'s live result view, so a historical session and a just-finished
   query read identically.
 
-**Verify live (manual steps, Clint's) — the 2026-07-10 rework RE-test:**
+**Verify live (manual steps, Clint's) — the rework #2 RE-test, 2026-07-10:**
 1. `git push` — Render + Vercel both redeploy. (Cancel spans backend + frontend; wait for Render.)
-2. **Cancel, THE load-bearing test — this is what fooled us once, so prove it, don't trust it:**
-   - Research: start a query, click Cancel mid-run (or navigate away). The backend log should show
-     the graph task getting cancelled; the session row in `/dashboard/sessions` must read
-     `Cancelled`, never stuck `Running`. Confirm a report is NOT written afterward.
-   - Upload: start uploading, click Cancel (or leave) mid-processing. The document must NOT appear
-     in the Documents list at all (full delete — not a `failed` phantom), and re-uploading the same
-     file must produce exactly ONE document, not two. Query that collection and confirm nothing
-     from the cancelled upload is retrievable.
-   - If cancel still doesn't actually stop the work, `is_disconnected()` isn't firing on Render as
-     expected — say so and we pursue an explicit `/research/{id}/cancel` flag endpoint instead.
-     Do not re-mark this ✅ on hope.
-3. Preview: pick a PDF — it must actually render in the iframe now (the CSP `frame-src blob:` fix).
-   Confirm the preview sits to the RIGHT of the controls on a wide window and STACKS below on a
-   narrow one (resize the window or use device emulation). Check the query box grows as you type a
-   long question and wraps instead of running off the edge. No CSP violations in the console.
-4. Ask a normal question: answer + confidence badge + "Show details" (Sources/Confidence) +
-   "View execution trace →" opening the timeline (6 agents, real latencies). If a query that has
-   context returns "AI service unavailable," check the trace — a transient retry blip should no
-   longer clobber a good first answer (#4 fix); a full Groq outage legitimately still shows it.
-5. Open `/dashboard/sessions`, confirm statuses/dates; open one, confirm trace + report render.
-6. GATE-21 (second account, now available): as account B, visit `/dashboard/sessions/<A's session
-   id>` and confirm "Session not found," not a leak.
+2. **Cancel, THE load-bearing test (third design — prove it, don't trust it):**
+   - Research: start a query, click Cancel mid-run. The session in `/dashboard/sessions` must
+     read `Cancelled` (the Cancel button now writes that status directly, so it should appear
+     immediately), AND the execution trace for that session must show the pipeline stopping
+     partway (fewer than the full 6+ agent steps) — that second part is the proof the work
+     actually stopped, not just the label changing. No report on the session afterward.
+   - Upload: start uploading, click Cancel mid-processing. The document must NOT appear in the
+     Documents list at all (refresh to confirm — no phantom, no `failed` husk), and re-uploading
+     the same file must produce exactly ONE document. Query the collection: nothing from the
+     cancelled upload is retrievable.
+   - Navigate-away variant: start a research query, immediately click over to SOC. Come back —
+     the session must end up `Cancelled`, not `Completed`.
+   - Fallback if this STILL fails: there is no fourth cancel design to try on this transport —
+     the remaining option is the deferred async-jobs rearchitecture (BLUEPRINT), and we'd hide
+     the button honestly rather than ship it broken again.
+3. Double login: log out, log back in several times (and once after 30+ min away). No first-login
+   `?reason=idle` bounce should occur — sign-in now stamps the activity cookie before any request
+   reaches the idle check. The idle message itself, when legitimate, now shows a plain-words
+   banner on the login page.
+4. New shell: ARGUS wordmark returns to the dashboard; the dashboard shows counts + Get Started;
+   Workspace is its own tab; the profile circle opens a menu (theme inside it, About/Privacy repo
+   links, Settings greyed "coming soon", Log out).
+5. Preview renders in its fixed 320px viewer (right of the controls on wide, stacked on narrow);
+   collections/documents lists scroll internally past their caps instead of stretching the page;
+   the query box wraps and stops growing at ~120px; **Enter submits** (Shift+Enter = newline).
+6. Sessions: Delete removes a session (and its trace — reopen its old URL, expect "Session not
+   found"). SOC shows the "What is this page?" explainer.
+7. GATE-21 (second account): as B, visit `/dashboard/sessions/<A's session id>` — "Session not
+   found," not a leak.
 
 ---
 

@@ -118,24 +118,37 @@ the project's gaps table. Two are now resolved (below), two are still open:
   on `/login` directly — typed URL, bookmark, or a client-side redirect after a 401 — skips
   that branch entirely, so a stale cookie from a session that ended >30 min earlier was never
   cleared before the next login. Fixed same day: `proxy.ts` now clears `last_active` for
-  *any* unauthenticated request, not just the redirect-into-`/login` case. `npm run build`
-  clean. Still needs a live re-test (log out or let idle timeout fire, wait 30+ min, then log
-  in via a direct `/login` visit — not via being bounced there — and confirm it succeeds on
-  the first try) before flipping to fully verified.
+  *any* unauthenticated request, not just the redirect-into-`/login` case. **Recurred anyway,
+  reported "random" 2026-07-10** — a stale cookie still leaks in by some path never reliably
+  reproduced. Rather than a fourth guess at the leak, the 2026-07-10 fix makes the false
+  positive structurally impossible: a new `/auth/activity` route stamps `last_active = now`
+  server-side the moment sign-in succeeds (`LoginForm` calls it before navigating), so a fresh
+  login can never be judged idle regardless of what any older cookie said. The login page also
+  now explains an idle signout in plain words instead of a bare `?reason=idle` URL. 🟡 until
+  Clint's live re-test (several login cycles + one after 30+ min away, no first-login bounce).
 - ~~**No per-collection file list.**~~ **Fixed and live-verified 2026-07-08**, as part of the
   Phase 3a document-management fix (`docs/PHASE3.md`) — opening a collection now shows its name
   and document list.
-- ~~**No upload-cancel.**~~ **Built in Sprint 4.3 (2026-07-09), 🟡 code-complete not yet
-  live-verified.** Upload and research both get a Cancel button; navigating away or unmounting
-  the panel aborts whatever's in flight instead of leaving it running invisibly. One honest
-  limitation: the installed `@supabase/storage-js` has no abort-signal option on `upload()`, so
-  a cancel clicked during the Storage-upload leg is a "soft" cancel — that leg still completes,
-  but the backend PDF-processing call (the expensive half: extraction + embedding) never fires
-  for it, so no document/embedding job is created. See `docs/PHASE4.md` Sprint 4.3 for the full
-  design (D15) and the live-verification steps still needed.
+- ~~**No upload-cancel.**~~ **Built in Sprint 4.3, redesigned twice after live failures, 🟡
+  awaiting re-test of design #3 (2026-07-10).** Two disconnect-based designs failed live —
+  Render's proxy buffers the request cycle, so the backend can never observe a client abort in
+  any form (`asyncio.CancelledError` never raised; `request.is_disconnected()` never flips).
+  Design #3 puts the cancel signal in the DB instead: client-generated ids sent up front, Cancel
+  = `DELETE /documents/{id}` (upload loop polls its own row's existence between embedding
+  batches) / `POST /research/{id}/cancel` (pipeline checks the flag before every agent).
+  Navigate-away fires the same calls with `keepalive`. The storage-js soft-cancel limitation
+  from the first cut still applies to the Storage-upload leg. Full trail: `docs/PHASE4.md`
+  Sprint 4.3 "Rework #2"; gate: GATE-25. If design #3 also fails live, the honest fallback is
+  hiding the button until the async-jobs rearchitecture — no fourth design exists on a
+  synchronous transport.
 
 **Phase:** unassigned, not yet triaged. Small enough to bundle with Item 2's UI work when
 that gets picked up.
+
+**Owner note (2026-07-10, from Clint's feedback):** session history should eventually
+auto-expire after N days (or offer "request deletion") — needs `pg_cron` or an external
+scheduled job, neither of which exists in this stack yet, so it's parked here rather than
+half-built. Manual per-session delete shipped in Sprint 4.3 (`DELETE /research/{id}`).
 
 ---
 

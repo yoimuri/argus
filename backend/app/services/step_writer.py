@@ -3,6 +3,33 @@ from app.services.supabase_client import supabase_request
 from app.services.observability import traced_span, mark_span
 
 
+class ResearchCancelled(Exception):
+    """Raised between agent nodes when the session row says 'cancelled'.
+
+    Cancel rework (2026-07-10): the frontend's Cancel button calls
+    POST /research/{id}/cancel, which flips the session's status in the DB.
+    The pipeline can't learn about a client disconnect any other way on
+    Render (its proxy buffers the request cycle and never propagates the
+    abort -- two disconnect-based designs failed live before this), so each
+    traced node checks the flag before running and raises this to stop the
+    graph. Caught in main.py's /research handler, never turned into a 500."""
+    pass
+
+
+async def _session_cancelled(session_id, access_token) -> bool:
+    """True only when the session row explicitly reads 'cancelled'. Any
+    failure of the check itself (transient Supabase blip) returns False --
+    a health check must never kill a healthy research run."""
+    try:
+        rows = await supabase_request(
+            "GET", f"research_sessions?id=eq.{session_id}&select=status", access_token,
+        )
+        return bool(rows) and rows[0].get("status") == "cancelled"
+    except Exception as check_err:
+        print(f"[ARGUS] cancel-check failed for session {session_id} (assuming running): {check_err}")
+        return False
+
+
 async def record_step(session_id, user_id, access_token, step_index, agent_name, status, latency_ms, detail):
     """Writes one execution_steps row. Never raises — the diary is a passive
     observer; if this write fails (bad table, RLS glitch, Supabase down), the
@@ -42,6 +69,16 @@ def traced(agent_name: str):
             session_id = state.get("session_id")
             user_id = state.get("user_id")
             access_token = state.get("access_token")
+
+            # Cancel checkpoint (2026-07-10): one cheap status read before each
+            # agent runs. Costs ~6-9 small selects per research call; buys the
+            # ability to actually STOP mid-pipeline when the user cancels,
+            # which no disconnect-based mechanism can do behind Render's proxy.
+            # session_id None = diary disabled = nothing to check against.
+            if session_id and await _session_cancelled(session_id, access_token):
+                print(f"[ARGUS] session {session_id} cancelled by user -- stopping before {agent_name}.")
+                raise ResearchCancelled()
+
             start = time.monotonic()
 
             try:

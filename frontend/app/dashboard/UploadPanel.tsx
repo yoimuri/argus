@@ -30,12 +30,31 @@ function isAbortError(err: unknown): boolean {
   return err instanceof Error && err.name === 'AbortError'
 }
 
+// Cancel signals are sent three times: immediately, +5s, +30s. Covers the
+// cold-start race -- if Render's free-tier dyno is still waking when the user
+// cancels, the row the signal targets doesn't exist yet (early calls 404
+// harmlessly) but the proxy holds the queued request and processes it once
+// the dyno is up; a later retry then lands after the backend has created the
+// row, so the in-flight work still gets stopped. All attempts fire-and-forget.
+// Honest residual: a cold start longer than ~30s can still outrun the last
+// retry -- in that rare case the work completes and the doc/session can be
+// deleted from its list afterward. Stated in docs/PHASE4.md, not hidden.
+function fireCancelSignal(send: () => Promise<unknown>) {
+  send().catch(() => {})
+  for (const delay of [5000, 30000]) {
+    setTimeout(() => {
+      send().catch(() => {})
+    }, delay)
+  }
+}
+
 // The query box is a textarea that grows with its content and wraps to the
 // next line as it fills (2026-07-10 fix: it used to be a fixed-width
-// single-line input that ran off the container). Grows up to ~200px, then
-// scrolls -- done in JS rather than the CSS `field-sizing: content` property
-// because that isn't in Firefox/Safari yet, and this must work on every device.
-const QUERY_MAX_HEIGHT = 200
+// single-line input that ran off the container). Capped low (Clint: the form
+// should stay SHORT) -- past the cap it scrolls internally instead of pushing
+// the page down. JS rather than CSS `field-sizing: content` because that
+// property isn't in Firefox/Safari yet, and this must work on every device.
+const QUERY_MAX_HEIGHT = 120
 function autoGrowTextarea(el: HTMLTextAreaElement) {
   el.style.height = 'auto'
   el.style.height = `${Math.min(el.scrollHeight, QUERY_MAX_HEIGHT)}px`
@@ -70,6 +89,12 @@ export default function UploadPanel() {
   const [error, setError] = useState<string | null>(null)
   const [uploading, setUploading] = useState(false)
   const uploadAbortRef = useRef<AbortController | null>(null)
+  // Cancel rework (2026-07-10): WE generate the document's uuid and send it
+  // with the upload, so Cancel can DELETE /documents/{id} immediately -- the
+  // backend polls for that row vanishing between embedding batches. Backend
+  // disconnect detection provably doesn't work behind Render's proxy (two
+  // prior designs failed live), so the cancel signal lives in the DB instead.
+  const uploadDocIdRef = useRef<string | null>(null)
 
   const [query, setQuery] = useState('')
   const [report, setReport] = useState<string | null>(null)
@@ -77,6 +102,10 @@ export default function UploadPanel() {
   const [showDetails, setShowDetails] = useState(false)
   const [researching, setResearching] = useState(false)
   const researchAbortRef = useRef<AbortController | null>(null)
+  // Same trick for research: client-generated session id, known BEFORE the
+  // synchronous /research call returns, so Cancel can hit
+  // POST /research/{id}/cancel mid-run.
+  const researchSessionIdRef = useRef<string | null>(null)
   const queryRef = useRef<HTMLTextAreaElement>(null)
 
   const [collections, setCollections] = useState<Collection[]>([])
@@ -152,21 +181,39 @@ export default function UploadPanel() {
     previewUrlRef.current = previewUrl
   }, [previewUrl])
 
-  // Sprint 4.3 (D15): navigating away must abort whatever's in flight, not
-  // leave it running invisibly. Covers both leaving the panel (unmount) and
-  // switching collections (resetToCollectionList, below) while a request
-  // is still active.
+  // Sprint 4.3 (D15, reworked 2026-07-10): navigating away must actually STOP
+  // the work, not just abort the local fetch (the backend can't see aborts
+  // behind Render's proxy). Fires the explicit DB-signal cancels -- keepalive
+  // so the requests survive the page going away -- then aborts. Covers both
+  // leaving the panel (unmount) and switching collections
+  // (resetToCollectionList, below) while a request is still active.
   useEffect(() => {
     return () => {
-      uploadAbortRef.current?.abort()
-      researchAbortRef.current?.abort()
+      cancelInFlightWork()
       if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current)
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  function resetToCollectionList() {
+  // Shared by the Cancel buttons, unmount, and collection-switch. The DB
+  // write is the real cancel; the abort just settles the local fetch.
+  function cancelInFlightWork() {
+    const docId = uploadDocIdRef.current
+    if (docId) {
+      uploadDocIdRef.current = null
+      fireCancelSignal(() => apiFetch(`/documents/${docId}`, { method: 'DELETE', keepalive: true }))
+    }
+    const sid = researchSessionIdRef.current
+    if (sid) {
+      researchSessionIdRef.current = null
+      fireCancelSignal(() => apiFetch(`/research/${sid}/cancel`, { method: 'POST', keepalive: true }))
+    }
     uploadAbortRef.current?.abort()
     researchAbortRef.current?.abort()
+  }
+
+  function resetToCollectionList() {
+    cancelInFlightWork()
     if (previewUrl) URL.revokeObjectURL(previewUrl)
     setCollectionId(null)
     setActiveCollectionName(null)
@@ -236,6 +283,13 @@ export default function UploadPanel() {
   }
 
   function handleCancelUpload() {
+    // DB-delete first (the real cancel -- the backend polls for the row
+    // vanishing), then abort the local fetch for instant UI feedback.
+    const docId = uploadDocIdRef.current
+    if (docId) {
+      uploadDocIdRef.current = null
+      fireCancelSignal(() => apiFetch(`/documents/${docId}`, { method: 'DELETE', keepalive: true }))
+    }
     uploadAbortRef.current?.abort()
   }
 
@@ -251,6 +305,8 @@ export default function UploadPanel() {
 
     const controller = new AbortController()
     uploadAbortRef.current = controller
+    const docId = crypto.randomUUID()
+    uploadDocIdRef.current = docId
     setUploading(true)
     try {
       // Storage upload stays a direct Supabase call (api.ts only wraps the
@@ -290,14 +346,21 @@ export default function UploadPanel() {
 
       // 2. Send ONLY the JSON file path to the Render backend
       setStatus('Processing document...')
-      const data = await apiJson<{ document_id: string; chunks_created: number; chunks_quarantined: number }>(
-        `/collections/${collectionId}/documents`,
-        {
-          method: 'POST',
-          body: JSON.stringify({ file_path: filePath, file_name: file.name }),
-          signal: controller.signal,
-        },
-      )
+      const data = await apiJson<{
+        status?: string
+        document_id: string
+        chunks_created: number
+        chunks_quarantined: number
+      }>(`/collections/${collectionId}/documents`, {
+        method: 'POST',
+        body: JSON.stringify({ file_path: filePath, file_name: file.name, document_id: docId }),
+        signal: controller.signal,
+      })
+      if (data.status === 'cancelled') {
+        // Backend noticed our cancel-delete mid-processing and stopped.
+        setStatus('Upload cancelled.')
+        return
+      }
       const quarantined = data.chunks_quarantined ?? 0
       setStatus(
         quarantined > 0
@@ -317,6 +380,7 @@ export default function UploadPanel() {
     } finally {
       setUploading(false)
       uploadAbortRef.current = null
+      uploadDocIdRef.current = null
     }
   }
 
@@ -334,6 +398,13 @@ export default function UploadPanel() {
   }
 
   function handleCancelResearch() {
+    // Flip the DB flag first (the real cancel -- the pipeline checks it
+    // before every agent), then abort the local fetch for instant feedback.
+    const sid = researchSessionIdRef.current
+    if (sid) {
+      researchSessionIdRef.current = null
+      fireCancelSignal(() => apiFetch(`/research/${sid}/cancel`, { method: 'POST', keepalive: true }))
+    }
     researchAbortRef.current?.abort()
   }
 
@@ -343,20 +414,27 @@ export default function UploadPanel() {
     setReport(null)
     setSessionId(null)
     setShowDetails(false)
-    if (!collectionId || !query) return
+    if (!collectionId || !query.trim()) return
 
     const controller = new AbortController()
     researchAbortRef.current = controller
+    const sid = crypto.randomUUID()
+    researchSessionIdRef.current = sid
     setResearching(true)
     try {
-      const data = await apiJson<{ report: string; session_id: string | null; status: string }>(
-        '/research',
-        {
-          method: 'POST',
-          body: JSON.stringify({ collection_id: collectionId, query }),
-          signal: controller.signal,
-        },
-      )
+      const data = await apiJson<{
+        status?: string
+        report?: string
+        session_id: string | null
+      }>('/research', {
+        method: 'POST',
+        body: JSON.stringify({ collection_id: collectionId, query, session_id: sid }),
+        signal: controller.signal,
+      })
+      if (data.status === 'cancelled' || !data.report) {
+        setStatus('Research cancelled.')
+        return
+      }
       setReport(data.report)
       setSessionId(data.session_id)
     } catch (err) {
@@ -365,6 +443,7 @@ export default function UploadPanel() {
     } finally {
       setResearching(false)
       researchAbortRef.current = null
+      researchSessionIdRef.current = null
     }
   }
 
@@ -404,7 +483,9 @@ export default function UploadPanel() {
               <p className="text-sm text-ink-muted">No collections yet. Create one above.</p>
             )}
             {collections.length > 0 && (
-              <ul className="divide-y divide-hairline rounded-lg border border-hairline">
+              // Capped height + internal scroll: long lists must not stretch
+              // the page (2026-07-10 sizing feedback).
+              <ul className="max-h-64 divide-y divide-hairline overflow-y-auto rounded-lg border border-hairline">
                 {collections.map((c) => (
                   <li key={c.id} className="flex items-center gap-2 p-3">
                     <span className="min-w-0 flex-1 truncate text-sm text-ink">{c.name}</span>
@@ -477,15 +558,18 @@ export default function UploadPanel() {
             </div>
 
             {previewUrl ? (
-              <div className="overflow-hidden rounded-lg border border-hairline bg-surface-raised">
+              // Fixed height on every breakpoint (2026-07-10 sizing feedback:
+              // the container must not stretch with the PDF -- the PDF
+              // scrolls inside its own viewer instead).
+              <div className="h-[320px] overflow-hidden rounded-lg border border-hairline bg-surface-raised">
                 {/* Decision #11: local blob: URL, zero network -- confirm this is
                     the right file before it leaves the browser. <iframe> (not
                     <embed>) so the CSP can allow it via frame-src blob: while
                     object-src stays 'none' (see proxy.ts). */}
-                <iframe src={previewUrl} title="PDF preview" className="h-[300px] w-full lg:h-full lg:min-h-[300px]" />
+                <iframe src={previewUrl} title="PDF preview" className="h-full w-full" />
               </div>
             ) : (
-              <div className="hidden items-center justify-center rounded-lg border border-dashed border-hairline bg-surface-page p-6 text-center text-xs text-ink-muted lg:flex">
+              <div className="hidden h-[320px] items-center justify-center rounded-lg border border-dashed border-hairline bg-surface-page p-6 text-center text-xs text-ink-muted lg:flex">
                 Choose a PDF and it previews here before you upload it.
               </div>
             )}
@@ -498,7 +582,8 @@ export default function UploadPanel() {
               <p className="text-sm text-ink-muted">No documents yet. Upload a PDF above.</p>
             )}
             {documents && documents.length > 0 && (
-              <ul className="divide-y divide-hairline rounded-lg border border-hairline">
+              // Same cap as the collections list -- scrolls internally.
+              <ul className="max-h-56 divide-y divide-hairline overflow-y-auto rounded-lg border border-hairline">
                 {documents.map((d) => (
                   <li key={d.id} className="flex items-center gap-2 p-3 text-sm">
                     <span className="min-w-0 flex-1 truncate text-ink">{d.filename}</span>
@@ -525,10 +610,20 @@ export default function UploadPanel() {
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               onInput={(e) => autoGrowTextarea(e.currentTarget)}
+              // Enter submits (chat convention); Shift+Enter inserts a line
+              // break. Typing past the width wraps automatically; past the
+              // height cap the box scrolls internally instead of growing the
+              // page (2026-07-10 feedback: keep this form short and fixed).
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault()
+                  e.currentTarget.form?.requestSubmit()
+                }
+              }}
               rows={1}
               required
-              placeholder="e.g. What are the top causes of breach in this report?"
-              className={`${inputClass} resize-none overflow-hidden`}
+              placeholder="e.g. What are the top causes of breach in this report? (Enter to ask)"
+              className={`${inputClass} max-h-[120px] resize-none overflow-hidden`}
             />
             <div className="flex flex-wrap gap-2">
               <button type="submit" disabled={researching || !query.trim()} className={primaryBtn}>
