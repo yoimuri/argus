@@ -1,9 +1,12 @@
 # ARGUS — Phase 4: Dashboard, Sessions, Public Landing, Chatbot, Multimodal
 
-**Status:** 🟡 Sprint 4.1 code-complete, not yet live-verified. Sprints 4.2–4.6 not started. Every
-checkbox below is ⏳ until its sprint is code-complete (🟡) and then confirmed against the live
-Render + Vercel app (✅), per the project's status-marks rule. This file is the execution plan,
-not a status claim.
+**Status:** ✅ Sprint 4.1 live-verified 2026-07-09. ✅ Sprint 4.2 functionality live-verified
+2026-07-09 — with its cross-user *isolation* gates (GATE-18/19/20/21) still 🟡, pending a second
+test account (the SOC page is proven to show your own data, not yet proven to hide others'; see
+the Sprint 4.2 section). 🟡 Sprint 4.3 code-complete 2026-07-09, not yet live-verified. Sprints
+4.4–4.6 not started. Every checkbox below is ⏳ until its sprint is code-complete (🟡) and then
+confirmed against the live Render + Vercel app (✅), per the project's status-marks rule. This
+file is the execution plan, not a status claim.
 **Timeline:** Weeks 11–13 (blueprint), realistically paced across the six sub-sprints below.
 **SDLC Stages:** UI/UX Design → Realtime Integration → Public Surface → Re-deploy
 **Prerequisite:** Phase 3 closed and live-verified (✅ 3a 2026-07-08, 3b 2026-07-09). Confirmed
@@ -99,9 +102,23 @@ across every touched file.
 
 ### Sprint 4.2 — Theme system + frontend foundation + SOC page
 
-**Status:** 🟡 Code-complete 2026-07-09, not yet live-verified. `npm run build` clean; dev-server
-smoke test confirmed the CSP nonce wires correctly end to end and auth-gated routes still redirect
-correctly (see "Verify live" below for exactly what still needs a real login session).
+**Status:** ✅ Functionality live-verified 2026-07-09 — but the per-account *isolation* security
+property is NOT yet proven (see the caveat below; only one test account exists). Theme toggle (no
+stuck state, no flash), breaker panel (all 4 cards + Langfuse chip, confirmed with browser
+extensions/Brave Shields on — the `/status/breakers` regression test), live security-events feed
+with `user_agent` populated (GATE-20's live-append half), and the `wss://` CSP entry (implicitly
+confirmed by the Realtime socket connecting) all tested against the real deployed app, not just
+built.
+
+**Honest scope of that ✅ (the project's #1 drift pattern, guarded against on purpose):** what is
+verified is that the SOC feed *shows a user their own events*. What is NOT verified is that it
+*hides other users' events* — GATE-18/19/20's cross-user isolation halves and GATE-21 have never
+run, because there is only one test account. The isolation is enforced structurally by RLS (same
+policies proven in Phases 1–3), but "enforced by construction" is not "verified live," and for a
+feature whose entire premise is "per-account view only," that isolation IS the security claim.
+It stays 🟡 until a second account runs those gates. The optional `ui-ux-pro-max` second design
+pass was also never picked up (not required — the shipped design system is already
+functionality-verified).
 
 **What was built:**
 - Design system generated from the locked design direction (light-first minimal, cyan/blue
@@ -250,13 +267,99 @@ now and IP didn't.
 
 ### Sprint 4.3 — Sessions, timeline, report UX, cancel
 
-**Status:** ⏳ Not started.
+**Status:** 🟡 Code-complete 2026-07-09, not yet live-verified. `npm run build` clean, backend
+`py_compile` clean, new Tailwind utility classes confirmed resolved in the compiled CSS (same
+discipline as Sprint 4.2 — a clean build does not by itself prove a class survived). No test
+credentials in this environment, so nothing below has been clicked through by hand yet.
 
-Planned: `/dashboard/sessions` list (consumes Sprint 4.1's `GET /research`) + deep-linkable
-`/dashboard/sessions/[id]` detail with an `ExecutionTimeline` (consumes `/research/{id}/trace`,
-live since Sprint 3a.5); Sources/Confidence moved behind a "show details" toggle; upload/research
-cancel support (`AbortController` + backend `CancelledError` cleanup); in-browser PDF preview
-before a file is committed to a collection.
+**What was built:**
+- `backend/main.py` — cancel support (D15). Both `/research` and `/collections/{id}/documents`
+  gained an `except asyncio.CancelledError:` clause. This needed its own clause because
+  `CancelledError` is a `BaseException` in Python 3.8+, not an `Exception` — the existing
+  `except Exception:` blocks in both handlers never catch it, so before this change a client
+  disconnect (cancel button, closed tab, navigated away) left the session silently stuck at
+  `status: "running"` forever and left any already-uploaded document stuck at `"processing"`.
+  On research cancel: `_mark_session_error()` (renamed conceptually, still the same function —
+  now takes a `status` parameter, defaulting to `"error"` so every existing call site is
+  unchanged) is called with `status="cancelled"`, a distinct value from `"error"` so a
+  user-initiated stop never reads as a system failure on the sessions list. On upload cancel:
+  `_mark_document_failed()` runs (reuses `"failed"`, no new document status), **and** a new
+  `_delete_partial_chunks()` helper deletes any `document_chunks` rows already embedded before
+  the cancel landed — this turned out to be load-bearing, not just tidiness: `match_document_chunks`
+  (the vector-search RPC, `004_security_and_trust.sql`) has no `documents.status` filter, so a
+  half-embedded "failed" document's chunks would otherwise still be fully retrievable in search.
+  Every except-clause re-raises after cleanup — swallowing `CancelledError` would leave the ASGI
+  server's own cancellation bookkeeping in an inconsistent state.
+  **Honest caveat, stated per the plan's own instruction:** this all assumes Starlette/uvicorn
+  actually deliver `CancelledError` into the running handler coroutine when the client
+  disconnects. That's the standard behavior for this stack, but it was never verified against
+  *this* app before today, and the plan explicitly flagged it as "verify during build, not
+  assumed." The code is correct regardless of the answer; whether it actually fires is a live
+  test (see "Verify live" below), not something provable by reading source.
+- `frontend/utils/report.ts` — `splitReport()` (D6, pure function). Walks whichever
+  `## Answer` / `## Sources` / `## Confidence` headings are actually present in a
+  `research_sessions.report` string, rather than assuming a fixed order — `reporter.py`'s
+  banner position changed once already (Sprint 4.1, D6), and this tolerates both the old and
+  new position on historical stored reports, zero backend/migration involved. Also derives a
+  `confidenceLevel` (`high`/`low`/`unassessed`) from the Confidence section's own text for
+  `ConfidenceBadge.tsx` to color.
+- `frontend/components/ConfidenceBadge.tsx` + `frontend/components/StatusPill.tsx` — new shared
+  components, same fixed-status-color convention as `BreakerPanel.tsx` (status colors never
+  follow the theme). `StatusPill` adds a `cancelled` state (muted gray) alongside the existing
+  `running`/`completed`/`completed_with_fallback`/`error`.
+- `frontend/app/dashboard/UploadPanel.tsx` — result-view change (the only touch this component
+  gets per D2; the rest of its inline-styled form/list UI is BACKLOG territory, not this
+  sprint): the report now renders as answer + banner + `ConfidenceBadge` + a "Show details"
+  toggle (Sources/Confidence) + a "View execution trace →" link using the `session_id` `/research`
+  already returned (zero backend change). Also: cancel buttons on both the upload and research
+  forms (`AbortController`, wired through `api.ts`'s existing `signal` pass-through — D3 already
+  anticipated this, no `api.ts` change needed), an unmount effect that aborts both in-flight
+  requests so navigating away doesn't leave anything running invisibly, and the in-browser PDF
+  preview (decision #11): selecting a file renders it via `<embed>` from a local
+  `URL.createObjectURL()` — zero network — with a "Choose a different file" escape hatch; the
+  actual upload only fires when the existing "Upload PDF" button is pressed.
+  **Honest limitation found while building, not assumed away:** the installed
+  `@supabase/storage-js` version's `FileOptions` type has no abort-signal field (checked its
+  source directly, not memory) — the Storage-upload leg of an upload cannot actually be killed
+  mid-flight. A cancel clicked during that leg is a "soft" cancel: the upload to Storage still
+  completes in the background, but the code checks the abort flag before sending the resulting
+  `file_path` to the backend, so no document row / embedding job is ever created for it. The
+  AbortController does real, verifiable work on the second leg (the backend fetch — PDF
+  extraction + embedding, the expensive and cancellable half), which is where `CancelledError`
+  handling above actually matters.
+- `frontend/app/dashboard/sessions/page.tsx` + `SessionList.tsx` — session history (D1), fetches
+  Sprint 4.1's `GET /research`, `StatusPill` per row, "Load more" via `offset` (no new backend
+  endpoint needed).
+- `frontend/app/dashboard/sessions/[id]/page.tsx` + `SessionDetail.tsx` + `ExecutionTimeline.tsx`
+  — the Debug Diary's first visual layer. Fetches `/research/{id}` and `/research/{id}/trace` in
+  parallel; either 404ing (RLS makes "not owned" and "doesn't exist" indistinguishable) shows a
+  plain "Session not found," never which. Polls every 4s **only** while `status === "running"`
+  (D4) — a finished session's page goes idle instead of polling forever. `ExecutionTimeline`
+  (D10): no chart library, plain CSS bars per step scaled to that run's own max latency (not a
+  fixed scale), colored by the same `ok`/`fallback`/`error` vocabulary `step_writer.py` already
+  writes. The report section below the timeline reuses the same `splitReport` + `ConfidenceBadge`
+  treatment as `UploadPanel.tsx`'s live result view, so a historical session and a just-finished
+  query read identically.
+
+**Verify live (manual steps, Clint's):**
+1. `git push` — Render + Vercel both redeploy.
+2. **Cancel, the load-bearing test:** start a research query, click Cancel mid-run. Confirm (a)
+   the UI shows "Research cancelled," not an error, and (b) the session's row in `/dashboard/sessions`
+   shows `Cancelled`, not stuck on `Running` forever — this is the actual proof that Starlette/uvicorn
+   deliver the disconnect as `asyncio.CancelledError` in this app, not an assumption. Repeat for an
+   upload: start uploading a document, click Cancel mid-processing, confirm the document does NOT
+   appear as a normal ready document, and that a query against that collection finds nothing from
+   it (proof the partial-chunk delete worked, not just that the row got marked failed).
+3. Upload preview: pick a PDF, confirm it actually renders in the embedded viewer before clicking
+   Upload; try "Choose a different file" and confirm it swaps cleanly with no leftover preview.
+4. Ask a normal question, confirm the new result view: answer, confidence badge with a sensible
+   color, "Show details" reveals Sources + the full Confidence text, "View execution trace →"
+   opens the session's timeline page with all 6 agents shown with real latencies.
+5. Open `/dashboard/sessions`, confirm past sessions list with correct statuses and dates; open
+   one, confirm the trace + report render the same way as a live result.
+6. GATE-21: try `/dashboard/sessions/<some-other-account's-session-id>` — confirm it shows
+   "Session not found," not a leak. (Needs a second test account for a real foreign id; visiting
+   a syntactically-valid-but-nonexistent uuid is a partial substitute.)
 
 ---
 

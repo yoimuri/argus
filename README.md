@@ -58,7 +58,10 @@ tested against the real app, and the results, pass and fail alike, are recorded 
 - **Phase 4, dashboard + public landing: in progress.** A live view of the system's own health
   and security events, a research-session timeline UI, a public landing page, and Google
   sign-up. Six sprints; the first two (backend hardening, theme system + SOC page) are
-  code-complete but not yet live. Scope in `docs/ROADMAP.md` and `docs/PHASE4.md`.
+  live-verified for functionality, the third (session history, execution timeline, cancel
+  support) is code-complete. The dashboard's per-account data isolation is enforced by database
+  row-level security but its cross-account test is still pending a second account, and is tracked
+  as such rather than claimed done. Scope in `docs/ROADMAP.md` and `docs/PHASE4.md`.
 
 This project follows a deliberate phased build plan, shipping and deploying after every phase
 instead of building everything at once. Full plan in `docs/BLUEPRINT.md`, current roadmap in

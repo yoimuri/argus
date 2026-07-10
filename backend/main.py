@@ -1,3 +1,4 @@
+import asyncio
 import os
 import uuid
 import httpx
@@ -65,19 +66,38 @@ async def _mark_document_failed(document, access_token):
         print(f"[ARGUS] could not mark document {document.get('id')} as failed: {patch_err}")
 
 
-async def _mark_session_error(session_id, access_token):
+async def _mark_session_error(session_id, access_token, status="error"):
     """Same never-crash stance as _mark_document_failed above: a diary write
-    failing here must not mask the real error that triggered the caller's
-    except block."""
+    failing here must not mask the real error (or cancellation) that triggered
+    the caller's except block. status defaults to "error"; Sprint 4.3's cancel
+    support (D15) passes "cancelled" so a killed request is distinguishable
+    from a genuine failure in the sessions list / StatusPill."""
     if not session_id:
         return
     try:
         await supabase_request(
             "PATCH", f"research_sessions?id=eq.{session_id}", access_token,
-            json_body={"status": "error"},
+            json_body={"status": status},
         )
     except Exception as patch_err:
-        print(f"[ARGUS] could not mark session {session_id} as error: {patch_err}")
+        print(f"[ARGUS] could not mark session {session_id} as {status}: {patch_err}")
+
+
+async def _delete_partial_chunks(document_id, access_token):
+    """Cancel support (D15): match_document_chunks (004_security_and_trust.sql)
+    has no documents.status filter -- chunks already embedded for a document
+    stay retrievable in search regardless of the parent document's status. A
+    cancelled/failed upload must not leave a half-embedded document's chunks
+    searchable, so this delete is load-bearing, not just tidiness. Never
+    raises, same never-crash stance as its siblings above."""
+    if not document_id:
+        return
+    try:
+        await supabase_request(
+            "DELETE", f"document_chunks?document_id=eq.{document_id}", access_token,
+        )
+    except Exception as del_err:
+        print(f"[ARGUS] could not delete partial chunks for document {document_id}: {del_err}")
 
 
 @app.get("/health")
@@ -285,6 +305,20 @@ async def upload_document(collection_id: str, req: DocumentUploadRequest, reques
             json_body={"status": "ready"},
         )
 
+    except asyncio.CancelledError:
+        # Sprint 4.3 (D15): client disconnected (cancel button or navigated
+        # away) mid-upload. CancelledError is a BaseException, not Exception --
+        # needs its own clause, "except Exception" below never catches it.
+        # Reuses "failed" (no new document status) but ALSO deletes any chunks
+        # already embedded before the cancel landed: match_document_chunks has
+        # no documents.status filter (see _delete_partial_chunks), so leaving
+        # them in place would make a "failed" document's content searchable
+        # anyway (GATE-25). Must re-raise -- swallowing cancellation here would
+        # leave the ASGI server's own cancellation machinery in an inconsistent
+        # state.
+        await _mark_document_failed(document, request.state.access_token)
+        await _delete_partial_chunks(document["id"] if document else None, request.state.access_token)
+        raise
     except HTTPException:
         # Re-raise known HTTP exceptions so frontend sees the exact error, but if
         # the document row was already created, mark it failed first so it doesn't
@@ -435,6 +469,16 @@ async def research(request: Request):
             "web_snippets": [],
             "web_status": "not_run",
         })
+    except asyncio.CancelledError:
+        # Sprint 4.3 (D15): client disconnected (cancel button or navigated
+        # away) mid-run. CancelledError is a BaseException, not Exception --
+        # needs its own clause, "except Exception" below never catches it.
+        # Distinct "cancelled" status (not "error") so the sessions list can
+        # tell a killed request apart from a genuine failure (GATE-25). Must
+        # re-raise -- swallowing cancellation here would leave the ASGI
+        # server's own cancellation machinery in an inconsistent state.
+        await _mark_session_error(session_id, request.state.access_token, status="cancelled")
+        raise
     except CircuitBreakerOpen as cb_err:
         # HF embedding breaker open (Sprint 4.1, D7/GATE-22): the retriever's
         # embed_query call raises this straight out of the graph -- a clean

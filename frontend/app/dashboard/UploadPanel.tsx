@@ -1,8 +1,11 @@
 'use client'
 
-import { useState, useEffect, useCallback, type FormEvent } from 'react'
+import { useState, useEffect, useCallback, useRef, type FormEvent } from 'react'
+import Link from 'next/link'
 import { createClient } from '@/utils/supabase/client'
 import { apiFetch, apiJson, ApiError } from '@/utils/api'
+import { splitReport } from '@/utils/report'
+import ConfidenceBadge from '@/components/ConfidenceBadge'
 import ReactMarkdown from 'react-markdown'
 
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024 // matches backend; Render free tier is 512 MB RAM
@@ -17,6 +20,14 @@ function describeError(err: unknown, prefix: string, includeBody = false): strin
     return includeBody ? `${prefix} (${err.status}): ${err.body}` : `${prefix} (${err.status}).`
   }
   return `Network error: ${err instanceof Error ? err.message : 'unknown'}`
+}
+
+// Sprint 4.3 (D15): AbortController.abort() rejects the in-flight fetch with
+// a DOMException named "AbortError" -- a real, expected outcome of the user
+// clicking Cancel, not a failure. Checked first in both catch blocks so
+// cancelling shows a neutral status message instead of red error text.
+function isAbortError(err: unknown): boolean {
+  return err instanceof Error && err.name === 'AbortError'
 }
 
 interface Collection {
@@ -40,13 +51,20 @@ export default function UploadPanel() {
   // as part of the value itself since this list only exists once a collection is open)
   const [documents, setDocuments] = useState<DocumentRow[] | null>(null)
   const [file, setFile] = useState<File | null>(null)
+  // Local object URL for the in-browser preview (decision #11) -- zero
+  // network, revoked whenever the selection changes or the panel unmounts.
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [status, setStatus] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [uploading, setUploading] = useState(false)
+  const uploadAbortRef = useRef<AbortController | null>(null)
 
   const [query, setQuery] = useState('')
   const [report, setReport] = useState<string | null>(null)
+  const [sessionId, setSessionId] = useState<string | null>(null)
+  const [showDetails, setShowDetails] = useState(false)
   const [researching, setResearching] = useState(false)
+  const researchAbortRef = useRef<AbortController | null>(null)
 
   const [collections, setCollections] = useState<Collection[]>([])
   // Starts true so the first render shows "Loading..." without an effect having
@@ -112,13 +130,40 @@ export default function UploadPanel() {
     }
   }, [collectionId, fetchDocuments])
 
+  // previewUrl mirrored into a ref so the unmount-only effect below always
+  // revokes the CURRENT object URL, not the one captured at first render --
+  // an effect with an empty dep array only runs its body once, so a plain
+  // closure over `previewUrl` would stay stuck on its initial (null) value.
+  const previewUrlRef = useRef<string | null>(null)
+  useEffect(() => {
+    previewUrlRef.current = previewUrl
+  }, [previewUrl])
+
+  // Sprint 4.3 (D15): navigating away must abort whatever's in flight, not
+  // leave it running invisibly. Covers both leaving the panel (unmount) and
+  // switching collections (resetToCollectionList, below) while a request
+  // is still active.
+  useEffect(() => {
+    return () => {
+      uploadAbortRef.current?.abort()
+      researchAbortRef.current?.abort()
+      if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current)
+    }
+  }, [])
+
   function resetToCollectionList() {
+    uploadAbortRef.current?.abort()
+    researchAbortRef.current?.abort()
+    if (previewUrl) URL.revokeObjectURL(previewUrl)
     setCollectionId(null)
     setActiveCollectionName(null)
     setDocuments(null)
     setFile(null)
+    setPreviewUrl(null)
     setQuery('')
     setReport(null)
+    setSessionId(null)
+    setShowDetails(false)
     setStatus(null)
     setError(null)
   }
@@ -155,20 +200,30 @@ export default function UploadPanel() {
     }
   }
 
+  // Decision #11 (upload preview): swap the object URL, not just the file --
+  // revoke the old one first so repeated re-selection doesn't leak memory.
   function handleFileChange(selected: File | null) {
     setError(null)
+    if (previewUrl) URL.revokeObjectURL(previewUrl)
     if (!selected) {
       setFile(null)
+      setPreviewUrl(null)
       return
     }
     if (selected.size > MAX_UPLOAD_BYTES) {
       setFile(null)
+      setPreviewUrl(null)
       setError(
         `PDF must be under 25 MB (free-tier limit). This file is ${(selected.size / (1024 * 1024)).toFixed(1)} MB.`,
       )
       return
     }
     setFile(selected)
+    setPreviewUrl(URL.createObjectURL(selected))
+  }
+
+  function handleCancelUpload() {
+    uploadAbortRef.current?.abort()
   }
 
   async function handleUpload(e: FormEvent) {
@@ -181,6 +236,8 @@ export default function UploadPanel() {
       return
     }
 
+    const controller = new AbortController()
+    uploadAbortRef.current = controller
     setUploading(true)
     try {
       // Storage upload stays a direct Supabase call (api.ts only wraps the
@@ -196,12 +253,25 @@ export default function UploadPanel() {
       const filePath = `${userId}/${Date.now()}-${file.name}`
       setStatus('Uploading file to storage...')
 
+      // storage-js's FileOptions has no abort signal (checked against the
+      // installed @supabase/storage-js version) -- this leg can't be killed
+      // mid-flight. A cancel clicked during it is a "soft" cancel: the
+      // upload to Storage still completes, but we never send the resulting
+      // file_path to the backend below, so no document/embedding job is
+      // created for it and nothing becomes searchable. The AbortController
+      // still does real work on step 2 (the backend fetch), which is the
+      // expensive, cancellable half (PDF extraction + embedding).
       const { error: uploadError } = await supabase.storage
         .from('documents')
         .upload(filePath, file, {
           cacheControl: '3600',
           upsert: false
         })
+
+      if (controller.signal.aborted) {
+        setStatus('Upload cancelled.')
+        return
+      }
 
       if (uploadError) throw new Error(`Storage error: ${uploadError.message}`)
 
@@ -212,6 +282,7 @@ export default function UploadPanel() {
         {
           method: 'POST',
           body: JSON.stringify({ file_path: filePath, file_name: file.name }),
+          signal: controller.signal,
         },
       )
       const quarantined = data.chunks_quarantined ?? 0
@@ -222,9 +293,11 @@ export default function UploadPanel() {
       )
       if (collectionId) setDocuments(await fetchDocuments(collectionId))
     } catch (err) {
-      setError(describeError(err, 'Upload failed', true))
+      if (isAbortError(err)) setStatus('Upload cancelled.')
+      else setError(describeError(err, 'Upload failed', true))
     } finally {
       setUploading(false)
+      uploadAbortRef.current = null
     }
   }
 
@@ -241,25 +314,42 @@ export default function UploadPanel() {
     }
   }
 
+  function handleCancelResearch() {
+    researchAbortRef.current?.abort()
+  }
+
   async function handleResearch(e: FormEvent) {
     e.preventDefault()
     setError(null)
     setReport(null)
+    setSessionId(null)
+    setShowDetails(false)
     if (!collectionId || !query) return
 
+    const controller = new AbortController()
+    researchAbortRef.current = controller
     setResearching(true)
     try {
-      const data = await apiJson<{ report: string }>('/research', {
-        method: 'POST',
-        body: JSON.stringify({ collection_id: collectionId, query }),
-      })
+      const data = await apiJson<{ report: string; session_id: string | null; status: string }>(
+        '/research',
+        {
+          method: 'POST',
+          body: JSON.stringify({ collection_id: collectionId, query }),
+          signal: controller.signal,
+        },
+      )
       setReport(data.report)
+      setSessionId(data.session_id)
     } catch (err) {
-      setError(describeError(err, 'Research query failed', true))
+      if (isAbortError(err)) setStatus('Research cancelled.')
+      else setError(describeError(err, 'Research query failed', true))
     } finally {
       setResearching(false)
+      researchAbortRef.current = null
     }
   }
+
+  const parsed = report ? splitReport(report) : null
 
   return (
     <div style={{ marginTop: 24 }}>
@@ -330,9 +420,35 @@ export default function UploadPanel() {
             <p style={{ fontSize: 14, color: '#888', marginTop: 4 }}>
               PDFs up to 25 MB. Large reports (e.g. DBIR) may need a compressed export.
             </p>
-            <button type="submit" disabled={uploading}>
-              {uploading ? 'Uploading and embedding, this can take a minute...' : 'Upload PDF'}
-            </button>
+            {previewUrl && (
+              <div style={{ marginTop: 8 }}>
+                {/* Decision #11: local object URL, zero network -- confirm this
+                    is the right file before it ever leaves the browser. */}
+                <embed
+                  src={previewUrl}
+                  type="application/pdf"
+                  style={{ width: '100%', height: 320, border: '1px solid #444', borderRadius: 4 }}
+                />
+                <button
+                  type="button"
+                  onClick={() => handleFileChange(null)}
+                  style={{ marginTop: 4 }}
+                  disabled={uploading}
+                >
+                  Choose a different file
+                </button>
+              </div>
+            )}
+            <div style={{ marginTop: 8 }}>
+              <button type="submit" disabled={uploading}>
+                {uploading ? 'Uploading and embedding, this can take a minute...' : 'Upload PDF'}
+              </button>
+              {uploading && (
+                <button type="button" onClick={handleCancelUpload} style={{ marginLeft: 8 }}>
+                  Cancel
+                </button>
+              )}
+            </div>
           </form>
 
           <div style={{ marginTop: 16 }}>
@@ -375,11 +491,44 @@ export default function UploadPanel() {
             <button type="submit" disabled={researching}>
               {researching ? 'Thinking...' : 'Ask'}
             </button>
+            {researching && (
+              <button type="button" onClick={handleCancelResearch} style={{ marginLeft: 8 }}>
+                Cancel
+              </button>
+            )}
           </form>
 
-          {report && (
+          {parsed && (
             <div style={{ marginTop: 12, padding: 12, border: '1px solid #444', background: '#111', color: '#fff', borderRadius: 4 }}>
-              <ReactMarkdown>{report}</ReactMarkdown>
+              <ReactMarkdown>{parsed.answer}</ReactMarkdown>
+              {parsed.banner && (
+                <p style={{ marginTop: 8, fontStyle: 'italic', color: '#aaa', fontSize: 13 }}>
+                  {parsed.banner.replace(/\*/g, '')}
+                </p>
+              )}
+              <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                <ConfidenceBadge level={parsed.confidenceLevel} />
+                <button type="button" onClick={() => setShowDetails((v) => !v)}>
+                  {showDetails ? 'Hide details' : 'Show details'}
+                </button>
+                {sessionId && (
+                  <Link href={`/dashboard/sessions/${sessionId}`} style={{ color: '#6cf' }}>
+                    View execution trace →
+                  </Link>
+                )}
+              </div>
+              {showDetails && (
+                <div style={{ marginTop: 12, borderTop: '1px solid #333', paddingTop: 12 }}>
+                  {parsed.sources && (
+                    <>
+                      <h4 style={{ fontSize: 14, marginBottom: 4 }}>Sources</h4>
+                      <ReactMarkdown>{parsed.sources}</ReactMarkdown>
+                    </>
+                  )}
+                  <h4 style={{ fontSize: 14, marginTop: 12, marginBottom: 4 }}>Confidence</h4>
+                  <ReactMarkdown>{parsed.confidence || 'Not assessed.'}</ReactMarkdown>
+                </div>
+              )}
             </div>
           )}
         </>

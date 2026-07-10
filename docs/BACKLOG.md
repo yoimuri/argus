@@ -125,8 +125,14 @@ the project's gaps table. Two are now resolved (below), two are still open:
 - ~~**No per-collection file list.**~~ **Fixed and live-verified 2026-07-08**, as part of the
   Phase 3a document-management fix (`docs/PHASE3.md`) — opening a collection now shows its name
   and document list.
-- **No upload-cancel.** No way to cancel an in-progress upload, including by navigating away.
-  `frontend/app/dashboard/UploadPanel.tsx`. Still open.
+- ~~**No upload-cancel.**~~ **Built in Sprint 4.3 (2026-07-09), 🟡 code-complete not yet
+  live-verified.** Upload and research both get a Cancel button; navigating away or unmounting
+  the panel aborts whatever's in flight instead of leaving it running invisibly. One honest
+  limitation: the installed `@supabase/storage-js` has no abort-signal option on `upload()`, so
+  a cancel clicked during the Storage-upload leg is a "soft" cancel — that leg still completes,
+  but the backend PDF-processing call (the expensive half: extraction + embedding) never fires
+  for it, so no document/embedding job is created. See `docs/PHASE4.md` Sprint 4.3 for the full
+  design (D15) and the live-verification steps still needed.
 
 **Phase:** unassigned, not yet triaged. Small enough to bundle with Item 2's UI work when
 that gets picked up.
