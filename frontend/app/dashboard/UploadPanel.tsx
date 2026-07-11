@@ -141,9 +141,12 @@ export default function UploadPanel() {
       const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
       const [docs, research] = await Promise.all([
         supabase.from('documents').select('id', { count: 'exact', head: true }),
+        // usage_events (migration 014), matching the backend's daily cap source
+        // -- research_sessions would undercount after a collection delete.
         supabase
-          .from('research_sessions')
+          .from('usage_events')
           .select('id', { count: 'exact', head: true })
+          .eq('event_type', 'research')
           .gte('created_at', since),
       ])
       setDocCount(docs.count ?? null)

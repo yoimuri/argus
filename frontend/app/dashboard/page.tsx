@@ -29,9 +29,13 @@ export default async function DashboardPage() {
         .select('id,query,status,created_at')
         .order('created_at', { ascending: false })
         .limit(1),
+      // usage_events, not research_sessions: the cap counts usage_events (they
+      // survive collection deletion, migration 014), so the meter must too or
+      // it would disagree with the backend after a delete.
       supabase
-        .from('research_sessions')
+        .from('usage_events')
         .select('id', { count: 'exact', head: true })
+        .eq('event_type', 'research')
         .gte('created_at', since),
       // RLS scopes this to the caller's own row (migration 011). SELECT-only
       // grant means the user can read but never raise their own caps.

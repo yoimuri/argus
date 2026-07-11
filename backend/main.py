@@ -585,10 +585,16 @@ async def research(request: Request):
     # no Groq/HF quota -- the whole point of metering. `Z`-suffixed timestamp
     # (not isoformat's `+00:00`) so the `+` can't be mis-read as a space in the
     # PostgREST query string.
+    #
+    # Counts usage_events (migration 014), NOT research_sessions: session rows
+    # cascade-delete with their collection, so counting them let a user reset
+    # this rate limit by deleting a collection (bypass found 2026-07-11).
+    # usage_events has no collection FK and no user-delete path, so the count
+    # can't be erased.
     limits = await _get_usage_limits(request.state.user_id, request.state.access_token)
     since = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
     research_today = await _count_rows(
-        f"research_sessions?user_id=eq.{request.state.user_id}&created_at=gte.{since}&select=id",
+        f"usage_events?user_id=eq.{request.state.user_id}&event_type=eq.research&created_at=gte.{since}&select=id",
         request.state.access_token,
     )
     if research_today >= limits["max_research_per_day"]:
@@ -636,6 +642,21 @@ async def research(request: Request):
         session_id = session_rows[0]["id"]
     except Exception as insert_err:
         print(f"[ARGUS] could not create research_sessions row, diary disabled for this run: {insert_err}")
+
+    # Log the usage event (migration 014): one row per real research run, the
+    # source of truth for the daily cap. Written here -- past the injection and
+    # ownership checks -- so only genuine runs consume a unit, matching the old
+    # research_sessions behavior. Separate from the session insert above (which
+    # is the deletable diary) precisely because this one must NOT be deletable.
+    # Best-effort: an accounting-write failure must not fail a legitimate query
+    # (worst case, one free query, logged), same never-crash stance as the diary.
+    try:
+        await supabase_request(
+            "POST", "usage_events", request.state.access_token,
+            json_body={"user_id": request.state.user_id, "event_type": "research"},
+        )
+    except Exception as usage_err:
+        print(f"[ARGUS] could not log research usage_event (metering degraded for this run): {usage_err}")
 
     # Plain await (2026-07-10, second cancel rework). Two disconnect-based
     # designs failed live before this: uvicorn never raises CancelledError

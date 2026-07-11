@@ -756,6 +756,30 @@ app once Phase 4 closes; a logo design for ARGUS (separate design-agent task).
    scope (Phase 4b territory: needs roles/admin machinery), parked as an owner note, explicitly
    NOT built now — and locked off by design since this isn't a profit-first project.
 
+**Live-test findings, fourth pass (Clint, 2026-07-11):**
+
+1. **`usage_limits` has no name/email column** — correct, and it shouldn't: it stores only caps.
+   Migration **013** adds a read-only `usage_limits_readable` VIEW that joins `user_profiles`, so
+   browsing it in Studio shows email/display_name next to each row (edit the real `usage_limits`
+   table; browse the view to find whose row it is). `security_invoker` so it respects RLS.
+2. **Research-cap bypass (real bug, fixed)**: a user at their daily research cap could delete a
+   collection to wipe the `research_sessions` rows the count was based on (they cascade-delete with
+   the collection), resetting the count and defeating the rate limit. Fixed with migration **014**:
+   a `usage_events` append-only table (no collection FK, no user-delete path) is now the source of
+   truth for the daily count; the backend logs one event per real run and counts events, not
+   sessions. Both usage meters (dashboard + workspace strip) switched to `usage_events` to stay
+   consistent with the cap. **Collections/documents were NOT bypassable** — they're ownership
+   quotas (max live rows owned, already per-user), where delete-and-recreate keeps you at or under
+   the cap; only the per-day research RATE limit had deletable evidence.
+3. **"Reset usage as a reward" feature** — recorded as a Phase 4b owner note with the key design
+   insight (research resets via `usage_events` clear/credit; collections/documents have no counter
+   to reset, so that half needs period-based create-tracking, a schema change). Not built now.
+
+**New manual steps from this pass:** paste `013_usage_limits_readable.sql` and
+`014_usage_events.sql` in the SQL editor. After 014, the research daily cap can no longer be reset
+by deleting a collection — re-test: hit the cap, delete the collection, confirm you still can't run
+another query until the 24h window rolls or the cap is raised.
+
 ---
 
 ### Sprint 4.5 — Project Q&A chatbot + rate limiting
