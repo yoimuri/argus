@@ -571,23 +571,124 @@ ADR-019). Design + privacy reasoning: `docs/ADR-019.md`. Gates: GATE-23 (limits 
 GATE-24 (public/auth boundary + OAuth round-trip) in `docs/ADVERSARIAL-TESTS.md`, both 🟡 until live.
 
 **Clint's manual steps (all his — prepare, explain, stop):**
-1. **Paste migration 011** in the Supabase SQL editor; confirm the `usage_limits` table, the
-   `on_auth_user_created_usage_limits` trigger, and that existing accounts got backfilled rows.
-2. **Google Cloud Console:** create/choose a project → OAuth consent screen → create an OAuth 2.0
-   **Web application** Client ID; set the authorized redirect URI to
-   `https://<your-project-ref>.supabase.co/auth/v1/callback`.
-3. **Supabase dashboard → Authentication → Providers → Google:** enable it, paste the Client ID +
-   Client Secret. **Authentication → URL Configuration:** add the Vercel production URL and
-   `http://localhost:3000` to the allowed redirect URLs so `/auth/callback` is accepted.
-4. `git push` (Render + Vercel redeploy). Then run GATE-23 and GATE-24 live and record results.
-5. Optional, to keep your own accounts unblocked while testing: they're already backfilled high, but
-   if you want to *exercise* GATE-23, `UPDATE public.usage_limits SET max_research_per_day = 1 WHERE
-   user_id = '<a test user id>';`, hit the 429, then raise it back — proves an owner edit unblocks
-   with no redeploy.
+
+**Step 1 — Paste migration 011**
+1. Open the Supabase dashboard for the ARGUS project → left sidebar → **SQL Editor**.
+2. Click **New query**.
+3. Open `supabase/migrations/011_usage_limits.sql` in the repo, copy the whole file.
+4. Paste it into the SQL Editor, click **Run**.
+5. Confirm it worked: left sidebar → **Table Editor** → you should see a new `usage_limits` table
+   with columns `user_id`, `max_collections`, `max_documents`, `max_research_per_day`,
+   `updated_at`. It should already have one row per existing user (backfilled by the migration
+   itself) with values `100 / 500 / 500`.
+
+**Step 2 — Find your Supabase project's callback URL (needed for step 3)**
+1. Supabase dashboard → left sidebar → **Project Settings** (gear icon, bottom of sidebar) →
+   **Data API** (or **API** on older dashboards).
+2. Copy the **Project URL** at the top — it looks like `https://abcdefghijklmnop.supabase.co`.
+3. Your callback URL is that same URL with `/auth/v1/callback` appended:
+   `https://abcdefghijklmnop.supabase.co/auth/v1/callback`. Write this down — you'll paste it in
+   step 3.
+
+**Step 3 — Google Cloud Console: create OAuth credentials**
+1. Go to https://console.cloud.google.com/ and sign in with the Google account you want to own
+   this (can be a personal account or a dedicated project account — your call).
+2. Top-left, next to the "Google Cloud" logo, click the project dropdown → **New Project**.
+   Name it something like `argus-oauth` → **Create**. Wait for it to finish, then make sure the
+   dropdown shows this new project selected (not "My First Project" or another old one).
+3. Left sidebar (hamburger menu ☰) → **APIs & Services** → **OAuth consent screen**.
+4. User Type: choose **External** (unless you have a Google Workspace org and want Internal) →
+   **Create**.
+5. Fill in the required fields only: **App name** = `ARGUS`, **User support email** = your email,
+   **Developer contact email** = your email. Leave everything else blank/default → **Save and
+   Continue** through the Scopes and Test users screens (no changes needed on either) → **Back to
+   Dashboard**.
+6. Left sidebar → **APIs & Services** → **Credentials**.
+7. Click **+ Create Credentials** (top of page) → **OAuth client ID**.
+8. **Application type**: select **Web application**.
+9. **Name**: `ARGUS Supabase` (or anything — it's just a label for you).
+10. Under **Authorized redirect URIs**, click **+ Add URI**, paste the callback URL you copied in
+    Step 2 (`https://<your-project-ref>.supabase.co/auth/v1/callback`).
+11. Click **Create**. A popup shows your **Client ID** and **Client Secret** — copy both somewhere
+    safe (you'll paste them in the next step). You can always come back to **Credentials** to see
+    the Client ID again, but the Secret is only fully shown once — if you lose it, click the
+    credential's edit (pencil) icon → **Add Secret** to generate a new one.
+
+**Step 4 — Supabase dashboard: enable the Google provider**
+1. Supabase dashboard → left sidebar → **Authentication** → **Providers**.
+2. Find **Google** in the provider list, click it to expand.
+3. Toggle **Enable Sign in with Google** on.
+4. Paste the **Client ID** from Step 3 into the "Client ID" field.
+5. Paste the **Client Secret** from Step 3 into the "Client Secret" field.
+6. Click **Save**.
+
+**Step 5 — Supabase dashboard: allow your app's URLs**
+1. Still in **Authentication**, click **URL Configuration** in the left sub-menu.
+2. **Site URL**: set this to your production Vercel URL (e.g. `https://argus.vercel.app` — use
+   whatever your actual production domain is).
+3. **Redirect URLs**: click **Add URL**, add each of these on its own line:
+   - `https://<your-vercel-production-domain>/auth/callback`
+   - `http://localhost:3000/auth/callback` (so it also works when you test locally)
+4. Click **Save**.
+
+**Step 6 — Deploy and verify**
+1. `git push` from the repo (Render + Vercel both redeploy automatically).
+2. Wait for both deploys to finish (Vercel dashboard shows "Ready"; Render dashboard shows
+   "Live").
+3. Go to your production URL, land on `/login`, click **Continue with Google**.
+4. **PASS** looks like: Google's account picker appears → after choosing an account, you land back
+   on `/dashboard`, signed in. **FAIL** looks like: you land back on `/login?error=oauth`, or a
+   Google error page — if either happens, re-check the redirect URI in Step 3.10 and the Redirect
+   URLs in Step 5.3 match exactly (no trailing slash mismatches).
+5. Run GATE-23 and GATE-24 from `docs/ADVERSARIAL-TESTS.md` and record the results there.
+
+**Step 7 — optional, to deliberately trigger GATE-23's 429 for testing**
+1. Supabase dashboard → **Table Editor** → `usage_limits`.
+2. Find your test user's row (match by `user_id` — cross-reference **Authentication** → **Users**
+   to find the id for a given email).
+3. Click into the row, change `max_research_per_day` to `1`, save.
+4. Run one research query in the app (succeeds), then a second (should now fail with the friendly
+   429 message).
+5. Change `max_research_per_day` back to a normal value (e.g. `500`), save. Run one more query —
+   it should succeed immediately, no redeploy needed. That's the proof the limit is read live from
+   the database on every request.
 
 **Still not built this sprint (deliberate):** the broader **presentability pass** (icon library,
 component polish, real Settings page, empty/loading states) is a committed follow-up right after
 this landing establishes the visual language — see ROADMAP owner notes, 2026-07-11.
+
+**Live-test findings, first pass (Clint, 2026-07-11) — eight items, all addressed same day:**
+
+1. **Copy claimed "thesis project"** — wrong, he has graduated. Removed; the About section now says
+   portfolio project only. Em dashes also swept out of all landing copy (humanizer pass).
+2. **"Built to be attacked" header** read as an open invitation to pen-test the deployment. Renamed
+   to "Careful with your documents" with a calm intro; same four defense cards, de-dramatized.
+3. **Stale auth CTA**: after logging out, a browser-cached copy of the landing still showed
+   "Go to dashboard" until a manual refresh. Root cause: the page is server-rendered with the
+   visitor's auth state, and back/restore navigation can serve a copy rendered before the
+   login/logout. Fix: new `frontend/components/landing/AuthLink.tsx` — takes the server's answer as
+   the initial state, re-checks the real session client-side on mount (local cookie read, no
+   network) and on `pageshow` restore, and corrects the label. Used for both the header button and
+   the hero CTA.
+4. **Login page was a dead end** — no way back to the landing. Added a "← Back to ARGUS" link above
+   the form.
+5. **LinkedIn** added to the About buttons (`linkedin.com/in/clint-branwel-p-b356a1364`).
+6. **Footer buttons were redundant** with the About section's directly above. Footer slimmed to the
+   wordmark + a one-line descriptor, no repeated links.
+7. **Positioning corrected (the big one):** the headline story is ARGUS turning messy, unorganized
+   documents into clear, usable output — not security. Hero rewritten ("Messy documents in. Clear
+   answers out."); security demoted to a supporting section. The landing still only claims what
+   works today (Q&A with sources + confidence); the full report-generation-with-figures story stays
+   OFF the landing until Sprint 4.6 ships it.
+8. **Google sign-in failed** with `{"error":"requested path is invalid"}`. **Config, not code**: the
+   failing request URL was `https://<ref>.supabase.co/argus-nine-ivory.vercel.app?code=...` — the
+   Vercel domain glued onto Supabase's own host as a *path*, which is what Supabase does when a URL
+   in Authentication → URL Configuration was saved **without the `https://` scheme**. It also fell
+   back to the Site URL root instead of `/auth/callback`, meaning the callback URL wasn't accepted
+   from the Redirect URLs list either. Fix (Clint, dashboard): re-enter **Site URL** as
+   `https://argus-nine-ivory.vercel.app` (scheme included), and make sure **Redirect URLs** contains
+   `https://argus-nine-ivory.vercel.app/auth/callback` exactly (no missing scheme, no trailing
+   slash). Then retry the sign-in fresh (the old `?code=` is single-use and already spent).
 
 ---
 
@@ -609,6 +710,15 @@ Item 4). Two locked shapes so far: vision captioning via Groq Llama 4 Scout with
 by the same regex + a new `image_derived` trust level; a separate "Generate report" flow with a
 domain-tailored template, preview-before-download, and `.docx`/PDF export, metered by
 `usage_limits`.
+
+**Owner clarifications (Clint, 2026-07-11 — this is the product's headline capability):** the
+point of ARGUS is generating meaningful, presentable output from messy/raw/unorganized reports.
+Two halves, both figures-related: (a) **reading** figures/images inside uploaded PDFs (the vision
+half above), and (b) **generating** figures — charts/graphs built from the documents' data,
+rendered into the output report alongside the text. Explicitly NOT AI image generation; graphs
+only. The generated report must carry a **visible disclaimer**: the output may still be unclean
+and needs the user's own proofreading and organizing — the tool makes the work easier, it does not
+replace the human pass. That disclaimer is part of the design, not optional copy.
 
 ---
 

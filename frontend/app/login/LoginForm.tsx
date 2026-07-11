@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, type FormEvent } from 'react'
+import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/utils/supabase/client'
 
@@ -68,7 +69,15 @@ export default function LoginForm() {
 
   return (
     <main className="mx-auto mt-16 w-full max-w-xs px-4">
-      <h1 className="text-lg font-semibold text-ink">ARGUS Login</h1>
+      {/* Way back to the public landing page -- live review 2026-07-11 found
+          the login page was a dead end with no route to the rest of the site. */}
+      <Link
+        href="/"
+        className="inline-flex items-center gap-1.5 text-xs text-ink-muted transition-colors hover:text-ink"
+      >
+        ← Back to ARGUS
+      </Link>
+      <h1 className="mt-4 text-lg font-semibold text-ink">ARGUS Login</h1>
       {idleSignout && (
         <p className="mt-2 rounded-md border border-hairline bg-accent-wash p-2 text-xs text-ink-secondary">
           You were signed out after 30 minutes of inactivity. Log in again to continue.

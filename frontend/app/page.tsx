@@ -2,30 +2,33 @@ import Link from 'next/link'
 import { createClient } from '@/utils/supabase/server'
 import ThemeToggle from '@/components/theme/ThemeToggle'
 import Reveal from '@/components/landing/Reveal'
+import AuthLink from '@/components/landing/AuthLink'
 
 // The public landing page (Sprint 4.4, D12). Until now `/` force-redirected to
 // `/dashboard`, so anyone without an account -- a recruiter following the repo
 // link -- hit a login wall. `/` is now a public marketing/intro page; proxy.ts
 // lists it as a PUBLIC path. Authenticated visitors are NOT force-redirected;
-// they just see a "Go to dashboard" action instead of "Sign in" (D12).
+// they just see a "Go to dashboard" action instead of "Sign in" (D12), served
+// through AuthLink so a browser-cached copy of this page can never show a
+// stale auth state (live-found 2026-07-11).
 //
-// Copy note: every claim here maps to something ARGUS actually does (the real
-// six-agent pipeline, the real injection defenses, RLS isolation, the SOC
-// console). Nothing is inflated -- the project rule that docs never claim more
-// than the code does applies to the public page most of all.
+// Positioning (Clint, 2026-07-11): the headline story is turning messy,
+// unorganized documents into clear, usable answers. Security is a supporting
+// section, stated calmly, not an invitation to attack. Copy note: every claim
+// here maps to something ARGUS actually does today -- the report-generation
+// flow with figures is Sprint 4.6 and deliberately does NOT appear here until
+// it ships.
 
 const REPO_URL = 'https://github.com/yoimuri/argus'
 const GITHUB_PROFILE = 'https://github.com/yoimuri'
-// TODO(Clint): confirm these two before this ships publicly. Portfolio URL is
-// from the portfolio-v2 plan; LinkedIn I don't have on file -- fill it in or
-// tell me to remove the link.
 const PORTFOLIO_URL = 'https://yoimuri.github.io'
+const LINKEDIN_URL = 'https://www.linkedin.com/in/clint-branwel-p-b356a1364/'
 const CONTACT_EMAIL = 'branwelclint@gmail.com'
 
 const PIPELINE: { name: string; role: string }[] = [
-  { name: 'Orchestrator', role: 'Plans the query — splits it into sub-questions and decides whether a live web search is even needed.' },
-  { name: 'Web Scout', role: 'Pulls real-time web results when the documents alone fall short, scanning each snippet for hidden instructions.' },
-  { name: 'Retriever', role: 'Finds the most relevant passages from your uploaded documents by meaning, not keyword matching.' },
+  { name: 'Orchestrator', role: 'Plans the query. It splits your question into sub-questions and decides whether a live web search is needed at all.' },
+  { name: 'Web Scout', role: 'Pulls real-time web results when your documents alone fall short, and screens each snippet before it is used.' },
+  { name: 'Retriever', role: 'Finds the most relevant passages in your uploaded documents by meaning, not keyword matching.' },
   { name: 'Synthesizer', role: 'Writes the answer, grounded only in the retrieved passages and vetted web snippets.' },
   { name: 'Critic', role: 'Checks the draft for claims the sources do not support, and sends it back for one revision if needed.' },
   { name: 'Reporter', role: 'Assembles the final answer with its sources and an honest confidence rating.' },
@@ -34,22 +37,22 @@ const PIPELINE: { name: string; role: string }[] = [
 const DEFENSES: { title: string; body: string; icon: React.ReactNode }[] = [
   {
     title: 'Prompt-injection defense',
-    body: 'Every piece of text — from your PDFs and from the web — is scanned for hidden instructions and framed by trust level before any model reads it.',
+    body: 'Text from your PDFs and from the web is scanned for hidden instructions and framed by trust level before any model reads it.',
     icon: <ShieldIcon />,
   },
   {
     title: 'Circuit breakers',
-    body: 'Each external service (embeddings, web search, the safety classifier) sits behind a breaker that fails cleanly instead of hanging or crashing a request.',
+    body: 'Each external service sits behind a breaker that fails cleanly instead of hanging or crashing a request.',
     icon: <BreakerIcon />,
   },
   {
     title: 'Row-level isolation',
-    body: 'Your documents, research sessions, and security events are yours alone — enforced at the database with row-level security, not just hidden in the UI.',
+    body: 'Your documents, research sessions, and security events are yours alone, enforced at the database, not just hidden in the UI.',
     icon: <LockIcon />,
   },
   {
     title: 'Live security console',
-    body: 'A built-in SOC dashboard shows blocked injection attempts and the health of every service in real time — the defenses are visible, not just claimed.',
+    body: 'A built-in dashboard shows blocked injection attempts and the health of every service in real time.',
     icon: <RadarIcon />,
   },
 ]
@@ -77,21 +80,12 @@ export default async function Landing() {
           </Link>
           <div className="ml-auto flex items-center gap-3">
             <ThemeToggle />
-            {authed ? (
-              <Link
-                href="/dashboard"
-                className="rounded-full bg-accent px-4 py-1.5 text-sm font-medium text-accent-contrast transition-colors hover:bg-accent-hover"
-              >
-                Go to dashboard →
-              </Link>
-            ) : (
-              <Link
-                href="/login"
-                className="rounded-full bg-accent px-4 py-1.5 text-sm font-medium text-accent-contrast transition-colors hover:bg-accent-hover"
-              >
-                Sign in
-              </Link>
-            )}
+            <AuthLink
+              initialAuthed={authed}
+              authedLabel="Go to dashboard →"
+              anonLabel="Sign in"
+              className="rounded-full bg-accent px-4 py-1.5 text-sm font-medium text-accent-contrast transition-colors hover:bg-accent-hover"
+            />
           </div>
         </div>
       </header>
@@ -111,29 +105,29 @@ export default async function Landing() {
             <Reveal>
               <span className="inline-flex items-center gap-2 rounded-full border border-hairline bg-surface px-3 py-1 text-xs font-medium text-ink-secondary">
                 <span className="h-1.5 w-1.5 rounded-full bg-accent" />
-                Multi-agent RAG · prompt-injection defense
+                Multi-agent research assistant
               </span>
             </Reveal>
             <Reveal delayMs={80}>
               <h1 className="mt-6 text-balance text-4xl font-semibold leading-tight tracking-tight text-ink sm:text-6xl">
-                Turn your documents into answers you can trust.
+                Messy documents in. Clear answers out.
               </h1>
             </Reveal>
             <Reveal delayMs={160}>
               <p className="mx-auto mt-6 max-w-2xl text-pretty text-lg leading-relaxed text-ink-secondary">
-                ARGUS is a multi-agent research assistant that reads your PDFs, searches the web
-                when it needs to, and defends every step against prompt-injection attacks — with a
-                live security console to prove it.
+                ARGUS reads raw, unorganized PDFs, finds what matters, and writes grounded answers
+                with sources and an honest confidence rating. When the documents fall short, it
+                searches the web and checks its own work.
               </p>
             </Reveal>
             <Reveal delayMs={240}>
               <div className="mt-9 flex flex-wrap items-center justify-center gap-3">
-                <Link
-                  href={authed ? '/dashboard' : '/login'}
+                <AuthLink
+                  initialAuthed={authed}
+                  authedLabel="Go to dashboard"
+                  anonLabel="Try ARGUS"
                   className="rounded-full bg-accent px-6 py-3 text-sm font-semibold text-accent-contrast transition-colors hover:bg-accent-hover"
-                >
-                  {authed ? 'Go to dashboard' : 'Try ARGUS'}
-                </Link>
+                />
                 <a
                   href={REPO_URL}
                   target="_blank"
@@ -156,7 +150,7 @@ export default async function Landing() {
               </h2>
               <p className="mt-4 text-pretty text-ink-secondary">
                 A question doesn&apos;t go straight to a language model. It moves through a pipeline
-                where each agent has one job — and every step is recorded so you can see exactly how
+                where each agent has one job, and every step is recorded so you can see exactly how
                 the answer was reached.
               </p>
             </Reveal>
@@ -181,16 +175,16 @@ export default async function Landing() {
           </div>
         </section>
 
-        {/* Security story */}
+        {/* Security, stated calmly */}
         <section className="border-t border-hairline">
           <div className="mx-auto max-w-6xl px-5 py-20 sm:py-24">
             <Reveal className="mx-auto max-w-2xl text-center">
               <h2 className="text-3xl font-semibold tracking-tight text-ink sm:text-4xl">
-                Built to be attacked
+                Careful with your documents
               </h2>
               <p className="mt-4 text-pretty text-ink-secondary">
-                Any system that feeds untrusted text to a language model is a target. ARGUS treats
-                that as the starting assumption, not an afterthought.
+                A system that reads untrusted documents has to take security seriously. ARGUS does,
+                quietly and by default.
               </p>
             </Reveal>
 
@@ -223,11 +217,10 @@ export default async function Landing() {
             <Reveal delayMs={80}>
               <div className="mt-6 space-y-4 text-pretty leading-relaxed text-ink-secondary">
                 <p>
-                  ARGUS is an open-source portfolio and thesis project by{' '}
+                  ARGUS is an open-source portfolio project by{' '}
                   <span className="font-medium text-ink">Clint Branwel Poyaoan</span>, built to show
-                  how a retrieval-augmented AI system can be assembled, secured, and operated end to
-                  end — from the agent pipeline down to the deployment and the security testing that
-                  proves the defenses hold.
+                  how a retrieval-augmented AI system is assembled, secured, and operated end to
+                  end: the agent pipeline, the deployment, and the security testing behind it.
                 </p>
                 <p>
                   It runs on a FastAPI backend, a Next.js frontend, a Supabase Postgres database with
@@ -244,6 +237,14 @@ export default async function Landing() {
                   className="rounded-full bg-accent px-5 py-2.5 text-sm font-semibold text-accent-contrast transition-colors hover:bg-accent-hover"
                 >
                   Get in touch
+                </a>
+                <a
+                  href={LINKEDIN_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="rounded-full border border-hairline-strong px-5 py-2.5 text-sm font-semibold text-ink transition-colors hover:bg-accent-wash"
+                >
+                  LinkedIn
                 </a>
                 <a
                   href={REPO_URL}
@@ -267,21 +268,13 @@ export default async function Landing() {
         </section>
       </main>
 
-      {/* Footer */}
+      {/* Footer: deliberately minimal. The contact/link buttons live in the
+          About section directly above; repeating them here was flagged as
+          redundant in the 2026-07-11 live review. */}
       <footer className="border-t border-hairline">
-        <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-3 px-5 py-8 text-sm text-ink-muted sm:flex-row">
+        <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-2 px-5 py-8 text-sm sm:flex-row">
           <span className="font-semibold tracking-[0.2em] text-ink-secondary">ARGUS</span>
-          <div className="flex items-center gap-5">
-            <a href={GITHUB_PROFILE} target="_blank" rel="noopener noreferrer" className="hover:text-ink">
-              GitHub
-            </a>
-            <a href={`mailto:${CONTACT_EMAIL}`} className="hover:text-ink">
-              Email
-            </a>
-            <Link href={authed ? '/dashboard' : '/login'} className="hover:text-ink">
-              {authed ? 'Dashboard' : 'Sign in'}
-            </Link>
-          </div>
+          <span className="text-ink-muted">Multi-agent RAG research assistant</span>
         </div>
       </footer>
     </div>
