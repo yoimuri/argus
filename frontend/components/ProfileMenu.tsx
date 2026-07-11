@@ -1,13 +1,14 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
+import Link from 'next/link'
+import { Palette, Settings, Info, ShieldCheck, LogOut } from 'lucide-react'
 import ThemeToggle from '@/components/theme/ThemeToggle'
 
-// Profile dropdown (Clint's request, 2026-07-10): the theme toggle moves in
-// here from the header bar, alongside account-level items. Only REAL
-// destinations get links -- About/Privacy point at the public repo docs that
-// actually exist; Settings is explicitly "coming soon" (disabled) rather than
-// a dead link, per the docs-never-claim-more-than-the-code rule applied to UI.
+// Profile dropdown (Clint's request, 2026-07-10; icon + Settings pass
+// 2026-07-11). The theme toggle lives here alongside account-level items.
+// Settings now points at the real /dashboard/settings page (was a disabled
+// "coming soon" stub); About/Privacy still point at repo docs that exist.
 const REPO_URL = 'https://github.com/yoimuri/argus'
 
 export default function ProfileMenu({ email }: { email: string }) {
@@ -41,7 +42,7 @@ export default function ProfileMenu({ email }: { email: string }) {
         aria-haspopup="menu"
         aria-expanded={open}
         title={email}
-        className="flex h-8 w-8 items-center justify-center rounded-full bg-accent text-sm font-semibold text-accent-contrast transition-opacity hover:opacity-90"
+        className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-full bg-accent text-sm font-semibold text-accent-contrast transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
       >
         {initial}
       </button>
@@ -56,41 +57,47 @@ export default function ProfileMenu({ email }: { email: string }) {
           </p>
 
           <div className="flex items-center justify-between px-3 py-2">
-            <span className="text-sm text-ink-secondary">Theme</span>
+            <span className="flex items-center gap-2 text-sm text-ink-secondary">
+              <Palette size={16} strokeWidth={1.75} aria-hidden />
+              Theme
+            </span>
             <ThemeToggle />
           </div>
 
-          <button
-            type="button"
-            disabled
-            className="block w-full cursor-not-allowed px-3 py-2 text-left text-sm text-ink-muted"
-            title="Account settings ship in a later sprint"
+          <Link
+            href="/dashboard/settings"
+            onClick={() => setOpen(false)}
+            className="flex cursor-pointer items-center gap-2 rounded-md px-3 py-2 text-sm text-ink-secondary transition-colors hover:bg-accent-wash hover:text-ink"
           >
-            Settings <span className="text-xs">(coming soon)</span>
-          </button>
+            <Settings size={16} strokeWidth={1.75} aria-hidden />
+            Settings
+          </Link>
 
           <a
             href={REPO_URL}
             target="_blank"
             rel="noreferrer"
-            className="block rounded-md px-3 py-2 text-sm text-ink-secondary transition-colors hover:bg-accent-wash hover:text-ink"
+            className="flex cursor-pointer items-center gap-2 rounded-md px-3 py-2 text-sm text-ink-secondary transition-colors hover:bg-accent-wash hover:text-ink"
           >
+            <Info size={16} strokeWidth={1.75} aria-hidden />
             About ARGUS ↗
           </a>
           <a
             href={`${REPO_URL}/blob/main/docs/ADR-013.md`}
             target="_blank"
             rel="noreferrer"
-            className="block rounded-md px-3 py-2 text-sm text-ink-secondary transition-colors hover:bg-accent-wash hover:text-ink"
+            className="flex cursor-pointer items-center gap-2 rounded-md px-3 py-2 text-sm text-ink-secondary transition-colors hover:bg-accent-wash hover:text-ink"
           >
+            <ShieldCheck size={16} strokeWidth={1.75} aria-hidden />
             Privacy posture ↗
           </a>
 
-          <form action="/auth/signout" method="post" className="border-t border-hairline">
+          <form action="/auth/signout" method="post" className="mt-1 border-t border-hairline pt-1">
             <button
               type="submit"
-              className="block w-full rounded-md px-3 py-2 text-left text-sm text-ink-secondary transition-colors hover:bg-critical-wash hover:text-critical"
+              className="flex w-full cursor-pointer items-center gap-2 rounded-md px-3 py-2 text-left text-sm text-ink-secondary transition-colors hover:bg-critical-wash hover:text-critical"
             >
+              <LogOut size={16} strokeWidth={1.75} aria-hidden />
               Log out
             </button>
           </form>

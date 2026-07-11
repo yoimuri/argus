@@ -4,7 +4,12 @@
 **Author:** Clint Branwel D. Poyaoan (yoimuri)
 **GitHub:** github.com/yoimuri
 **Status:** Pre-build. Specification phase (V3, audited + re-scoped)
-**Target:** Production-grade portfolio project, AI Automation / Security-aware AI Engineering showcase
+**Target:** A **proof-of-concept** portfolio project that demonstrates production-grade practices
+and industry-standard architecture (AI Automation / Security-aware AI Engineering) — built to prove
+understanding of how these systems are engineered, NOT a live product serving customers at scale
+(it runs on sleeping free tiers). "Ambitious in scope, production-grade in practice,
+proof-of-concept in maturity." Claim the practices it demonstrates, never an operational reality it
+doesn't have — the same doc-honesty rule the whole project runs on, applied to the pitch itself.
 **Last updated:** July 2026 (Sprint 4.1 doc-honesty pass)
 
 ---

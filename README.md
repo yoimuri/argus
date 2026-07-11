@@ -8,6 +8,10 @@ directly into the question box.
 A multi-agent AI research assistant. Built as a portfolio project for AI Engineering and
 DevOps roles, with security treated as a full build phase, not an afterthought.
 
+It is a proof-of-concept: ambitious in scope, production-grade in practice, proof-of-concept in
+maturity. It demonstrates how these systems are engineered end to end. It is not a live product
+serving customers at scale, and it runs on free tiers that sleep when idle.
+
 **Live demo:** https://argus-nine-ivory.vercel.app
 **Backend API:** https://argus-am5t.onrender.com
 

@@ -2,6 +2,7 @@ import { createClient } from '@/utils/supabase/server'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import ProfileMenu from '@/components/ProfileMenu'
+import DashboardNav from '@/components/dashboard/DashboardNav'
 
 // D1: shared nav for every /dashboard/* route, hosts the auth check (dual-
 // guard alongside proxy.ts -- see proxy.ts's own comment) so individual
@@ -33,32 +34,7 @@ export default async function DashboardLayout({
           >
             ARGUS
           </Link>
-          <nav className="flex items-center gap-1 text-sm">
-            <Link
-              href="/dashboard"
-              className="rounded-md px-3 py-1.5 text-ink-secondary transition-colors hover:bg-accent-wash hover:text-ink"
-            >
-              Dashboard
-            </Link>
-            <Link
-              href="/dashboard/workspace"
-              className="rounded-md px-3 py-1.5 text-ink-secondary transition-colors hover:bg-accent-wash hover:text-ink"
-            >
-              Workspace
-            </Link>
-            <Link
-              href="/dashboard/sessions"
-              className="rounded-md px-3 py-1.5 text-ink-secondary transition-colors hover:bg-accent-wash hover:text-ink"
-            >
-              Sessions
-            </Link>
-            <Link
-              href="/dashboard/soc"
-              className="rounded-md px-3 py-1.5 text-ink-secondary transition-colors hover:bg-accent-wash hover:text-ink"
-            >
-              SOC
-            </Link>
-          </nav>
+          <DashboardNav />
           <div className="ml-auto">
             <ProfileMenu email={user.email ?? 'unknown'} />
           </div>

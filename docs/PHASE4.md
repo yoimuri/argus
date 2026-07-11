@@ -6,9 +6,9 @@ test account (the SOC page is proven to show your own data, not yet proven to hi
 the Sprint 4.2 section). 🟡 Sprint 4.3 reworked 2026-07-10 after a live test caught six bugs
 (the cancel feature was an illusion — see its section); Clint reported all six concerns re-tested
 and passing 2026-07-11 (his own testing; the security-isolation gates still want the formal run).
-🟡 Sprint 4.4 code-complete 2026-07-11 (public landing, Google OAuth, usage limits) — not
-live-verified, and OAuth additionally blocked on Clint's Google Cloud + Supabase provider config.
-Sprints 4.5–4.6 not started. Every checkbox below is ⏳ until its sprint is code-complete (🟡) and then
+✅ Sprint 4.4 live-verified + CLOSED 2026-07-11 (public landing, Google OAuth, usage limits, the
+research-cap bypass fix) after four live review passes. Sprints 4.5–4.6 not started; the committed
+presentability pass is the next work item (ROADMAP owner note, 2026-07-11). Every checkbox below is ⏳ until its sprint is code-complete (🟡) and then
 confirmed against the live Render + Vercel app (✅), per the project's status-marks rule. This
 file is the execution plan, not a status claim.
 **Timeline:** Weeks 11–13 (blueprint), realistically paced across the six sub-sprints below.
@@ -507,9 +507,13 @@ format** stays Sprint 4.6 (its own planning pass, D17) — noted, not built.
 
 ### Sprint 4.4 — Public landing + Google sign-in + usage limits
 
-**Status:** 🟡 Code-complete 2026-07-11, not yet live-verified. Google OAuth additionally blocked on
-Clint's platform config (Google Cloud credentials + Supabase provider) before it can be tested at
-all — see "Clint's manual steps" below. Migration 011 must be pasted before the limits/meter work.
+**Status:** ✅ **Live-verified 2026-07-11 (Clint's testing) — Sprint 4.4 CLOSED.** All four live
+review passes worked through (public landing, Google OAuth after his URL-config fix, usage limits
+with GATE-23 passing, the research-cap bypass fixed via migration 014, plus the ContactModal /
+timeline-descriptions / user_profiles-names round). Migrations 011–014 pasted, caps reverted from
+test values. GATE-23 ✅ and GATE-24 ✅ recorded in `docs/ADVERSARIAL-TESTS.md`. The build history
+below is kept as the sprint's record; the multi-pass findings lists document every live bug found
+and fixed along the way.
 
 **Built:**
 
@@ -782,6 +786,40 @@ another query until the 24h window rolls or the cap is raised.
 
 ---
 
+### Presentability pass (committed follow-up to Sprint 4.4, started 2026-07-11)
+
+The design *tokens* shipped in Sprint 4.2, but the *craft* on top of them never did — no icons,
+plain-applied tokens, a stub Settings page. Clint flagged "bland / looks slapped" repeatedly;
+committed as a required item before Phase 4 closes (ROADMAP owner note 2026-07-11). Uses the
+`ui-ux-pro-max` skill's component-craft rules. Done in reviewable increments (Clint tests each live).
+
+**Increment 1 — foundation + Settings (🟡 code-complete 2026-07-11, not yet live-verified):**
+- **`lucide-react`** installed — one icon family, one stroke width (1.75), sized via props. First
+  real icon set (the app was text-only buttons/nav before). CSP-clean (inline SVG, no network).
+- **`components/ui/Button.tsx`** — the first shared button primitive (variants primary/secondary/
+  ghost/danger, sizes), replacing per-panel hand-rolled class strings (the root of the "slapped"
+  inconsistency). Craft baked in per the skill's rules: `cursor-pointer` on every clickable, a
+  `focus-visible` ring (accessibility-critical), a subtle transform-only `active:scale` press (no
+  layout shift), 150ms transitions, clear disabled state. Exports `buttonClasses()` so `<Link>`/`<a>`
+  wear the same look without losing anchor semantics.
+- **`components/dashboard/DashboardNav.tsx`** (new client component) — nav with Lucide icons +
+  **active-route highlighting** (`nav-state-active` rule; `aria-current="page"`), extracted from the
+  server layout so it can read `usePathname`.
+- **`ProfileMenu`** — Lucide icons on every row, **`cursor-pointer` on the avatar** (closes Clint's
+  earlier pointer-cursor nit), focus ring, and **Settings now links to the real page** (was a
+  disabled "coming soon" stub).
+- **`/dashboard/settings`** (new) — real Settings page: Account (email, name, member since),
+  Appearance (theme), Free-tier limits (the user's caps, RLS-read), Data & privacy, Log out. Honest
+  by design: no "delete account" control because account-level deletion isn't built (per-collection
+  erasure is, in the Workspace) — the Data section says so plainly rather than showing a dead button.
+- Build clean, 12 routes (`/dashboard/settings` added).
+
+**Increments still to do:** login page polish; workspace/sessions/SOC component craft +
+empty/loading/error states; richer landing + overall motion. Migrate existing inline buttons onto
+the `Button` primitive incrementally.
+
+---
+
 ### Sprint 4.5 — Project Q&A chatbot + rate limiting
 
 **Status:** ⏳ Not started. Own threat-model planning pass required before build — a public,
@@ -809,6 +847,40 @@ rendered into the output report alongside the text. Explicitly NOT AI image gene
 only. The generated report must carry a **visible disclaimer**: the output may still be unclean
 and needs the user's own proofreading and organizing — the tool makes the work easier, it does not
 replace the human pass. That disclaimer is part of the design, not optional copy.
+
+**Value-proposition framing (2026-07-11 strategy discussion — read this before planning 4.6).**
+The honest answer to "why use ARGUS instead of free Claude/ChatGPT/Gemini?" is NOT "6 agents" or
+"security" — a casual user feels neither, and for a single report a free frontier model often
+writes *better* (bigger model, sees the whole document). ARGUS's defensible value is the
+**deliverable layer** the free chat tools don't remove friction for:
+- a real downloadable **file** (`.docx`/PDF), not chat text to copy-paste-and-reformat;
+- **consistent, domain-appropriate structure** via templates (a cybersec report looks like one
+  every time), where a free chat gives a different shape each ask;
+- **generated figures embedded in the report**, not just described;
+- **encoded report expertise** so a user who can't prompt for a good report still gets one.
+The bar is a professional-*enough* draft the user finishes in ~5 minutes of editing, not
+out-writing a frontier model. The moment the output is just "text with headings," the skeptic
+wins — so the file/structure/figures ARE the product, not decoration.
+
+**Two cautions this planning pass must confront (don't assume the Q&A plumbing carries over):**
+1. **Model quality vs. free tier.** "Professional output" and "smallest cheap Groq model" are in
+   tension. Report generation is the one flow that likely justifies the *best available* model per
+   run — which is exactly why its `usage_limits` metering is load-bearing, not cosmetic. Decide the
+   model deliberately; don't default to the Q&A model.
+2. **RAG may be the wrong engine here.** The Q&A pipeline retrieves top-5 chunks — right for
+   "answer a question across many docs," likely *wrong* for "synthesize a whole messy document into
+   a report," which wants the whole document (or a map-reduce summary) in context. 4.6 may need to
+   bypass or heavily augment retrieval. Confront this in the plan, don't inherit `retriever.py` by
+   default.
+
+**Project-identity framing (Clint, 2026-07-11, applies beyond 4.6):** ARGUS is pitched as a
+**proof-of-concept that demonstrates production-grade practices and industry-standard
+architecture** — built to prove understanding of how these systems are engineered, NOT as a live
+product serving customers at scale (it runs on sleeping free tiers). "Ambitious in scope,
+production-grade in practice, proof-of-concept in maturity." This is the same doc-honesty rule the
+whole project runs on, applied to how the project describes *itself*: claim the practices it
+demonstrates, never an operational reality (SLAs, load, real users) it doesn't have. See
+`docs/BLUEPRINT.md` target line and the [[argus-positioning]] memory.
 
 ---
 

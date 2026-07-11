@@ -20,7 +20,7 @@ change makes any doc stale, fix it in the same turn.
 | Phase 2 — Security hardening | ✅ |
 | Phase 3a — Full agent pipeline + observability (all sprints + document management) | ✅ live-verified 2026-07-08 |
 | Phase 3b — Web Scout | ✅ live-verified 2026-07-09 |
-| Phase 4 — Dashboard, sessions, public landing, chatbot, multimodal | 🟡 in progress, started 2026-07-09 |
+| Phase 4 — Dashboard, sessions, public landing, chatbot, multimodal | 🟡 in progress (4.1–4.4 ✅ live-verified; presentability pass next, then 4.5–4.6) |
 | Phase 4b — Admin-role SOC features (parking lot, not scheduled) | ⏳ not started |
 | Phase 5 — MCP Server, CI/CD, Polish | ⏳ not started |
 
@@ -104,10 +104,11 @@ implied as built. Full reasoning: `docs/ADR-018.md` Part 3.
   details" toggle; upload/research cancel support; in-browser PDF preview before upload commits.
 - **4.4 — Public landing + Google sign-in + usage limits.** `/` becomes a public marketing
   page (today it force-redirects to `/dashboard`); Google OAuth signup; per-user
-  `usage_limits`, owner-editable in Supabase Studio, visible in the UI. 🟡 **Code-complete
-  2026-07-11** (`docs/PHASE4.md` Sprint 4.4, `docs/ADR-019.md`). Not live-verified; OAuth
-  additionally blocked on Clint's Google Cloud + Supabase provider config. Migration **011**
-  (`usage_limits`) awaits paste. Honest gate: ADR-019 records that building the OAuth button does
+  `usage_limits`, owner-editable in Supabase Studio, visible in the UI. ✅ **Live-verified + CLOSED
+  2026-07-11** (`docs/PHASE4.md` Sprint 4.4, `docs/ADR-019.md`; GATE-23/24 ✅). Four live review
+  passes fixed real bugs along the way (stale-auth CTA, the OAuth URL-config error, the raw-JSON
+  error display, the duplicate-collection bug, and the research-cap bypass → migration 014
+  `usage_events`). Honest gate that remains: ADR-019 records that building the OAuth button does
   NOT discharge ADR-013's privacy-policy / sub-processor-disclosure items — enabling real public
   signups stays gated on those.
 - **4.5 — Project Q&A chatbot + rate limiting** (own threat-model planning pass first — a
