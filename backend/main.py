@@ -617,6 +617,21 @@ async def research(request: Request):
     if not owned:
         raise HTTPException(status_code=404, detail="Collection not found.")
 
+    # No-documents guard (live-found 2026-07-11): asking against a collection
+    # with nothing ready in it used to run the whole pipeline just to say
+    # "no relevant information found" -- and it consumed a research unit doing
+    # so. Reject cleanly BEFORE the session insert and the usage_events write,
+    # so an empty-collection ask costs nothing.
+    ready_docs = await _count_rows(
+        f"documents?collection_id=eq.{collection_id}&status=eq.ready&select=id",
+        request.state.access_token,
+    )
+    if ready_docs == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="This collection has no ready documents yet. Upload a PDF first, then ask.",
+        )
+
     # Lazy import: langgraph adds ~100MB+ RSS; keep upload path lean on 512MB Render free tier.
     from app.agents.graph import research_graph
     from app.services.step_writer import ResearchCancelled
@@ -775,6 +790,56 @@ async def list_research_sessions(
         f"&order=created_at.desc&limit={limit}&offset={offset}",
         request.state.access_token,
     )
+
+
+@app.delete("/account")
+async def delete_account_data(request: Request):
+    """Account deletion, final step (ADR-020, 2026-07-11). Purges everything
+    the user's own token can reach under RLS: every collection (with its
+    Storage files, documents, and chunks -- same purge order as
+    delete_collection), every research session (execution_steps cascade), then
+    stamps account_deleted_at on the profile, which the dashboard layout treats
+    as "sign out on sight". Deliberately NOT purged: usage_events (metering
+    must not be user-erasable, migration 014's whole point) and
+    security_events (defensive audit trail, ADR-013 posture). The auth
+    identity itself (auth.users row) needs a service-role key this backend
+    deliberately doesn't hold -- documented limitation, not an oversight; see
+    ADR-020. Called by the frontend only after the 7-day grace period expires
+    (the request/withdraw half of the flow lives entirely in user_profiles
+    columns, written client-side under RLS)."""
+    token = request.state.access_token
+    user_id = request.state.user_id
+
+    collections = await supabase_request(
+        "GET", f"collections?user_id=eq.{user_id}&select=id", token,
+    )
+    for coll in collections:
+        coll_id = coll["id"]
+        documents = await supabase_request(
+            "GET", f"documents?collection_id=eq.{coll_id}&select=storage_path", token,
+        )
+        async with httpx.AsyncClient() as client:
+            for doc in documents:
+                storage_path = doc.get("storage_path")
+                if not storage_path:
+                    continue
+                try:
+                    await client.delete(
+                        f"{SUPABASE_URL}/storage/v1/object/documents/{storage_path}",
+                        headers={"Authorization": f"Bearer {token}", "apikey": SUPABASE_KEY},
+                    )
+                except Exception as storage_err:
+                    print(f"[ARGUS] account purge: storage object {storage_path} not deleted: {storage_err}")
+        await supabase_request("DELETE", f"collections?id=eq.{coll_id}", token)
+
+    await supabase_request("DELETE", f"research_sessions?user_id=eq.{user_id}", token)
+
+    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    await supabase_request(
+        "PATCH", f"user_profiles?id=eq.{user_id}", token,
+        json_body={"account_deleted_at": now_iso},
+    )
+    return {"status": "account_data_deleted"}
 
 
 @app.post("/research/{session_id}/cancel")

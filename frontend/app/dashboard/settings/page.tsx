@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import { createClient } from '@/utils/supabase/server'
 import ThemeToggle from '@/components/theme/ThemeToggle'
+import DangerZone from '@/components/settings/DangerZone'
 import { buttonClasses } from '@/components/ui/Button'
 import { User, Palette, Gauge, ShieldCheck, LogOut } from 'lucide-react'
 
@@ -17,10 +18,32 @@ export default async function SettingsPage() {
     data: { user },
   } = await supabase.auth.getUser()
 
-  const { data: limits } = await supabase
-    .from('usage_limits')
-    .select('max_collections,max_documents,max_research_per_day')
-    .maybeSingle()
+  const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+  const [{ data: limits }, collections, documents, researchToday, { data: profile }] =
+    await Promise.all([
+      supabase
+        .from('usage_limits')
+        .select('max_collections,max_documents,max_research_per_day')
+        .maybeSingle(),
+      supabase.from('collections').select('id', { count: 'exact', head: true }),
+      supabase.from('documents').select('id', { count: 'exact', head: true }),
+      supabase
+        .from('usage_events')
+        .select('id', { count: 'exact', head: true })
+        .eq('event_type', 'research')
+        .gte('created_at', since),
+      supabase.from('user_profiles').select('deletion_requested_at').maybeSingle(),
+    ])
+
+  const meters = [
+    { label: 'Collections', used: collections.count ?? 0, max: limits?.max_collections ?? 3 },
+    { label: 'Documents', used: documents.count ?? 0, max: limits?.max_documents ?? 15 },
+    {
+      label: 'Research queries (last 24h)',
+      used: researchToday.count ?? 0,
+      max: limits?.max_research_per_day ?? 15,
+    },
+  ]
 
   const displayName =
     user?.user_metadata?.full_name ?? user?.user_metadata?.name ?? '—'
@@ -63,20 +86,44 @@ export default async function SettingsPage() {
         </div>
       </section>
 
-      {/* Usage & limits */}
+      {/* Usage & limits: bars with % (Clint, 2026-07-11), same amber-at-80% /
+          red-at-cap convention as the dashboard meters. */}
       <section className="rounded-lg border border-hairline bg-surface">
-        <SectionHeader icon={<Gauge size={16} strokeWidth={1.75} aria-hidden />} title="Free-tier limits" />
-        <dl className="divide-y divide-hairline">
-          <Row label="Collections" value={String(limits?.max_collections ?? 3)} />
-          <Row label="Documents" value={String(limits?.max_documents ?? 15)} />
-          <Row label="Research queries / day" value={String(limits?.max_research_per_day ?? 15)} />
-        </dl>
+        <SectionHeader icon={<Gauge size={16} strokeWidth={1.75} aria-hidden />} title="Free-tier usage" />
+        <div className="space-y-4 px-4 py-3">
+          {meters.map((m) => {
+            const pct = m.max > 0 ? Math.min(100, Math.round((m.used / m.max) * 100)) : 0
+            const atLimit = m.used >= m.max
+            const near = !atLimit && pct >= 80
+            const barColor = atLimit
+              ? 'var(--color-critical)'
+              : near
+                ? 'var(--color-warning)'
+                : 'var(--color-accent)'
+            return (
+              <div key={m.label}>
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-ink-secondary">{m.label}</span>
+                  <span className={atLimit ? 'font-medium text-critical' : 'text-ink-muted'}>
+                    {m.used} / {m.max} · {pct}%
+                  </span>
+                </div>
+                <div className="mt-1 h-2 w-full overflow-hidden rounded-full bg-hairline">
+                  <div
+                    className="h-full rounded-full transition-all"
+                    style={{ width: `${pct}%`, backgroundColor: barColor }}
+                  />
+                </div>
+              </div>
+            )
+          })}
+        </div>
         <p className="px-4 pb-3 pt-1 text-xs text-ink-muted">
-          These are free-tier limits. Live usage is on the{' '}
-          <Link href="/dashboard" className="text-accent hover:underline">
-            dashboard
-          </Link>
-          . Reach out if you need them raised.
+          These are free-tier limits. Reach out via{' '}
+          <Link href="/dashboard/support" className="text-accent hover:underline">
+            Support
+          </Link>{' '}
+          if you need them raised.
         </p>
       </section>
 
@@ -117,6 +164,9 @@ export default async function SettingsPage() {
           Log out
         </button>
       </form>
+
+      {/* Danger zone: account deletion with 7-day grace (ADR-020) */}
+      <DangerZone initialRequestedAt={profile?.deletion_requested_at ?? null} />
     </div>
   )
 }

@@ -431,6 +431,7 @@ every `/dashboard/*` route stays session-guarded (`proxy.ts` `isPublicPath` matc
 /collections/{id}/documents [POST,GET] · /documents/{id} [DELETE]
 /research [POST,GET] · /research/{id} [GET,DELETE] · /research/{id}/trace [GET]
 /research/{id}/cancel [POST]
+/account [DELETE]   (account-data purge after the 7-day grace period — ADR-020)
 ```
 
 `GET /research` (Sprint 4.1) lists the caller's own sessions (`?collection_id=&limit=&offset=`)

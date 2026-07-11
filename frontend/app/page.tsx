@@ -24,7 +24,9 @@ const REPO_URL = 'https://github.com/yoimuri/argus'
 const GITHUB_PROFILE = 'https://github.com/yoimuri'
 const PORTFOLIO_URL = 'https://yoimuri.github.io'
 const LINKEDIN_URL = 'https://www.linkedin.com/in/clint-branwel-p-b356a1364/'
-const CONTACT_EMAIL = 'branwelclint@gmail.com'
+// Professional contact address (Clint, 2026-07-11) -- his personal gmail must
+// not appear on public pages.
+const CONTACT_EMAIL = 'branwelclint.pro@gmail.com'
 
 const PIPELINE: { name: string; role: string }[] = [
   { name: 'Orchestrator', role: 'Plans the query. It splits your question into sub-questions and decides whether a live web search is needed at all.' },

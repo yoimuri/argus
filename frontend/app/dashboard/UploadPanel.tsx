@@ -89,6 +89,9 @@ export default function UploadPanel() {
   // as part of the value itself since this list only exists once a collection is open)
   const [documents, setDocuments] = useState<DocumentRow[] | null>(null)
   const [file, setFile] = useState<File | null>(null)
+  // Drag-and-drop upload (Clint's request, 2026-07-11): true while a file is
+  // being dragged over the dropzone, drives the highlight style only.
+  const [dragActive, setDragActive] = useState(false)
   // Local object URL for the in-browser preview (decision #11) -- zero
   // network, revoked whenever the selection changes or the panel unmounts.
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
@@ -525,6 +528,9 @@ export default function UploadPanel() {
   }
 
   const parsed = report ? splitReport(report) : null
+  // "ready" is the only status the retriever can actually search; processing/
+  // failed docs don't count toward being able to ask.
+  const hasReadyDocs = (documents ?? []).some((d) => d.status === 'ready')
 
   const inputClass =
     'w-full rounded-md border border-hairline bg-surface px-3 py-2 text-sm text-ink placeholder:text-ink-muted focus:border-accent focus:outline-none'
@@ -624,12 +630,43 @@ export default function UploadPanel() {
           <form onSubmit={handleUpload} className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             <div className="space-y-3">
               <label className="block text-sm font-medium text-ink-secondary">Upload a PDF</label>
-              <input
-                type="file"
-                accept="application/pdf"
-                onChange={(e) => handleFileChange(e.target.files?.[0] ?? null)}
-                className="block w-full text-sm text-ink-secondary file:mr-3 file:rounded-md file:border file:border-hairline file:bg-surface file:px-3 file:py-1.5 file:text-sm file:text-ink hover:file:bg-accent-wash"
-              />
+              {/* Dropzone (2026-07-11): drag a PDF from the file manager OR use
+                  the picker below -- both feed the same handleFileChange path,
+                  so the preview-before-upload flow is identical either way. */}
+              <div
+                onDragOver={(e) => {
+                  e.preventDefault()
+                  setDragActive(true)
+                }}
+                onDragLeave={() => setDragActive(false)}
+                onDrop={(e) => {
+                  e.preventDefault()
+                  setDragActive(false)
+                  const dropped = e.dataTransfer.files?.[0] ?? null
+                  if (dropped && dropped.type !== 'application/pdf') {
+                    setError('Only PDF files can be uploaded.')
+                    return
+                  }
+                  setError(null)
+                  handleFileChange(dropped)
+                }}
+                className={
+                  'rounded-lg border border-dashed p-4 transition-colors ' +
+                  (dragActive
+                    ? 'border-accent bg-accent-wash'
+                    : 'border-hairline bg-surface-page')
+                }
+              >
+                <p className="mb-2 text-xs text-ink-muted">
+                  {dragActive ? 'Drop the PDF to select it' : 'Drag a PDF here, or browse:'}
+                </p>
+                <input
+                  type="file"
+                  accept="application/pdf"
+                  onChange={(e) => handleFileChange(e.target.files?.[0] ?? null)}
+                  className="block w-full cursor-pointer text-sm text-ink-secondary file:mr-3 file:cursor-pointer file:rounded-md file:border file:border-hairline file:bg-surface file:px-3 file:py-1.5 file:text-sm file:text-ink hover:file:bg-accent-wash"
+                />
+              </div>
               <p className="text-xs text-ink-muted">
                 PDFs up to 25 MB. Large reports (e.g. DBIR) may need a compressed export.
               </p>
@@ -702,6 +739,17 @@ export default function UploadPanel() {
             <label className="block text-sm font-medium text-ink-secondary">
               Ask a question about this collection
             </label>
+            {/* No-documents guard (live-found 2026-07-11): asking against an
+                empty collection burned a research unit to say "nothing found".
+                Blocked on BOTH sides now -- this disables the button with a
+                plain reason, and the backend independently rejects with a 400
+                before any usage is counted. */}
+            {documents !== null && !hasReadyDocs && (
+              <p className="rounded-md border border-warning-wash bg-warning-wash p-2 text-xs text-ink-secondary">
+                This collection has no ready documents yet. Upload a PDF above before asking —
+                otherwise the question has nothing to search.
+              </p>
+            )}
             <textarea
               ref={queryRef}
               value={query}
@@ -723,7 +771,11 @@ export default function UploadPanel() {
               className={`${inputClass} max-h-[120px] resize-none overflow-hidden`}
             />
             <div className="flex flex-wrap gap-2">
-              <button type="submit" disabled={researching || !query.trim()} className={primaryBtn}>
+              <button
+                type="submit"
+                disabled={researching || !query.trim() || !hasReadyDocs}
+                className={primaryBtn}
+              >
                 {researching ? 'Thinking…' : 'Ask'}
               </button>
               {researching && (

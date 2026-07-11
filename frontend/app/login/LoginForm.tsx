@@ -13,7 +13,32 @@ export default function LoginForm() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const idleSignout = searchParams.get('reason') === 'idle'
+  const accountDeleted = searchParams.get('reason') === 'deleted'
   const oauthError = searchParams.get('error') === 'oauth'
+
+  // Account-level theme (2026-07-11): adopt the profile's saved preference on
+  // this device at sign-in, so the choice follows the account, not the
+  // browser. Applied directly to <html> (localStorage + attributes) because
+  // router.push is a client-side navigation -- layout.tsx's inline init
+  // script won't re-run. Best-effort: no theme row, no change.
+  async function adoptAccountTheme(supabase: ReturnType<typeof createClient>) {
+    try {
+      const { data } = await supabase.from('user_profiles').select('theme_pref').maybeSingle()
+      const pref = data?.theme_pref
+      if (pref !== 'light' && pref !== 'dark' && pref !== 'system') return
+      window.localStorage.setItem('argus-theme', pref)
+      const resolved =
+        pref === 'system'
+          ? window.matchMedia('(prefers-color-scheme: dark)').matches
+            ? 'dark'
+            : 'light'
+          : pref
+      document.documentElement.setAttribute('data-theme', resolved)
+      document.documentElement.setAttribute('data-theme-pref', pref)
+    } catch {
+      // Cosmetic only -- never block a login on it.
+    }
+  }
 
   async function handleGoogle() {
     setError(null)
@@ -60,6 +85,7 @@ export default function LoginForm() {
       } catch {
         // Non-fatal by design.
       }
+      await adoptAccountTheme(supabase)
       router.push('/dashboard')
       router.refresh()
     } finally {
@@ -86,6 +112,12 @@ export default function LoginForm() {
       {oauthError && (
         <p className="mt-2 rounded-md border border-critical-wash bg-critical-wash p-2 text-xs text-ink-secondary">
           Google sign-in didn&apos;t complete. Please try again.
+        </p>
+      )}
+      {accountDeleted && (
+        <p className="mt-2 rounded-md border border-critical-wash bg-critical-wash p-2 text-xs text-ink-secondary">
+          This account was deleted. Its data is permanently gone and the account can&apos;t be
+          restored.
         </p>
       )}
       <button

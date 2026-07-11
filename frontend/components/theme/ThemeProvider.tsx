@@ -1,6 +1,7 @@
 'use client'
 
 import { createContext, useCallback, useContext, useEffect, useState } from 'react'
+import { createClient } from '@/utils/supabase/client'
 
 export type ThemePreference = 'light' | 'dark' | 'system'
 type ResolvedTheme = 'light' | 'dark'
@@ -73,6 +74,20 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
       // Private browsing / storage disabled: theme just won't persist across reloads.
     }
     applyTheme(pref)
+    // Account-level persistence (Clint, 2026-07-11: "toggle SAVE, not toggle
+    // only"): localStorage keeps the instant-paint job on this browser; the
+    // profile row makes the choice follow the account -- LoginForm adopts it
+    // on any device at sign-in. Best-effort and fire-and-forget: a signed-out
+    // visitor (landing page toggle) or a failed write just stays local.
+    const supabase = createClient()
+    supabase.auth
+      .getUser()
+      .then(({ data: { user } }) => {
+        if (!user) return
+        return supabase.from('user_profiles').update({ theme_pref: pref }).eq('id', user.id)
+      })
+      .then(() => {})
+      .catch(() => {})
   }, [applyTheme])
 
   // "system" reacts live to an OS-level theme change while the tab stays

@@ -818,6 +818,38 @@ committed as a required item before Phase 4 closes (ROADMAP owner note 2026-07-1
 empty/loading/error states; richer landing + overall motion. Migrate existing inline buttons onto
 the `Button` primitive incrementally.
 
+**Increment 2 — account features + fixes (🟡 code-complete 2026-07-11, executed on Clint's
+standing pass; not live-verified). Migration 015 must be pasted.**
+
+1. **Empty-collection Ask bug (live-found):** asking with no ready documents ran the whole
+   pipeline (and consumed a research unit) just to say "nothing found". Fixed both layers: the Ask
+   button disables with a plain warning when the collection has no `ready` documents, and
+   `/research` independently rejects with a clean 400 **before** the session insert and the
+   `usage_events` write — an empty ask now costs nothing.
+2. **Drag-and-drop upload:** the upload area is a dropzone (highlights while dragging, rejects
+   non-PDFs) feeding the same preview-before-upload path as the file picker.
+3. **Account deletion with 7-day grace (ADR-020, GATE-26):** Settings gains a GitHub-style red
+   **Danger zone** — type `DELETE` to confirm → `deletion_requested_at` stamped → banner on every
+   dashboard page with the date + withdraw link → after 7 days, first visit purges all data via
+   the new backend `DELETE /account` (collections/storage/documents/chunks/sessions, user-token +
+   RLS), stamps `account_deleted_at`, signs out to `/login?reason=deleted`, and later sign-ins are
+   bounced. Honest limits in ADR-020: `usage_events`/`security_events` survive by design; the
+   auth identity row needs the 4b service-role work (or owner-manual Studio delete).
+4. **Theme saved to the account:** new `user_profiles.theme_pref` — any toggle writes it
+   (best-effort), and LoginForm adopts it at sign-in on any device. localStorage still handles
+   instant paint.
+5. **Settings usage bars:** the free-tier section now shows the same %-bars as the dashboard
+   (amber ≥80%, red at cap) instead of bare numbers.
+6. **Support tab:** `/dashboard/support` (email, LinkedIn, GitHub issues) with honest
+   response-time expectations; added to the dashboard nav (LifeBuoy icon).
+7. **Public contact email corrected** to `branwelclint.pro@gmail.com` (professional address) on
+   the landing page and support page.
+8. **Language support (i18n):** noted as a future item in ROADMAP (select languages only), not built.
+
+Build clean (13 routes, `/dashboard/support` added); backend `py_compile` OK. Note: current Lucide
+releases dropped brand glyphs (Linkedin/Github), so those cards wear semantic icons
+(Briefcase/Bug) instead of logos.
+
 ---
 
 ### Sprint 4.5 — Project Q&A chatbot + rate limiting
