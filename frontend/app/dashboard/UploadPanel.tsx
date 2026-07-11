@@ -10,14 +10,20 @@ import ReactMarkdown from 'react-markdown'
 
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024 // matches backend; Render free tier is 512 MB RAM
 
-// Same "(status)." vs "(status): body" vs "network error" split every
-// handler below already used before the api.ts refactor (Sprint 4.2, D3) --
-// includeBody defaults false to match the handlers that only ever showed the
-// status code (create/delete collection, delete document); handleUpload and
-// handleResearch pass true since they always showed the raw response text.
-function describeError(err: unknown, prefix: string, includeBody = false): string {
+// Every backend error is FastAPI-shaped ({"detail": "human sentence"}), so
+// show the user just that sentence -- never the raw JSON (live review
+// 2026-07-11: a 429 rendered as `{"detail":"Free-tier limit reached..."}`,
+// syntax and all). Falls back to a prefix + status code when the body isn't
+// parseable (proxy errors, HTML error pages).
+function describeError(err: unknown, prefix: string): string {
   if (err instanceof ApiError) {
-    return includeBody ? `${prefix} (${err.status}): ${err.body}` : `${prefix} (${err.status}).`
+    try {
+      const detail = (JSON.parse(err.body) as { detail?: unknown }).detail
+      if (typeof detail === 'string' && detail) return detail
+    } catch {
+      // Body wasn't JSON; fall through to the generic form.
+    }
+    return `${prefix} (${err.status}).`
   }
   return `Network error: ${err instanceof Error ? err.message : 'unknown'}`
 }
@@ -76,6 +82,7 @@ interface DocumentRow {
 
 export default function UploadPanel() {
   const [collectionName, setCollectionName] = useState('')
+  const [creatingCollection, setCreatingCollection] = useState(false)
   const [collectionId, setCollectionId] = useState<string | null>(null)
   const [activeCollectionName, setActiveCollectionName] = useState<string | null>(null)
   // null = loading sentinel (same reasoning as loadingCollections below, but
@@ -113,6 +120,56 @@ export default function UploadPanel() {
   // to set it synchronously (react-hooks' set-state-in-effect rule flags a
   // setState call that runs unconditionally before any await inside an effect).
   const [loadingCollections, setLoadingCollections] = useState(true)
+
+  // Workspace usage strip (live review 2026-07-11, finding #1: the caps were
+  // only visible on the dashboard, so hitting one mid-work came as a surprise).
+  // Limits come from the user's own usage_limits row (RLS-scoped, SELECT-only);
+  // the two counts are cheap head-count queries, refetched after any mutation
+  // rather than delta-tracked so they can't drift (e.g. deleting a collection
+  // cascades an unknown number of documents).
+  const [limits, setLimits] = useState<{
+    max_collections: number
+    max_documents: number
+    max_research_per_day: number
+  } | null>(null)
+  const [docCount, setDocCount] = useState<number | null>(null)
+  const [researchToday, setResearchToday] = useState<number | null>(null)
+
+  const refreshCounts = useCallback(async () => {
+    try {
+      const supabase = createClient()
+      const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+      const [docs, research] = await Promise.all([
+        supabase.from('documents').select('id', { count: 'exact', head: true }),
+        supabase
+          .from('research_sessions')
+          .select('id', { count: 'exact', head: true })
+          .gte('created_at', since),
+      ])
+      setDocCount(docs.count ?? null)
+      setResearchToday(research.count ?? null)
+    } catch {
+      // The strip is informational; a failed count must never break the panel.
+    }
+  }, [])
+
+  useEffect(() => {
+    let ignore = false
+    const supabase = createClient()
+    supabase
+      .from('usage_limits')
+      .select('max_collections,max_documents,max_research_per_day')
+      .maybeSingle()
+      .then(({ data }) => {
+        // Missing row -> same tight defaults the backend falls back to.
+        if (!ignore)
+          setLimits(data ?? { max_collections: 3, max_documents: 15, max_research_per_day: 15 })
+      })
+    void refreshCounts()
+    return () => {
+      ignore = true
+    }
+  }, [refreshCounts])
 
   // Pure fetch, no setState inside: this can be safely called from both an
   // effect (mount) and a click handler (after create/delete) without either
@@ -230,17 +287,25 @@ export default function UploadPanel() {
 
   async function handleCreateCollection(e: FormEvent) {
     e.preventDefault()
+    // Double-click guard (live-found 2026-07-11: mashing the button fired one
+    // POST per click, creating N identical collections). The backend also
+    // rejects duplicate names now, but the disabled button is what stops the
+    // duplicate REQUESTS from ever leaving the browser.
+    if (creatingCollection) return
     setError(null)
+    setCreatingCollection(true)
     try {
       const data = await apiJson<Collection>('/collections', {
         method: 'POST',
-        body: JSON.stringify({ name: collectionName }),
+        body: JSON.stringify({ name: collectionName.trim() }),
       })
       setCollectionName('')
       setActiveCollectionName(data.name)
       setCollectionId(data.id)
     } catch (err) {
       setError(describeError(err, 'Failed to create collection'))
+    } finally {
+      setCreatingCollection(false)
     }
   }
 
@@ -255,6 +320,8 @@ export default function UploadPanel() {
         resetToCollectionList()
       }
       setCollections(await fetchCollections())
+      // Cascade deleted an unknown number of documents -- refetch, don't guess.
+      void refreshCounts()
     } catch (err) {
       setError(describeError(err, 'Failed to delete collection'))
     }
@@ -376,11 +443,14 @@ export default function UploadPanel() {
       setPreviewUrl(null)
     } catch (err) {
       if (isAbortError(err)) setStatus('Upload cancelled.')
-      else setError(describeError(err, 'Upload failed', true))
+      else setError(describeError(err, 'Upload failed'))
     } finally {
       setUploading(false)
       uploadAbortRef.current = null
       uploadDocIdRef.current = null
+      // Refetch in finally (not only on success): a cancelled upload deletes a
+      // row and a completed one adds one -- either way the strip must agree.
+      void refreshCounts()
     }
   }
 
@@ -392,6 +462,7 @@ export default function UploadPanel() {
     try {
       await apiFetch(`/documents/${id}`, { method: 'DELETE' })
       if (collectionId) setDocuments(await fetchDocuments(collectionId))
+      void refreshCounts()
     } catch (err) {
       setError(describeError(err, 'Failed to delete document'))
     }
@@ -439,11 +510,14 @@ export default function UploadPanel() {
       setSessionId(data.session_id)
     } catch (err) {
       if (isAbortError(err)) setStatus('Research cancelled.')
-      else setError(describeError(err, 'Research query failed', true))
+      else setError(describeError(err, 'Research query failed'))
     } finally {
       setResearching(false)
       researchAbortRef.current = null
       researchSessionIdRef.current = null
+      // Every run (completed, cancelled, or errored) inserted a session row
+      // that counts toward the daily cap -- refetch so the strip agrees.
+      void refreshCounts()
     }
   }
 
@@ -460,6 +534,26 @@ export default function UploadPanel() {
 
   return (
     <div className="mt-6">
+      {/* Usage strip (finding #1, 2026-07-11): the same caps the dashboard
+          meters show, visible where the work actually happens. Muted normally,
+          critical-red once a cap is hit so the coming 429 isn't a surprise. */}
+      {limits && (
+        <div className="mb-4 flex flex-wrap gap-x-4 gap-y-1 text-xs text-ink-muted">
+          <span className={collections.length >= limits.max_collections ? 'font-medium text-critical' : ''}>
+            Collections {collections.length}/{limits.max_collections}
+          </span>
+          {docCount !== null && (
+            <span className={docCount >= limits.max_documents ? 'font-medium text-critical' : ''}>
+              Documents {docCount}/{limits.max_documents}
+            </span>
+          )}
+          {researchToday !== null && (
+            <span className={researchToday >= limits.max_research_per_day ? 'font-medium text-critical' : ''}>
+              Research today {researchToday}/{limits.max_research_per_day}
+            </span>
+          )}
+        </div>
+      )}
       {!collectionId ? (
         <div className="space-y-6">
           <form onSubmit={handleCreateCollection} className="flex flex-col gap-2 sm:flex-row sm:items-center">
@@ -471,8 +565,8 @@ export default function UploadPanel() {
               required
               className={`${inputClass} sm:flex-1`}
             />
-            <button type="submit" className={primaryBtn}>
-              Create collection
+            <button type="submit" disabled={creatingCollection} className={primaryBtn}>
+              {creatingCollection ? 'Creating…' : 'Create collection'}
             </button>
           </form>
 

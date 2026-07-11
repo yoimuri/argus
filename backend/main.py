@@ -4,6 +4,7 @@ import uuid
 import httpx
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+from urllib.parse import quote
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -220,7 +221,7 @@ async def circuit_breaker_health(request: Request):
 @app.post("/collections")
 async def create_collection(request: Request):
     body = await request.json()
-    name = body.get("name", "Untitled Collection")
+    name = (body.get("name") or "").strip() or "Untitled Collection"
 
     # Free-tier cap (D13). Count first, reject with a friendly 429 before the
     # insert if the user is already at their limit.
@@ -231,8 +232,24 @@ async def create_collection(request: Request):
     if count >= limits["max_collections"]:
         raise HTTPException(
             status_code=429,
-            detail=f"Free-tier limit reached: up to {limits['max_collections']} collections. "
-            "Delete one to make room, or contact the owner to raise your limit.",
+            detail=f"Free-tier limit reached: {limits['max_collections']} collections max. "
+            "Delete one to make room.",
+        )
+
+    # Duplicate-name check (live-found 2026-07-11: double-clicking Create made
+    # N identical collections). quote() because the name is user text going
+    # into a PostgREST query string. Honest note: two truly simultaneous
+    # requests can still both pass this check (no DB unique constraint yet);
+    # the frontend's disabled-while-creating button covers the realistic case.
+    existing = await supabase_request(
+        "GET",
+        f"collections?user_id=eq.{request.state.user_id}&name=eq.{quote(name)}&select=id",
+        request.state.access_token,
+    )
+    if existing:
+        raise HTTPException(
+            status_code=409,
+            detail=f'You already have a collection named "{name}". Open it from the list below.',
         )
 
     rows = await supabase_request(
@@ -316,8 +333,8 @@ async def upload_document(collection_id: str, req: DocumentUploadRequest, reques
     if doc_count >= limits["max_documents"]:
         raise HTTPException(
             status_code=429,
-            detail=f"Free-tier limit reached: up to {limits['max_documents']} documents. "
-            "Delete one to upload another, or contact the owner to raise your limit.",
+            detail=f"Free-tier limit reached: {limits['max_documents']} documents max. "
+            "Delete one to upload another.",
         )
 
     if req.document_id is not None and not _valid_uuid(req.document_id):
@@ -577,8 +594,8 @@ async def research(request: Request):
     if research_today >= limits["max_research_per_day"]:
         raise HTTPException(
             status_code=429,
-            detail=f"Free-tier limit reached: up to {limits['max_research_per_day']} research queries per day. "
-            "Try again tomorrow, or contact the owner to raise your limit.",
+            detail=f"Free-tier limit reached: {limits['max_research_per_day']} research queries per day. "
+            "Try again tomorrow.",
         )
 
     user_agent = request.headers.get("user-agent", "")[:300]

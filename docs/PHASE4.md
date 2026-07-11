@@ -727,6 +727,35 @@ the Google profile name).
 **Future notes from the same review (ROADMAP owner notes):** a LinkedIn post draft to present the
 app once Phase 4 closes; a logo design for ARGUS (separate design-agent task).
 
+**Live-test findings, third pass (Clint, 2026-07-11 — GATE-23 run):**
+
+1. **GATE-23 ✅ PASS live**: caps set to 5 in Studio, sixth research query returned the friendly
+   429, raising the cap unblocked the next query with no redeploy. Recorded in ADVERSARIAL-TESTS.
+2. **Raw JSON leaked into the UI**: the 429 rendered as `Research query failed (429): {"detail":
+   "..."}` — syntax and all. Fixed in one place: `describeError` (UploadPanel) now parses the
+   FastAPI `detail` sentence out of every backend error and shows only that; falls back to
+   "prefix (status)." when the body isn't JSON. The backend messages were also shortened
+   ("Free-tier limit reached: 5 research queries per day. Try again tomorrow." — the
+   "contact the owner" tail dropped).
+3. **Workspace usage strip** (finding: caps were only visible on the dashboard): a compact
+   "Collections 3/5 · Documents 2/5 · Research today 1/5" line at the top of the workspace,
+   fed by the user's own RLS-scoped `usage_limits` row + two head-count queries, refetched after
+   every mutation (upload, deletes, research) rather than delta-tracked so it can't drift. Turns
+   critical-red at a cap so the 429 is never a surprise.
+4. **Duplicate-collection bug**: clicking "Create collection" repeatedly created one collection
+   per click (no in-flight guard), and identical names were accepted. Fixed both layers: the
+   button disables while its request is in flight ("Creating…"), and the backend now returns a
+   friendly **409** ("You already have a collection named X") on a duplicate name for the same
+   user. Honest note: no DB unique constraint yet, so two truly simultaneous requests could still
+   race past the check — the disabled button covers the realistic case; a unique index would need
+   Clint to clean up the existing `test1` duplicates first, so it's noted rather than shipped.
+5. **Subscription question answered** (see ROADMAP owner note): per-user raises are already
+   possible today — every `usage_limits` row is one user; the earlier blanket UPDATE was blanket
+   only because the test asked for it. The uuid→person readability gap is exactly what migration
+   012 fixes (paste it). A simulated subscription tier that auto-raises limits monthly is future
+   scope (Phase 4b territory: needs roles/admin machinery), parked as an owner note, explicitly
+   NOT built now — and locked off by design since this isn't a profit-first project.
+
 ---
 
 ### Sprint 4.5 — Project Q&A chatbot + rate limiting
