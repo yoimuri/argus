@@ -387,6 +387,7 @@ yet configured.
 | `research_sessions` | One row per query; stores report + status (`running`/`completed`/`completed_with_fallback`/`error`). No RAGAS columns — RAGAS scoring stays deferred, see `docs/ROADMAP.md` |
 | `execution_steps` | **The Debug Diary.** One row per agent step per session, written live by StepWriter |
 | `security_events` | Injection/quarantine event log. Feeds the Phase 4 per-user events feed via Realtime (migration 009) |
+| `usage_limits` | 🟡 **Sprint 4.4, migration 011 — code-complete, not yet applied live.** Per-user free-tier caps (`max_collections`/`max_documents`/`max_research_per_day`). `SELECT`-only to clients (own-row RLS) so a user can read but never raise their caps; a `SECURITY DEFINER` signup trigger seeds tight defaults, the owner edits in Studio to raise. Enforced in `main.py` (429 before billable work). See `docs/ADR-019.md` |
 
 **Phase 4b, not built** (see `docs/ADR-018.md` Part 3 — these all assume an admin role that
 doesn't exist yet):
@@ -410,8 +411,13 @@ CREATE POLICY "own documents" ON documents USING (user_id = auth.uid());
 
 ## API Surface (FastAPI)
 
-**As actually built** (backend/main.py; auth is Supabase Auth client-side, so there is no
-`/auth/*` backend route — the frontend calls Supabase directly and forwards the resulting JWT):
+**Auth surface (frontend):** auth is Supabase Auth client-side, so there is no `/auth/*` *backend*
+route — the frontend calls Supabase directly and forwards the resulting JWT. On the Next.js side:
+email/password *and* 🟡 Google OAuth (Sprint 4.4, PKCE via `signInWithOAuth` → `/auth/callback`
+route handler → `exchangeCodeForSession`); `/` is now a public landing page (was a redirect), while
+every `/dashboard/*` route stays session-guarded (`proxy.ts` `isPublicPath` matches `/` exactly).
+
+**As actually built** (backend/main.py):
 
 ```
 /health [GET] · /status/breakers [GET]

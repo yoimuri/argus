@@ -3,6 +3,20 @@ import { NextResponse, type NextRequest } from 'next/server'
 
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000 // 30 minutes
 
+// Paths reachable without a session (Sprint 4.4, D12). `/` is the new public
+// landing page -- matched EXACTLY, never as a prefix, so opening the marketing
+// page can't accidentally expose a protected route that happens to start with
+// `/`. /login and /auth/* (which includes the OAuth callback, /auth/callback,
+// and /auth/activity) were already public before this change. Everything else
+// -- every /dashboard/* route -- still requires a session.
+function isPublicPath(pathname: string): boolean {
+  return (
+    pathname === '/' ||
+    pathname.startsWith('/login') ||
+    pathname.startsWith('/auth')
+  )
+}
+
 export async function proxy(request: NextRequest) {
   // Nonce-based CSP (ADR-008 addendum, closes pentest finding HDR_003: static
   // 'unsafe-inline' on script-src disables XSS protection). A fresh,
@@ -92,10 +106,7 @@ export async function proxy(request: NextRequest) {
     // the one already fixed. Found live 2026-07-09.
     supabaseResponse.cookies.delete('last_active')
 
-    if (
-      !request.nextUrl.pathname.startsWith('/login') &&
-      !request.nextUrl.pathname.startsWith('/auth')
-    ) {
+    if (!isPublicPath(request.nextUrl.pathname)) {
       const url = request.nextUrl.clone()
       url.pathname = '/login'
       const redirectResponse = NextResponse.redirect(url)
@@ -111,11 +122,7 @@ export async function proxy(request: NextRequest) {
   // out and send to login. scope: 'local' matters here, this only ends the
   // session on this browser, not every device the user happens to be logged
   // into. See docs/ADR-009.md.
-  if (
-    user &&
-    !request.nextUrl.pathname.startsWith('/login') &&
-    !request.nextUrl.pathname.startsWith('/auth')
-  ) {
+  if (user && !isPublicPath(request.nextUrl.pathname)) {
     const lastActive = request.cookies.get('last_active')?.value
     const now = Date.now()
 

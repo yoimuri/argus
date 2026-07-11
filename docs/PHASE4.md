@@ -4,8 +4,11 @@
 2026-07-09 — with its cross-user *isolation* gates (GATE-18/19/20/21) still 🟡, pending a second
 test account (the SOC page is proven to show your own data, not yet proven to hide others'; see
 the Sprint 4.2 section). 🟡 Sprint 4.3 reworked 2026-07-10 after a live test caught six bugs
-(the cancel feature was an illusion — see its section); all fixed in code, none re-verified live
-yet. Sprints 4.4–4.6 not started. Every checkbox below is ⏳ until its sprint is code-complete (🟡) and then
+(the cancel feature was an illusion — see its section); Clint reported all six concerns re-tested
+and passing 2026-07-11 (his own testing; the security-isolation gates still want the formal run).
+🟡 Sprint 4.4 code-complete 2026-07-11 (public landing, Google OAuth, usage limits) — not
+live-verified, and OAuth additionally blocked on Clint's Google Cloud + Supabase provider config.
+Sprints 4.5–4.6 not started. Every checkbox below is ⏳ until its sprint is code-complete (🟡) and then
 confirmed against the live Render + Vercel app (✅), per the project's status-marks rule. This
 file is the execution plan, not a status claim.
 **Timeline:** Weeks 11–13 (blueprint), realistically paced across the six sub-sprints below.
@@ -504,11 +507,87 @@ format** stays Sprint 4.6 (its own planning pass, D17) — noted, not built.
 
 ### Sprint 4.4 — Public landing + Google sign-in + usage limits
 
-**Status:** ⏳ Not started.
+**Status:** 🟡 Code-complete 2026-07-11, not yet live-verified. Google OAuth additionally blocked on
+Clint's platform config (Google Cloud credentials + Supabase provider) before it can be tested at
+all — see "Clint's manual steps" below. Migration 011 must be pasted before the limits/meter work.
 
-Planned: `/` becomes a public marketing page (today it force-redirects to `/dashboard`); Google
-OAuth via Supabase Auth; new `usage_limits` table, owner-editable in Supabase Studio, visible in
-the UI as a usage meter. Closes BACKLOG Item 3.
+**Built:**
+
+1. **Public landing page at `/`** (`frontend/app/page.tsx`, was a bare `redirect('/dashboard')`).
+   A real marketing/intro page so a recruiter following the repo link no longer hits a login wall:
+   sticky header (wordmark, theme toggle, Sign in / Go to dashboard), hero, a "six agents, one
+   answer" section describing the real pipeline (orchestrator → web scout → retriever → synthesizer
+   → critic → reporter), a "built to be attacked" security section (injection defense, circuit
+   breakers, RLS isolation, live SOC console), and an about/contact section. Every claim maps to
+   something the code actually does — the project rule that docs never overclaim applies hardest to
+   the public page. Styled entirely on the existing Sprint 4.2 design tokens; no new dependency.
+   - **Reveal-on-scroll** (`frontend/components/landing/Reveal.tsx` + `.reveal` rules in
+     `globals.css`) built to the standing "works on ANY browser" rule: content is VISIBLE by
+     default, the client component only *arms* the hidden-then-reveal once JS is confirmed running,
+     with a `<noscript>` net and a `prefers-reduced-motion` guard both forcing full visibility. A
+     broken or absent script can never leave content hidden. IntersectionObserver (universal
+     support), not CSS scroll-driven animations (patchy across browsers).
+   - **`proxy.ts`**: `/` is now a public path. A new `isPublicPath()` helper centralizes the
+     definition (`/` matched EXACTLY so it can't widen access to a protected route; `/login` and
+     `/auth/*` unchanged). Authenticated visitors to `/` are NOT force-redirected — they just see
+     "Go to dashboard" (D12). Every `/dashboard/*` route still requires a session (dual guard:
+     proxy + per-page `getUser()`), verified by the build still emitting all routes and by the
+     idle-timeout logic now also gated behind `isPublicPath`.
+
+2. **Google sign-in (OAuth)** — `@supabase/ssr`'s default PKCE flow.
+   - `frontend/app/login/LoginForm.tsx`: a "Continue with Google" button calls
+     `signInWithOAuth({ provider: 'google', options: { redirectTo: <origin>/auth/callback } })`,
+     plus a `?error=oauth` banner for a failed round-trip. The four-color Google mark is an inline
+     SVG (no icon library yet — that lands in the committed presentability pass).
+   - `frontend/app/auth/callback/route.ts` (new): exchanges the returned auth code for a session
+     via `exchangeCodeForSession`, stamps `last_active` at that moment (same double-login immunity
+     the password path gets from `/auth/activity`), and redirects to `/dashboard`. Hardened: an
+     open-redirect guard on `?next=` (only same-origin relative paths) and the documented Vercel
+     `x-forwarded-host` handling. Confirmed the callback API against live Supabase docs, not memory.
+   - CSP unchanged: `signInWithOAuth` is a top-level document navigation to the Supabase authorize
+     URL (which 302s to Google), not a `fetch`/XHR, so `connect-src`/`form-action` don't gate it.
+
+3. **Usage limits (D13)** — a public signup surface must not open unmetered free-tier usage.
+   - `supabase/migrations/011_usage_limits.sql` (note: **011**, not 010 — 010 is the earlier
+     `security_events.user_agent` column). Per-user `usage_limits` row: `max_collections`,
+     `max_documents`, `max_research_per_day`. **Trust model**: clients get `SELECT` only (RLS
+     own-row) — a user can read their caps but can NEVER raise them from the browser; only the
+     `SECURITY DEFINER` signup trigger and the owner (via Studio) write them. New accounts (email
+     OR Google) get tight default caps (3 / 15 / 15) via an `auth.users` AFTER INSERT trigger;
+     existing accounts are backfilled to an owner/QA tier (100 / 500 / 500) so no current test
+     account is capped mid-testing.
+   - **Backend enforcement** (`backend/main.py`): `create_collection`, `upload_document`, and
+     `research` each count the user's current usage (RLS-scoped) and return a friendly **429** if
+     at the cap, before doing any billable work (the research check runs before the injection
+     classifier and the agent graph, so an over-limit query spends zero Groq/HF quota). A missing
+     `usage_limits` row fails **closed** to the tight defaults, never "unlimited" and never a 500.
+   - **Usage meter** (`frontend/app/dashboard/page.tsx`): three labeled bars (collections,
+     documents, research-in-last-24h) against the user's caps, read directly via the RLS-scoped
+     Supabase server client; bars turn amber at ≥80% and red at the limit. Limits are visible to
+     users, per D13.
+
+**Closes BACKLOG Item 3** (Google sign-in was gated on the ADR-013 privacy checklist — answered in
+ADR-019). Design + privacy reasoning: `docs/ADR-019.md`. Gates: GATE-23 (limits enforce) and
+GATE-24 (public/auth boundary + OAuth round-trip) in `docs/ADVERSARIAL-TESTS.md`, both 🟡 until live.
+
+**Clint's manual steps (all his — prepare, explain, stop):**
+1. **Paste migration 011** in the Supabase SQL editor; confirm the `usage_limits` table, the
+   `on_auth_user_created_usage_limits` trigger, and that existing accounts got backfilled rows.
+2. **Google Cloud Console:** create/choose a project → OAuth consent screen → create an OAuth 2.0
+   **Web application** Client ID; set the authorized redirect URI to
+   `https://<your-project-ref>.supabase.co/auth/v1/callback`.
+3. **Supabase dashboard → Authentication → Providers → Google:** enable it, paste the Client ID +
+   Client Secret. **Authentication → URL Configuration:** add the Vercel production URL and
+   `http://localhost:3000` to the allowed redirect URLs so `/auth/callback` is accepted.
+4. `git push` (Render + Vercel redeploy). Then run GATE-23 and GATE-24 live and record results.
+5. Optional, to keep your own accounts unblocked while testing: they're already backfilled high, but
+   if you want to *exercise* GATE-23, `UPDATE public.usage_limits SET max_research_per_day = 1 WHERE
+   user_id = '<a test user id>';`, hit the 429, then raise it back — proves an owner edit unblocks
+   with no redeploy.
+
+**Still not built this sprint (deliberate):** the broader **presentability pass** (icon library,
+component polish, real Settings page, empty/loading states) is a committed follow-up right after
+this landing establishes the visual language — see ROADMAP owner notes, 2026-07-11.
 
 ---
 

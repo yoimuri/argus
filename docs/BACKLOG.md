@@ -59,19 +59,19 @@ Two related but distinct gaps:
 
 ---
 
-## Item 3 — Google sign-in
+## Item 3 — Google sign-in — 🟡 BUILT in Sprint 4.4 (2026-07-11), not yet live-verified
 
-Currently email/password only (`frontend/app/login/LoginForm.tsx`,
-`supabase.auth.signInWithPassword`). Supabase Auth supports OAuth natively
-(`supabase.auth.signInWithOAuth({ provider: 'google' })`). Mechanically simple, not a novel
-design problem. **Real prerequisite:** `docs/ADR-013.md`'s pre-launch checklist (privacy
-policy, sub-processor disclosure) stops being theoretical once real public users can sign up.
-Sequence this against that checklist, not as a standalone OAuth wire-up.
+Was email/password only. Now: "Continue with Google" on `frontend/app/login/LoginForm.tsx`
+(`signInWithOAuth`) + a PKCE callback at `frontend/app/auth/callback/route.ts`
+(`exchangeCodeForSession`). Paired with the `usage_limits` table (migration 011) so a public
+signup surface doesn't open unmetered free-tier usage. Full build log: `docs/PHASE4.md` Sprint 4.4;
+design + privacy reasoning: `docs/ADR-019.md`.
 
-**Phase:** Scheduled into Sprint 4.4 (2026-07-09) — the public landing page IS the public
-launch surface, so Google sign-in and the ADR-013 checklist land together. Paired with a new
-`usage_limits` table (owner-editable, visible in the UI) so a public signup surface doesn't
-open unmetered free-tier usage. See `docs/PHASE4.md` and `docs/ROADMAP.md`.
+**Still open (the real prerequisite, unchanged):** building the OAuth button does NOT discharge
+`docs/ADR-013.md`'s pre-launch checklist (privacy policy, sub-processor disclosure, retention). Per
+ADR-019, the mechanism is ready for owner testing, but **enabling real public signups stays gated**
+on those items being written. Clint's manual config (Google Cloud credentials + Supabase provider)
+is required before even the owner-test round-trip can run.
 
 ---
 

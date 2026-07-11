@@ -2,6 +2,7 @@ import asyncio
 import os
 import uuid
 import httpx
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -59,6 +60,43 @@ def _valid_uuid(value: str) -> bool:
         return True
     except ValueError:
         return False
+
+
+# Sprint 4.4 (D13): per-user free-tier caps. These fallback values mirror the
+# tight column defaults in migration 011, used only if a user somehow has no
+# usage_limits row (trigger failed, or a pre-migration account). Falling back to
+# the FREE tier (not "unlimited") means a missing row can never accidentally
+# grant unmetered usage -- fail-closed -- while never 500-ing a request either.
+DEFAULT_USAGE_LIMITS = {
+    "max_collections": 3,
+    "max_documents": 15,
+    "max_research_per_day": 15,
+}
+
+
+async def _get_usage_limits(user_id, access_token):
+    """Read a user's caps. Never raises: a limits-read failure falls back to the
+    tight defaults rather than blocking or crashing the request the user was
+    actually trying to make."""
+    try:
+        rows = await supabase_request(
+            "GET",
+            f"usage_limits?user_id=eq.{user_id}&select=max_collections,max_documents,max_research_per_day",
+            access_token,
+        )
+        if rows:
+            return rows[0]
+    except Exception as limit_err:
+        print(f"[ARGUS] usage-limit read failed for {user_id} (using defaults): {limit_err}")
+    return dict(DEFAULT_USAGE_LIMITS)
+
+
+async def _count_rows(path, access_token):
+    """Count rows by selecting ids and taking the length. Fine at free-tier
+    magnitudes and avoids adding a count-header path to the shared
+    supabase_request helper. RLS already scopes the result to the caller."""
+    rows = await supabase_request("GET", path, access_token)
+    return len(rows)
 
 
 async def _mark_document_failed(document, access_token):
@@ -183,6 +221,20 @@ async def circuit_breaker_health(request: Request):
 async def create_collection(request: Request):
     body = await request.json()
     name = body.get("name", "Untitled Collection")
+
+    # Free-tier cap (D13). Count first, reject with a friendly 429 before the
+    # insert if the user is already at their limit.
+    limits = await _get_usage_limits(request.state.user_id, request.state.access_token)
+    count = await _count_rows(
+        f"collections?user_id=eq.{request.state.user_id}&select=id", request.state.access_token
+    )
+    if count >= limits["max_collections"]:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Free-tier limit reached: up to {limits['max_collections']} collections. "
+            "Delete one to make room, or contact the owner to raise your limit.",
+        )
+
     rows = await supabase_request(
         "POST", "collections", request.state.access_token,
         json_body={"user_id": request.state.user_id, "name": name},
@@ -253,6 +305,20 @@ async def upload_document(collection_id: str, req: DocumentUploadRequest, reques
 
     token = request.state.access_token
     user_agent = request.headers.get("user-agent", "")[:300]
+
+    # Free-tier cap (D13): total documents across all of a user's collections.
+    # Checked before any storage/embedding work so an over-limit upload costs
+    # nothing.
+    limits = await _get_usage_limits(request.state.user_id, token)
+    doc_count = await _count_rows(
+        f"documents?user_id=eq.{request.state.user_id}&select=id", token
+    )
+    if doc_count >= limits["max_documents"]:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Free-tier limit reached: up to {limits['max_documents']} documents. "
+            "Delete one to upload another, or contact the owner to raise your limit.",
+        )
 
     if req.document_id is not None and not _valid_uuid(req.document_id):
         raise HTTPException(status_code=400, detail="document_id must be a valid uuid.")
@@ -496,6 +562,24 @@ async def research(request: Request):
     client_session_id = body.get("session_id")
     if client_session_id is not None and not _valid_uuid(client_session_id):
         raise HTTPException(status_code=400, detail="session_id must be a valid uuid.")
+
+    # Free-tier cap (D13): research queries per rolling 24h. Checked before the
+    # injection classifier and the agent graph so an over-limit request spends
+    # no Groq/HF quota -- the whole point of metering. `Z`-suffixed timestamp
+    # (not isoformat's `+00:00`) so the `+` can't be mis-read as a space in the
+    # PostgREST query string.
+    limits = await _get_usage_limits(request.state.user_id, request.state.access_token)
+    since = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    research_today = await _count_rows(
+        f"research_sessions?user_id=eq.{request.state.user_id}&created_at=gte.{since}&select=id",
+        request.state.access_token,
+    )
+    if research_today >= limits["max_research_per_day"]:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Free-tier limit reached: up to {limits['max_research_per_day']} research queries per day. "
+            "Try again tomorrow, or contact the owner to raise your limit.",
+        )
 
     user_agent = request.headers.get("user-agent", "")[:300]
 

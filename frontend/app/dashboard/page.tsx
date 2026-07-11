@@ -15,16 +15,43 @@ export default async function DashboardPage() {
   const displayName =
     user?.user_metadata?.full_name ?? user?.user_metadata?.name ?? user?.email
 
-  const [collections, documents, sessions, latest] = await Promise.all([
-    supabase.from('collections').select('id', { count: 'exact', head: true }),
-    supabase.from('documents').select('id', { count: 'exact', head: true }),
-    supabase.from('research_sessions').select('id', { count: 'exact', head: true }),
-    supabase
-      .from('research_sessions')
-      .select('id,query,status,created_at')
-      .order('created_at', { ascending: false })
-      .limit(1),
-  ])
+  // Rolling-24h window for the daily research meter, matched to the backend's
+  // enforcement (main.py counts research_sessions with created_at >= now-1d).
+  const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+
+  const [collections, documents, sessions, latest, researchToday, limitsRow] =
+    await Promise.all([
+      supabase.from('collections').select('id', { count: 'exact', head: true }),
+      supabase.from('documents').select('id', { count: 'exact', head: true }),
+      supabase.from('research_sessions').select('id', { count: 'exact', head: true }),
+      supabase
+        .from('research_sessions')
+        .select('id,query,status,created_at')
+        .order('created_at', { ascending: false })
+        .limit(1),
+      supabase
+        .from('research_sessions')
+        .select('id', { count: 'exact', head: true })
+        .gte('created_at', since),
+      // RLS scopes this to the caller's own row (migration 011). SELECT-only
+      // grant means the user can read but never raise their own caps.
+      supabase
+        .from('usage_limits')
+        .select('max_collections,max_documents,max_research_per_day')
+        .maybeSingle(),
+    ])
+
+  // Fall back to the tight defaults (same as the backend) if no row exists yet.
+  const limits = limitsRow.data ?? {
+    max_collections: 3,
+    max_documents: 15,
+    max_research_per_day: 15,
+  }
+  const meters = [
+    { label: 'Collections', used: collections.count ?? 0, max: limits.max_collections },
+    { label: 'Documents', used: documents.count ?? 0, max: limits.max_documents },
+    { label: 'Research today', used: researchToday.count ?? 0, max: limits.max_research_per_day },
+  ]
 
   const counts = [
     { label: 'Collections', value: collections.count ?? 0, href: '/dashboard/workspace' },
@@ -64,6 +91,44 @@ export default async function DashboardPage() {
           </Link>
         ))}
       </div>
+
+      <section className="rounded-lg border border-hairline bg-surface p-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-semibold text-ink">Free-tier usage</h2>
+          <span className="text-xs text-ink-muted">resets rolling, per 24h for research</span>
+        </div>
+        <div className="mt-3 space-y-3">
+          {meters.map((m) => {
+            const pct = m.max > 0 ? Math.min(100, Math.round((m.used / m.max) * 100)) : 0
+            const atLimit = m.used >= m.max
+            const near = !atLimit && pct >= 80
+            const barColor = atLimit
+              ? 'var(--color-critical)'
+              : near
+                ? 'var(--color-warning)'
+                : 'var(--color-accent)'
+            return (
+              <div key={m.label}>
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-ink-secondary">{m.label}</span>
+                  <span className={atLimit ? 'font-medium text-critical' : 'text-ink-muted'}>
+                    {m.used} / {m.max}
+                  </span>
+                </div>
+                <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-hairline">
+                  <div
+                    className="h-full rounded-full transition-all"
+                    style={{ width: `${pct}%`, backgroundColor: barColor }}
+                  />
+                </div>
+              </div>
+            )
+          })}
+        </div>
+        <p className="mt-3 text-xs text-ink-muted">
+          These are free-tier limits. Reach out if you need them raised.
+        </p>
+      </section>
 
       <section className="rounded-lg border border-hairline bg-surface p-4">
         <h2 className="text-sm font-semibold text-ink">

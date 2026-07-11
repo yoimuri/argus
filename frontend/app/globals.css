@@ -144,3 +144,30 @@ body {
   font-size: 0.875rem;
   line-height: 1.35;
 }
+
+/* Landing-page reveal-on-scroll (Sprint 4.4). Design rule carried over from
+   Clint's "must work on ANY browser/platform" mandate: content is VISIBLE by
+   default. The client Reveal component only ADDS the hidden-then-reveal once
+   JS is confirmed running -- it is never required to make content appear. So:
+     - JS off  -> the <noscript> override below keeps everything visible.
+     - JS on   -> SSR renders data-reveal="hidden" (starts hidden, no flash),
+                  the IntersectionObserver flips it to "shown".
+     - reduced motion -> forced visible, no transition, regardless of JS.
+   The only degraded case is JS-present-but-hydration-failed, the same
+   universal Next.js risk that affects all interactivity. */
+.reveal[data-reveal="hidden"] {
+  opacity: 0;
+  transform: translateY(18px);
+}
+.reveal[data-reveal="shown"] {
+  opacity: 1;
+  transform: none;
+  transition: opacity 0.6s ease, transform 0.6s ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  .reveal[data-reveal] {
+    opacity: 1 !important;
+    transform: none !important;
+    transition: none !important;
+  }
+}

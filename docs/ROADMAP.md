@@ -104,7 +104,12 @@ implied as built. Full reasoning: `docs/ADR-018.md` Part 3.
   details" toggle; upload/research cancel support; in-browser PDF preview before upload commits.
 - **4.4 — Public landing + Google sign-in + usage limits.** `/` becomes a public marketing
   page (today it force-redirects to `/dashboard`); Google OAuth signup; per-user
-  `usage_limits`, owner-editable in Supabase Studio, visible in the UI.
+  `usage_limits`, owner-editable in Supabase Studio, visible in the UI. 🟡 **Code-complete
+  2026-07-11** (`docs/PHASE4.md` Sprint 4.4, `docs/ADR-019.md`). Not live-verified; OAuth
+  additionally blocked on Clint's Google Cloud + Supabase provider config. Migration **011**
+  (`usage_limits`) awaits paste. Honest gate: ADR-019 records that building the OAuth button does
+  NOT discharge ADR-013's privacy-policy / sub-processor-disclosure items — enabling real public
+  signups stays gated on those.
 - **4.5 — Project Q&A chatbot + rate limiting** (own threat-model planning pass first — a
   public unauthenticated LLM endpoint is a new attack surface).
 - **4.6 — Multimodal PDF ingestion + Report Generation** (own threat-model planning pass
@@ -149,10 +154,10 @@ a real sprint plan when its phase comes up; don't let it sit here forever unaddr
 | 2026-07-08 | `tldr` gets flagged as possible prompt injection by the HF Prompt Guard classifier (false positive on a short, out-of-distribution slang token). Deliberately won't-fix: the only levers (raise threshold / allowlist the word) either weaken the guard against real attacks or hand attackers a bypass prefix. | won't-fix by design |
 | 2026-07-09 | UX/product question raised while live-testing Sprint 3a.3: is showing the raw `## Sources` chunk list and the `## Confidence` section to the end user appropriate for a released/recruiter-facing product, or is that developer-stage debug info? | decided + scheduled 2026-07-09: moves behind a "show details" toggle in Sprint 4.3, normal users see a clean answer + confidence badge |
 | 2026-07-09 | Idea: an in-browser PDF preview step before a document is committed to a collection — user sees the PDF and explicitly approves/rejects/re-selects the file, instead of upload going straight from file picker to processing. | scheduled 2026-07-09: pulled into Sprint 4.3 |
-| 2026-07-09 | Reminder (not new, re-flagged so it doesn't get lost): PyMuPDF only reads text, so images/figures/charts inside a PDF are invisible to ARGUS today; Google sign-in is still email/password only. | scheduled 2026-07-09: Google sign-in graduates into Sprint 4.4; image/figure reading graduates into Sprint 4.6 with its own threat-model planning pass (image-borne injection is a new channel) |
+| 2026-07-09 | Reminder (not new, re-flagged so it doesn't get lost): PyMuPDF only reads text, so images/figures/charts inside a PDF are invisible to ARGUS today; Google sign-in is still email/password only. | Google sign-in: 🟡 **built in Sprint 4.4 (2026-07-11)**, code-complete, awaiting Clint's provider config + live verification (ADR-019). Image/figure reading: still scheduled for Sprint 4.6 with its own threat-model planning pass (image-borne injection is a new channel) |
 | 2026-07-09 | n8n/Zapier automation, raised while scoping Phase 4. No concrete use case named yet. | parked — no build without an established need |
 | 2026-07-09 | Response time on research queries/uploads feels slow, raised during Sprint 4.1 live testing. Not diagnosed yet — plausible contributors: Render free-tier cold start, sequential agent calls (orchestrator → web_scout → retriever → synthesizer → critic → reporter, each a network round trip), Groq reasoning-model latency, HF embedding round trips. No profiling done yet to say which one actually dominates. | open, not designed — needs profiling before any fix is picked, not a guess-and-optimize |
-|  |  |  |
+| 2026-07-11 | **Presentability pass — committed, not optional.** Clint has flagged the "bland UI" across multiple sprints; on 2026-07-11 he confirmed the plan order (landing + auth first) but explicitly required that Phase 4 does not close without the app looking presentable. The design *tokens* are done (`globals.css`); what's missing is an icon set (none installed — nav/buttons are text-only), consistent component craft on top of the tokens (typographic scale, spacing rhythm, hover/press states), a real **Settings page** (currently a disabled "coming soon" stub in `ProfileMenu`), and proper empty/loading/error states. Sprint 4.4's public landing page is the design showcase where the visual language gets defined; this pass **back-applies that language across the dashboard/workspace/sessions/SOC and builds the Settings page**. | **committed** — a required item before Phase 4 closes, sequenced right after 4.4's landing establishes the design language. Not a "future sprint" that can slip again. |
 
 ---
 
