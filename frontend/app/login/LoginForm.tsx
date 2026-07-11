@@ -128,6 +128,15 @@ export default function LoginForm() {
         </button>
       </form>
       {error && <p className="mt-3 text-sm text-critical">{error}</p>}
+      {/* No email/password signup flow exists yet (live review 2026-07-11,
+          finding #7) -- say so plainly instead of leaving new visitors to
+          discover there's no "create account" path. Google OAuth creates an
+          account automatically on first sign-in. */}
+      <p className="mt-6 rounded-md border border-hairline bg-surface p-3 text-xs leading-relaxed text-ink-muted">
+        New here? Use <span className="font-medium text-ink-secondary">Continue with Google</span>.
+        It creates your account automatically on first sign-in. Email/password signup is a planned
+        future feature.
+      </p>
     </main>
   )
 }

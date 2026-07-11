@@ -383,7 +383,7 @@ yet configured.
 
 | Table | Purpose |
 |---|---|
-| `user_profiles`, `collections`, `documents`, `document_chunks` | Standard auth-scoped RAG data; `document_chunks` uses `vector(384)` + HNSW index (migration 007; was IVFFlat, changed for recall on small collections) |
+| `user_profiles`, `collections`, `documents`, `document_chunks` | Standard auth-scoped RAG data; `document_chunks` uses `vector(384)` + HNSW index (migration 007; was IVFFlat, changed for recall on small collections). `user_profiles` was empty scaffolding until migration 012 (🟡 2026-07-11): a signup trigger now records each account's email + display name, making it the uuid→person reference when browsing tables in Studio |
 | `research_sessions` | One row per query; stores report + status (`running`/`completed`/`completed_with_fallback`/`error`). No RAGAS columns — RAGAS scoring stays deferred, see `docs/ROADMAP.md` |
 | `execution_steps` | **The Debug Diary.** One row per agent step per session, written live by StepWriter |
 | `security_events` | Injection/quarantine event log. Feeds the Phase 4 per-user events feed via Realtime (migration 009) |

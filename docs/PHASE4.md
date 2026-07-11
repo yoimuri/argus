@@ -689,6 +689,43 @@ this landing establishes the visual language — see ROADMAP owner notes, 2026-0
    `https://argus-nine-ivory.vercel.app` (scheme included), and make sure **Redirect URLs** contains
    `https://argus-nine-ivory.vercel.app/auth/callback` exactly (no missing scheme, no trailing
    slash). Then retry the sign-in fresh (the old `?code=` is single-use and already spent).
+   **Resolved same day: Clint fixed the config and the OAuth round-trip passed live** — see GATE-24.
+
+**Live-test findings, second pass (Clint, 2026-07-11) — ten items:**
+
+1. **Google sign-in works** after the URL-config fix (his words: "That was my blunder"). GATE-24's
+   OAuth half recorded as ✅ live; two small confirmations still open (usage_limits row for the
+   Google account, explicit signed-out route sweep).
+2. **"What is user_profiles for?"** — honest answer: Phase 1 scaffolding (migration 001) that
+   nothing ever wrote to; account records actually live in `auth.users`, which Studio's Table
+   Editor doesn't show. Fixed with **migration 012**: a signup trigger now writes each account's
+   email + display name into `user_profiles` (works for email/password AND Google, pulling the
+   OAuth `full_name`), plus a backfill for every existing account.
+3. **"Which uuid owns what?"** — same fix: after 012, `user_profiles` is the human-readable
+   uuid→person reference when browsing collections/documents/sessions in Studio.
+4. **"Get in touch" is now a popup** (`ContactModal.tsx`): email with Copy + Open-mail buttons, and
+   LinkedIn. The **n8n automated-email form** (same as the portfolio site) is noted as a real,
+   named use case in ROADMAP — blocked on Clint's n8n webhook URL + a CSP `connect-src` entry for
+   its domain; not built until he provides the URL, and no fake form ships in the meantime.
+5. **Clickable header nav** added to the landing (How it works / Security / Contact), smooth-scroll
+   anchors with a reduced-motion guard, same pattern as his portfolio.
+6. **Sessions timeline now explains each agent**: a plain-words description line under every step
+   (`ExecutionTimeline.tsx` `AGENT_DESCRIPTIONS`), so a user reading a trace doesn't need to have
+   memorized the landing page.
+7. **Login page signup disclaimer** added: no email/password signup exists; "Continue with Google"
+   creates the account automatically; email/password signup named as a future feature.
+8. **Login page is otherwise bare** — acknowledged, deliberately deferred to the committed
+   presentability pass (ROADMAP owner note updated to name the login page explicitly).
+9. **© 2026** added to the landing footer.
+10. **Richer scroll interactivity/animation** — deferred to the presentability pass, noted there.
+
+**New manual step from this pass:** paste `supabase/migrations/012_user_profiles_signup.sql` in
+the SQL editor (same flow as migration 011's Step 1). Verify: Table Editor → `user_profiles` now
+shows one row per account with `email` filled in (the Google account's `display_name` should carry
+the Google profile name).
+
+**Future notes from the same review (ROADMAP owner notes):** a LinkedIn post draft to present the
+app once Phase 4 closes; a logo design for ARGUS (separate design-agent task).
 
 ---
 

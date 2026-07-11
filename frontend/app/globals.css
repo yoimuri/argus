@@ -135,6 +135,14 @@ body {
   font-family: var(--font-sans), system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
+/* Smooth scrolling for the landing page's anchor nav (finding #5). Guarded by
+   the same reduced-motion respect as the reveal animation below. */
+@media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
+  }
+}
+
 /* SOC dashboard density variant (D10/decision #3: "dense ops console",
    works in both themes -- same color tokens above, tighter spacing/type
    only). Scope with this class on the page's root element rather than a

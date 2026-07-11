@@ -3,6 +3,7 @@ import { createClient } from '@/utils/supabase/server'
 import ThemeToggle from '@/components/theme/ThemeToggle'
 import Reveal from '@/components/landing/Reveal'
 import AuthLink from '@/components/landing/AuthLink'
+import ContactModal from '@/components/landing/ContactModal'
 
 // The public landing page (Sprint 4.4, D12). Until now `/` force-redirected to
 // `/dashboard`, so anyone without an account -- a recruiter following the repo
@@ -78,6 +79,20 @@ export default async function Landing() {
           <Link href="/" className="text-sm font-semibold tracking-[0.2em] text-ink">
             ARGUS
           </Link>
+          {/* Section anchor nav (finding #5) -- same pattern as the portfolio
+              site's clickable headers. Hidden on small screens where the
+              sections are a short scroll away anyway. */}
+          <nav className="hidden items-center gap-1 text-sm sm:flex">
+            <a href="#how-it-works" className="rounded-md px-3 py-1.5 text-ink-secondary transition-colors hover:bg-accent-wash hover:text-ink">
+              How it works
+            </a>
+            <a href="#security" className="rounded-md px-3 py-1.5 text-ink-secondary transition-colors hover:bg-accent-wash hover:text-ink">
+              Security
+            </a>
+            <a href="#about" className="rounded-md px-3 py-1.5 text-ink-secondary transition-colors hover:bg-accent-wash hover:text-ink">
+              Contact
+            </a>
+          </nav>
           <div className="ml-auto flex items-center gap-3">
             <ThemeToggle />
             <AuthLink
@@ -142,7 +157,7 @@ export default async function Landing() {
         </section>
 
         {/* How it works */}
-        <section className="border-t border-hairline bg-surface">
+        <section id="how-it-works" className="scroll-mt-16 border-t border-hairline bg-surface">
           <div className="mx-auto max-w-6xl px-5 py-20 sm:py-24">
             <Reveal className="mx-auto max-w-2xl text-center">
               <h2 className="text-3xl font-semibold tracking-tight text-ink sm:text-4xl">
@@ -176,7 +191,7 @@ export default async function Landing() {
         </section>
 
         {/* Security, stated calmly */}
-        <section className="border-t border-hairline">
+        <section id="security" className="scroll-mt-16 border-t border-hairline">
           <div className="mx-auto max-w-6xl px-5 py-20 sm:py-24">
             <Reveal className="mx-auto max-w-2xl text-center">
               <h2 className="text-3xl font-semibold tracking-tight text-ink sm:text-4xl">
@@ -207,7 +222,7 @@ export default async function Landing() {
         </section>
 
         {/* About + contact */}
-        <section className="border-t border-hairline bg-surface">
+        <section id="about" className="scroll-mt-16 border-t border-hairline bg-surface">
           <div className="mx-auto max-w-4xl px-5 py-20 sm:py-24">
             <Reveal>
               <h2 className="text-3xl font-semibold tracking-tight text-ink sm:text-4xl">
@@ -232,12 +247,11 @@ export default async function Landing() {
 
             <Reveal delayMs={160}>
               <div className="mt-10 flex flex-wrap gap-3">
-                <a
-                  href={`mailto:${CONTACT_EMAIL}?subject=ARGUS%20%E2%80%94%20professional%20inquiry`}
+                <ContactModal
+                  email={CONTACT_EMAIL}
+                  linkedinUrl={LINKEDIN_URL}
                   className="rounded-full bg-accent px-5 py-2.5 text-sm font-semibold text-accent-contrast transition-colors hover:bg-accent-hover"
-                >
-                  Get in touch
-                </a>
+                />
                 <a
                   href={LINKEDIN_URL}
                   target="_blank"
@@ -274,7 +288,7 @@ export default async function Landing() {
       <footer className="border-t border-hairline">
         <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-2 px-5 py-8 text-sm sm:flex-row">
           <span className="font-semibold tracking-[0.2em] text-ink-secondary">ARGUS</span>
-          <span className="text-ink-muted">Multi-agent RAG research assistant</span>
+          <span className="text-ink-muted">Multi-agent RAG research assistant · © 2026 Clint Branwel Poyaoan</span>
         </div>
       </footer>
     </div>
