@@ -828,13 +828,17 @@ standing pass; not live-verified). Migration 015 must be pasted.**
    `usage_events` write — an empty ask now costs nothing.
 2. **Drag-and-drop upload:** the upload area is a dropzone (highlights while dragging, rejects
    non-PDFs) feeding the same preview-before-upload path as the file picker.
-3. **Account deletion with 7-day grace (ADR-020, GATE-26):** Settings gains a GitHub-style red
-   **Danger zone** — type `DELETE` to confirm → `deletion_requested_at` stamped → banner on every
-   dashboard page with the date + withdraw link → after 7 days, first visit purges all data via
-   the new backend `DELETE /account` (collections/storage/documents/chunks/sessions, user-token +
-   RLS), stamps `account_deleted_at`, signs out to `/login?reason=deleted`, and later sign-ins are
-   bounced. Honest limits in ADR-020: `usage_events`/`security_events` survive by design; the
-   auth identity row needs the 4b service-role work (or owner-manual Studio delete).
+3. **Account deletion with 7-day grace (ADR-020, GATE-26):** Settings gains a GitHub-style
+   **Danger zone** — a row (label + description left, outlined red "Delete account" button right,
+   matching GitHub's own Danger Zone layout). The typed `DELETE` confirmation is **not** shown
+   inline; clicking the row's button pops out a confirmation dialog (first correction, live review
+   2026-07-11: it originally showed the input inline by default) — type `DELETE` there →
+   `deletion_requested_at` stamped → banner on every dashboard page with the date + a "Withdraw"
+   row button → after 7 days, first visit purges all data via the new backend `DELETE /account`
+   (collections/storage/documents/chunks/sessions, user-token + RLS), stamps `account_deleted_at`,
+   signs out to `/login?reason=deleted`, and later sign-ins are bounced. Honest limits in ADR-020:
+   `usage_events`/`security_events` survive by design; the auth identity row needs the 4b
+   service-role work (or owner-manual Studio delete).
 4. **Theme saved to the account:** new `user_profiles.theme_pref` — any toggle writes it
    (best-effort), and LoginForm adopts it at sign-in on any device. localStorage still handles
    instant paint.
