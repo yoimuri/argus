@@ -244,15 +244,16 @@ export default function UploadPanel() {
     previewUrlRef.current = previewUrl
   }, [previewUrl])
 
-  // Sprint 4.3 (D15, reworked 2026-07-10): navigating away must actually STOP
-  // the work, not just abort the local fetch (the backend can't see aborts
-  // behind Render's proxy). Fires the explicit DB-signal cancels -- keepalive
-  // so the requests survive the page going away -- then aborts. Covers both
-  // leaving the panel (unmount) and switching collections
-  // (resetToCollectionList, below) while a request is still active.
+  // Unmount cleanup. 2026-07-11 (Clint): cancellation is now scoped to the
+  // Workspace tab only -- switching to another dashboard tab (Dashboard,
+  // Sessions, SOC, Settings) no longer kills an in-flight upload/research, so
+  // a stray tab click doesn't throw away work; it finishes and shows up in
+  // Sessions. Explicit cancellation still lives inside the Workspace: the
+  // Cancel buttons and "Back to collections" (resetToCollectionList) both call
+  // cancelInFlightWork. Only the object-URL revoke stays here (pure memory
+  // hygiene, unrelated to cancelling the request).
   useEffect(() => {
     return () => {
-      cancelInFlightWork()
       if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

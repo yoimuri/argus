@@ -4,6 +4,7 @@ import ThemeToggle from '@/components/theme/ThemeToggle'
 import Reveal from '@/components/landing/Reveal'
 import AuthLink from '@/components/landing/AuthLink'
 import ContactModal from '@/components/landing/ContactModal'
+import ChatWidget from '@/components/landing/ChatWidget'
 
 // The public landing page (Sprint 4.4, D12). Until now `/` force-redirected to
 // `/dashboard`, so anyone without an account -- a recruiter following the repo
@@ -293,6 +294,9 @@ export default async function Landing() {
           <span className="text-ink-muted">Multi-agent RAG research assistant · © 2026 Clint Branwel Poyaoan</span>
         </div>
       </footer>
+
+      {/* Public project-Q&A chatbot (Sprint 4.5). Landing page only. */}
+      <ChatWidget />
     </div>
   )
 }

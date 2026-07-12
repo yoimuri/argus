@@ -10,7 +10,10 @@ SUPABASE_PUBLISHABLE_KEY = os.environ["SUPABASE_PUBLISHABLE_KEY"]
 JWKS_URL = f"{SUPABASE_URL}/auth/v1/.well-known/jwks.json"
 jwks_client = PyJWKClient(JWKS_URL, headers={"apikey": SUPABASE_PUBLISHABLE_KEY})
 
-PUBLIC_PATHS = {"/health"}
+# /chat is the public project-Q&A chatbot (Sprint 4.5): unauthenticated by
+# design (recruiters on the landing page have no account). It defends itself
+# with its own rate limiting + static grounding rather than a login wall.
+PUBLIC_PATHS = {"/health", "/chat"}
 
 
 class JWTAuthMiddleware(BaseHTTPMiddleware):

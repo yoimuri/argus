@@ -3,6 +3,7 @@
 import { useState, type FormEvent } from 'react'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
+import { ArrowLeft, Mail, Lock, Loader2 } from 'lucide-react'
 import { createClient } from '@/utils/supabase/client'
 
 export default function LoginForm() {
@@ -93,81 +94,103 @@ export default function LoginForm() {
     }
   }
 
+  const fieldClass =
+    'w-full rounded-md border border-hairline bg-surface py-2 pl-9 pr-3 text-sm text-ink placeholder:text-ink-muted transition-colors focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-1 focus:ring-offset-surface'
+
   return (
-    <main className="mx-auto mt-16 w-full max-w-xs px-4">
-      {/* Way back to the public landing page -- live review 2026-07-11 found
-          the login page was a dead end with no route to the rest of the site. */}
+    <main className="mx-auto flex min-h-full w-full max-w-sm flex-col justify-center px-4 py-16">
+      {/* Back to the public landing page (live review 2026-07-11: the login
+          page was a dead end). */}
       <Link
         href="/"
-        className="inline-flex items-center gap-1.5 text-xs text-ink-muted transition-colors hover:text-ink"
+        className="mb-6 inline-flex items-center gap-1.5 text-xs text-ink-muted transition-colors hover:text-ink"
       >
-        ← Back to ARGUS
+        <ArrowLeft size={14} strokeWidth={1.75} aria-hidden />
+        Back to ARGUS
       </Link>
-      <h1 className="mt-4 text-lg font-semibold text-ink">ARGUS Login</h1>
-      {idleSignout && (
-        <p className="mt-2 rounded-md border border-hairline bg-accent-wash p-2 text-xs text-ink-secondary">
-          You were signed out after 30 minutes of inactivity. Log in again to continue.
-        </p>
-      )}
-      {oauthError && (
-        <p className="mt-2 rounded-md border border-critical-wash bg-critical-wash p-2 text-xs text-ink-secondary">
-          Google sign-in didn&apos;t complete. Please try again.
-        </p>
-      )}
-      {accountDeleted && (
-        <p className="mt-2 rounded-md border border-critical-wash bg-critical-wash p-2 text-xs text-ink-secondary">
-          This account was deleted. Its data is permanently gone and the account can&apos;t be
-          restored.
-        </p>
-      )}
-      <button
-        type="button"
-        onClick={handleGoogle}
-        disabled={submitting}
-        className="mt-4 flex w-full items-center justify-center gap-2 rounded-md border border-hairline bg-surface px-4 py-2 text-sm font-medium text-ink transition-colors hover:bg-accent-wash disabled:cursor-not-allowed disabled:opacity-50"
-      >
-        <GoogleG />
-        Continue with Google
-      </button>
-      <div className="my-4 flex items-center gap-3 text-xs text-ink-muted">
-        <span className="h-px flex-1 bg-hairline" />
-        or use email
-        <span className="h-px flex-1 bg-hairline" />
-      </div>
-      <form onSubmit={handleLogin} className="space-y-2">
-        <input
-          type="email"
-          placeholder="Email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          required
-          className="w-full rounded-md border border-hairline bg-surface px-3 py-2 text-sm text-ink placeholder:text-ink-muted focus:border-accent focus:outline-none"
-        />
-        <input
-          type="password"
-          placeholder="Password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          required
-          className="w-full rounded-md border border-hairline bg-surface px-3 py-2 text-sm text-ink placeholder:text-ink-muted focus:border-accent focus:outline-none"
-        />
+
+      <div className="rounded-2xl border border-hairline bg-surface-raised p-6 shadow-sm">
+        <div className="mb-5 text-center">
+          <p className="text-sm font-semibold tracking-[0.25em] text-ink">ARGUS</p>
+          <h1 className="mt-2 text-lg font-semibold text-ink">Sign in</h1>
+          <p className="mt-1 text-xs text-ink-muted">Continue to your workspace.</p>
+        </div>
+
+        {idleSignout && (
+          <p className="mb-3 rounded-md border border-hairline bg-accent-wash p-2 text-xs text-ink-secondary">
+            You were signed out after 30 minutes of inactivity. Log in again to continue.
+          </p>
+        )}
+        {oauthError && (
+          <p className="mb-3 rounded-md border border-critical-wash bg-critical-wash p-2 text-xs text-ink-secondary">
+            Google sign-in didn&apos;t complete. Please try again.
+          </p>
+        )}
+        {accountDeleted && (
+          <p className="mb-3 rounded-md border border-critical-wash bg-critical-wash p-2 text-xs text-ink-secondary">
+            This account was deleted. Its data is permanently gone and the account can&apos;t be
+            restored.
+          </p>
+        )}
+
         <button
-          type="submit"
+          type="button"
+          onClick={handleGoogle}
           disabled={submitting}
-          className="w-full rounded-md bg-accent px-4 py-2 text-sm font-medium text-accent-contrast transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
+          className="flex w-full cursor-pointer items-center justify-center gap-2 rounded-md border border-hairline-strong bg-surface px-4 py-2 text-sm font-medium text-ink transition-colors hover:bg-accent-wash focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {submitting ? 'Signing in…' : 'Log in'}
+          <GoogleG />
+          Continue with Google
         </button>
-      </form>
-      {error && <p className="mt-3 text-sm text-critical">{error}</p>}
-      {/* No email/password signup flow exists yet (live review 2026-07-11,
-          finding #7) -- say so plainly instead of leaving new visitors to
-          discover there's no "create account" path. Google OAuth creates an
-          account automatically on first sign-in. */}
-      <p className="mt-6 rounded-md border border-hairline bg-surface p-3 text-xs leading-relaxed text-ink-muted">
+
+        <div className="my-4 flex items-center gap-3 text-xs text-ink-muted">
+          <span className="h-px flex-1 bg-hairline" />
+          or use email
+          <span className="h-px flex-1 bg-hairline" />
+        </div>
+
+        <form onSubmit={handleLogin} className="space-y-2">
+          <div className="relative">
+            <Mail size={15} strokeWidth={1.75} aria-hidden className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-ink-muted" />
+            <input
+              type="email"
+              placeholder="Email"
+              autoComplete="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              required
+              className={fieldClass}
+            />
+          </div>
+          <div className="relative">
+            <Lock size={15} strokeWidth={1.75} aria-hidden className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-ink-muted" />
+            <input
+              type="password"
+              placeholder="Password"
+              autoComplete="current-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+              className={fieldClass}
+            />
+          </div>
+          <button
+            type="submit"
+            disabled={submitting}
+            className="flex w-full cursor-pointer items-center justify-center gap-2 rounded-md bg-accent px-4 py-2 text-sm font-medium text-accent-contrast transition-colors hover:bg-accent-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {submitting && <Loader2 size={15} strokeWidth={2} aria-hidden className="animate-spin" />}
+            {submitting ? 'Signing in…' : 'Log in'}
+          </button>
+        </form>
+
+        {error && <p className="mt-3 text-sm text-critical">{error}</p>}
+      </div>
+
+      {/* No email/password signup yet (finding #7) -- say so plainly. */}
+      <p className="mt-4 px-1 text-center text-xs leading-relaxed text-ink-muted">
         New here? Use <span className="font-medium text-ink-secondary">Continue with Google</span>.
-        It creates your account automatically on first sign-in. Email/password signup is a planned
-        future feature.
+        It creates your account on first sign-in. Email/password signup is coming later.
       </p>
     </main>
   )

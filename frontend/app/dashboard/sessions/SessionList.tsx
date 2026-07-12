@@ -2,8 +2,11 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
+import { History, TriangleAlert } from 'lucide-react'
 import { apiFetch, apiJson, ApiError } from '@/utils/api'
 import StatusPill from '@/components/StatusPill'
+import EmptyState from '@/components/ui/EmptyState'
+import { buttonClasses } from '@/components/ui/Button'
 
 interface SessionRow {
   id: string
@@ -77,10 +80,42 @@ export default function SessionList() {
     }
   }
 
-  if (loading) return <p className="text-sm text-ink-muted">Loading sessions...</p>
-  if (error && sessions.length === 0) return <p className="text-sm text-critical">{error}</p>
+  if (loading) {
+    // Skeleton rows instead of a bare "Loading..." line (progressive-loading
+    // rule): keeps the layout stable while the list arrives.
+    return (
+      <ul className="divide-y divide-hairline rounded-lg border border-hairline">
+        {Array.from({ length: 4 }).map((_, i) => (
+          <li key={i} className="flex items-center gap-3 p-3">
+            <span className="h-4 flex-1 animate-pulse rounded bg-hairline" />
+            <span className="h-4 w-16 animate-pulse rounded bg-hairline" />
+          </li>
+        ))}
+      </ul>
+    )
+  }
+  if (error && sessions.length === 0) {
+    return (
+      <EmptyState
+        icon={TriangleAlert}
+        title="Couldn't load your sessions"
+        hint={error}
+      />
+    )
+  }
   if (sessions.length === 0) {
-    return <p className="text-sm text-ink-muted">No research sessions yet. Ask a question from Workspace to start one.</p>
+    return (
+      <EmptyState
+        icon={History}
+        title="No research sessions yet"
+        hint="Ask a question in the Workspace and every step of the run shows up here."
+        action={
+          <Link href="/dashboard/workspace" className={buttonClasses('primary', 'sm')}>
+            Go to Workspace
+          </Link>
+        }
+      />
+    )
   }
 
   return (

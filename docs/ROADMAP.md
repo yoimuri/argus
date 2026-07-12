@@ -175,12 +175,12 @@ session evaluates each on its merits rather than defaulting to "add it because i
 practice." This project's own rule applies here: no overengineering unless a need is genuinely
 established first.
 
-- **Rate limiting** — per-user or per-IP request throttling on the backend. **Graduated 2026-07-09:
-  the need is now established.** Sprint 4.5's public, unauthenticated chatbot endpoint is a real
-  attack/cost surface a login wall doesn't cover, so it ships bundled with rate limiting (in-process
-  per-IP sliding window + a persisted global daily cap). Scoped to that one public endpoint —
-  authenticated-route limiting (research/upload) is still deferred, no traffic evidence yet to
-  justify it there.
+- **Rate limiting** — per-user or per-IP request throttling on the backend. **Shipped in Sprint 4.5
+  (🟡 2026-07-11, ADR-021):** the public `/chat` endpoint has an in-process per-IP sliding window +
+  a persisted global daily cap (`chat_usage` + `bump_chat_usage` RPC, migration 016). Scoped to that
+  one public endpoint — authenticated-route limiting (research/upload) is still deferred, no traffic
+  evidence yet to justify it there. (Note: authenticated usage IS metered separately by the
+  `usage_limits` free-tier caps from Sprint 4.4, a different mechanism for a different purpose.)
 - **Re-authentication** — forcing a fresh login before sensitive actions. Raised generally, not
   tied to a specific ARGUS flow yet — needs a concrete "which action, why" before it's a spec.
 - **Caching repeated requests with Redis** — would need a demonstrated case where the same query

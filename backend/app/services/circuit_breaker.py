@@ -117,3 +117,10 @@ tavily_breaker = CircuitBreaker("tavily", fail_threshold=5, failure_window_s=120
 # same breaker and silently downgrade the injection guard as a side effect --
 # two unrelated failure modes must not share one circuit.
 hf_embedding_breaker = CircuitBreaker("hf_embedding", fail_threshold=5, failure_window_s=120, recover_timeout_s=60)
+
+# Sprint 4.5 (ADR-021): guards the Gemini call behind the public project-Q&A
+# chatbot. Its own instance -- a Gemini outage must degrade the chatbot to a
+# "resting" message without touching the authenticated research path's breakers
+# (Groq/HF/Tavily) or vice versa. Same thresholds; no scale evidence to tune
+# differently yet.
+gemini_breaker = CircuitBreaker("gemini_chat", fail_threshold=5, failure_window_s=120, recover_timeout_s=60)

@@ -1,5 +1,6 @@
 import asyncio
 import os
+import time
 import uuid
 import httpx
 from datetime import datetime, timedelta, timezone
@@ -50,6 +51,64 @@ class DocumentUploadRequest(BaseModel):
     # (the row being deleted) is the only design that doesn't depend on it.
     # Optional: older clients / curl without an id keep working unchanged.
     document_id: Optional[str] = None
+
+
+class ChatRequest(BaseModel):
+    message: str
+    # Prior turns the widget echoes back for context: [{"role","text"}, ...].
+    # Length-capped server-side (project_chat.MAX_HISTORY_TURNS) so a client
+    # can't inflate the Gemini payload.
+    history: list[dict] = []
+
+
+# --- Public chatbot rate limiting (Sprint 4.5, ADR-021) --------------------
+# Two layers: an in-process per-IP sliding window (this dict; resets on dyno
+# restart, stated honestly) and a persisted global daily cap (migration 016's
+# bump_chat_usage RPC). The per-IP layer stops one client from spamming; the
+# global layer bounds total Gemini spend even against rotating IPs.
+CHAT_MAX_PER_IP = int(os.getenv("CHAT_MAX_PER_IP", "6"))       # per window
+CHAT_IP_WINDOW_S = 60
+CHAT_MAX_PER_DAY = int(os.getenv("CHAT_MAX_PER_DAY", "300"))   # global, persisted
+_chat_ip_hits: dict[str, list[float]] = {}
+_chat_ip_lock = asyncio.Lock()
+
+
+def _client_ip(request: Request) -> str:
+    # Behind Render's proxy the real client is the first X-Forwarded-For hop.
+    xff = request.headers.get("x-forwarded-for", "")
+    if xff:
+        return xff.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+async def _chat_ip_allowed(ip: str) -> bool:
+    now = time.monotonic()
+    async with _chat_ip_lock:
+        hits = [t for t in _chat_ip_hits.get(ip, []) if now - t < CHAT_IP_WINDOW_S]
+        if len(hits) >= CHAT_MAX_PER_IP:
+            _chat_ip_hits[ip] = hits
+            return False
+        hits.append(now)
+        _chat_ip_hits[ip] = hits
+        # Opportunistic prune so the dict doesn't grow unbounded across many IPs.
+        if len(_chat_ip_hits) > 5000:
+            for k in [k for k, v in _chat_ip_hits.items() if all(now - t >= CHAT_IP_WINDOW_S for t in v)]:
+                _chat_ip_hits.pop(k, None)
+        return True
+
+
+async def _bump_chat_usage_global() -> int:
+    """Atomically increments today's global chat counter and returns the new
+    value, via the SECURITY DEFINER RPC (migration 016) over the anon key --
+    the chatbot is unauthenticated so there is no user token."""
+    async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0)) as client:
+        resp = await client.post(
+            f"{SUPABASE_URL}/rest/v1/rpc/bump_chat_usage",
+            headers={"apikey": SUPABASE_KEY, "Content-Type": "application/json"},
+            json={},
+        )
+    resp.raise_for_status()
+    return int(resp.json())
 
 
 def _valid_uuid(value: str) -> bool:
@@ -214,8 +273,54 @@ async def circuit_breaker_health(request: Request):
         "hf_prompt_guard": await hf_breaker.snapshot(),
         "hf_embedding": await hf_embedding_breaker.snapshot(),
         "tavily": await tavily_breaker.snapshot(),
+        "gemini_chat": await gemini_breaker.snapshot(),
         "langfuse": observability.snapshot(),
     }
+
+
+@app.post("/chat")
+async def project_chat(req: ChatRequest, request: Request):
+    """Public project-Q&A chatbot (Sprint 4.5, ADR-021). Unauthenticated;
+    defended by rate limiting (per-IP window + persisted global daily cap),
+    static grounding (it only knows the curated ARGUS summary -- no user data),
+    and injection framing in the system prompt. Any upstream failure degrades
+    to a graceful 'resting' reply, never a 500 on a recruiter's screen."""
+    from app.services.project_chat import answer_project_question, clean_message, ChatUnavailable
+
+    message = clean_message(req.message)
+    if not message:
+        raise HTTPException(status_code=400, detail="Message is required.")
+
+    ip = _client_ip(request)
+    if not await _chat_ip_allowed(ip):
+        raise HTTPException(
+            status_code=429,
+            detail="You're sending messages too quickly. Give it a few seconds and try again.",
+        )
+
+    # Persisted global daily cap. Fail-open on a metering error: a DB blip must
+    # not take the chatbot down, it just means the cap isn't enforced that call.
+    try:
+        count = await _bump_chat_usage_global()
+        if count > CHAT_MAX_PER_DAY:
+            return {
+                "reply": "The assistant has reached its daily limit and is resting. "
+                "You can still explore ARGUS, or reach out through the Support links.",
+                "resting": True,
+            }
+    except Exception as usage_err:
+        print(f"[ARGUS] chat global-usage bump failed (allowing this call): {usage_err}")
+
+    try:
+        reply = await answer_project_question(message, req.history or [])
+        return {"reply": reply, "resting": False}
+    except ChatUnavailable as unavailable:
+        print(f"[ARGUS] chat unavailable: {unavailable}")
+        return {
+            "reply": "The assistant is resting right now. You can still explore ARGUS directly, "
+            "or reach out through the Support links.",
+            "resting": True,
+        }
 
 
 @app.post("/collections")

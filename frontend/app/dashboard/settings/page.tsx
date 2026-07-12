@@ -157,16 +157,17 @@ export default async function SettingsPage() {
         </div>
       </section>
 
-      {/* Sign out */}
-      <form action="/auth/signout" method="post">
-        <button type="submit" className={buttonClasses('danger', 'md', 'w-full sm:w-auto')}>
+      {/* Danger zone: account deletion with 7-day grace (ADR-020) */}
+      <DangerZone initialRequestedAt={profile?.deletion_requested_at ?? null} />
+
+      {/* Sign out sits at the very bottom (Clint, 2026-07-11) -- routine exit
+          below the destructive zone, matching the GitHub settings layout. */}
+      <form action="/auth/signout" method="post" className="border-t border-hairline pt-6">
+        <button type="submit" className={buttonClasses('secondary', 'md', 'w-full sm:w-auto')}>
           <LogOut size={16} strokeWidth={1.75} aria-hidden />
           Log out
         </button>
       </form>
-
-      {/* Danger zone: account deletion with 7-day grace (ADR-020) */}
-      <DangerZone initialRequestedAt={profile?.deletion_requested_at ?? null} />
     </div>
   )
 }

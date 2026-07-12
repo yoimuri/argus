@@ -393,6 +393,7 @@ yet configured.
 | `execution_steps` | **The Debug Diary.** One row per agent step per session, written live by StepWriter |
 | `security_events` | Injection/quarantine event log. Feeds the Phase 4 per-user events feed via Realtime (migration 009) |
 | `usage_limits` | 🟡 **Sprint 4.4, migration 011 — code-complete, not yet applied live.** Per-user free-tier caps (`max_collections`/`max_documents`/`max_research_per_day`). `SELECT`-only to clients (own-row RLS) so a user can read but never raise their caps; a `SECURITY DEFINER` signup trigger seeds tight defaults, the owner edits in Studio to raise. Enforced in `main.py` (429 before billable work). Migration 013 adds a `usage_limits_readable` VIEW joining `user_profiles` for Studio browsing. See `docs/ADR-019.md` |
+| `chat_usage` | 🟡 **Sprint 4.5, migration 016.** One row per UTC day, a global counter for the public chatbot's daily cap. Locked down (RLS, no policies/grants); reachable only through the `bump_chat_usage()` SECURITY DEFINER RPC (execute granted to anon), so the unauthenticated backend can increment but nothing can read/reset it directly. See ADR-021 |
 | `usage_events` | 🟡 **Sprint 4.4, migration 014.** Append-only rate-limit accounting (one row per real research run: `user_id`, `event_type`, `created_at`). No collection FK and no client delete/update, so the daily research cap it feeds can't be reset by deleting a collection (fixes a bypass where `research_sessions`, which cascade with collections, were the count source). Own-row `SELECT`/`INSERT` only. Foundation for Sprint 4.6 report metering and the Phase 4b "reset usage" reward |
 
 **Phase 4b, not built** (see `docs/ADR-018.md` Part 3 — these all assume an admin role that
@@ -432,6 +433,7 @@ every `/dashboard/*` route stays session-guarded (`proxy.ts` `isPublicPath` matc
 /research [POST,GET] · /research/{id} [GET,DELETE] · /research/{id}/trace [GET]
 /research/{id}/cancel [POST]
 /account [DELETE]   (account-data purge after the 7-day grace period — ADR-020)
+/chat [POST]        (PUBLIC, unauthenticated — project-Q&A chatbot, rate-limited — ADR-021)
 ```
 
 `GET /research` (Sprint 4.1) lists the caller's own sessions (`?collection_id=&limit=&offset=`)

@@ -858,11 +858,34 @@ releases dropped brand glyphs (Linkedin/Github), so those cards wear semantic ic
 
 ### Sprint 4.5 — Project Q&A chatbot + rate limiting
 
-**Status:** ⏳ Not started. Own threat-model planning pass required before build — a public,
-unauthenticated LLM endpoint is a new attack surface and a new cost surface. Locked shape so far:
-Gemini via raw `httpx` REST from a separate Google Cloud project (quota isolation), grounded on a
-static curated project summary (not live document retrieval), per-IP sliding-window limit + a
-persisted global daily cap, regex + trust-level injection posture reused from the existing guard.
+**Status:** 🟡 Code-complete 2026-07-11 (built on Clint's standing pass; condensed threat model in
+`docs/ADR-021.md` first, per the new-untrusted-surface rule). Not live-verified; needs migration 016
+pasted + `GEMINI_API_KEY` set on Render (separate Google Cloud project). Gate: GATE-27.
+
+**Built:**
+- **`backend/app/services/project_chat.py`** — Gemini call via raw httpx (model from `GEMINI_MODEL`,
+  default `gemini-3.1-flash-lite`), grounded ONLY on a static curated ARGUS summary (`PROJECT_CONTEXT`) so
+  there's no user data or tool for an injection to reach; message capped 1000 chars, history capped
+  6 turns; behind the new `gemini_breaker`. No key or any failure → a typed `ChatUnavailable` the
+  endpoint turns into a graceful "resting" reply.
+- **`POST /chat`** (public — added to `auth.py`'s `PUBLIC_PATHS`): rate limited by an in-process
+  **per-IP sliding window** (`CHAT_MAX_PER_IP`/60s, default 6) + a **persisted global daily cap**
+  (`CHAT_MAX_PER_DAY`, default 300) via migration 016's `bump_chat_usage` SECURITY DEFINER RPC
+  (called over the anon key — no user token on a public endpoint). Over per-IP → 429; over global →
+  resting; any upstream failure → resting. Never a 500 on a recruiter's screen.
+- **`components/landing/ChatWidget.tsx`** — floating "Ask about ARGUS" widget on the landing page
+  only; calls our own `/chat` (already in CSP `connect-src`), Gemini stays server-side; graceful
+  429 / resting / cold-start handling.
+- `gemini_chat` added to `/status/breakers` (shows on the SOC panel).
+
+**Honest posture (ADR-021):** static grounding makes the blast radius of a prompt injection cosmetic
+(no data/tools). Per-IP window is in-process (resets on dyno restart, stated); the persisted global
+cap is the durable quota backstop; the cap RPC fails open (a DB blip won't down the feature).
+
+**Clint's manual steps:** paste migration 016; create a Gemini API key in a **separate** Google
+Cloud project (console.cloud.google.com → new project → enable Generative Language API → API key);
+add it as `GEMINI_API_KEY` on Render (optionally `GEMINI_MODEL`, `CHAT_MAX_PER_DAY`, `CHAT_MAX_PER_IP`);
+push; run GATE-27.
 
 ---
 
