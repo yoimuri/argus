@@ -883,9 +883,20 @@ pasted + `GEMINI_API_KEY` set on Render (separate Google Cloud project). Gate: G
 cap is the durable quota backstop; the cap RPC fails open (a DB blip won't down the feature).
 
 **Clint's manual steps:** paste migration 016; create a Gemini API key in a **separate** Google
-Cloud project (console.cloud.google.com → new project → enable Generative Language API → API key);
-add it as `GEMINI_API_KEY` on Render (optionally `GEMINI_MODEL`, `CHAT_MAX_PER_DAY`, `CHAT_MAX_PER_IP`);
-push; run GATE-27.
+Cloud project (easiest path: aistudio.google.com/apikey → "Create API key in new project"; current
+keys start with `AQ.`); add it as `GEMINI_API_KEY` on Render (optionally `GEMINI_MODEL`,
+`CHAT_MAX_PER_DAY`, `CHAT_MAX_PER_IP`); push; run GATE-27.
+
+**Live-test fixes (2026-07-12, Clint's first 4.5 pass):**
+- `/status/breakers` returned 500: `gemini_chat` was added to the endpoint without importing
+  `gemini_breaker` in `main.py` (runtime NameError — invisible to `py_compile`). Fixed; backend
+  verification now includes a `pyflakes` undefined-name pass on touched files.
+- Chat widget made discoverable: labeled pill launcher ("Ask about ARGUS") instead of a bare icon;
+  panel header gained expand/shrink, minimize (keeps the conversation), and close (resets it).
+- Google sign-in now always shows Google's account chooser (`prompt=select_account`) instead of
+  silently reusing the browser's existing Google session — the user confirms or cancels first.
+- Support email is plain text with a copy button, no longer a mailto link.
+- Chat model default corrected to `gemini-3.1-flash-lite` (was a stale `gemini-2.0-flash`).
 
 ---
 

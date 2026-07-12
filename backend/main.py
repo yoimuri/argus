@@ -15,7 +15,7 @@ from app.services.document_processor import extract_chunks_from_pdf_file, iter_e
 from app.services.supabase_client import supabase_request
 from app.services.injection_guard import check_query, InjectionDetected
 from app.services.injection_patterns import matches_any
-from app.services.circuit_breaker import groq_breaker, hf_breaker, hf_embedding_breaker, tavily_breaker, CircuitBreakerOpen
+from app.services.circuit_breaker import groq_breaker, hf_breaker, hf_embedding_breaker, tavily_breaker, gemini_breaker, CircuitBreakerOpen
 from app.services import observability
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")

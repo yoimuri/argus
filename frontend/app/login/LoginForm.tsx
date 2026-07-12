@@ -52,7 +52,14 @@ export default function LoginForm() {
         // for a session (app/auth/callback/route.ts). window.location.origin
         // works in dev and prod; the exact URL must also be allow-listed in
         // Supabase Auth → URL Configuration (Clint's manual step).
-        options: { redirectTo: `${window.location.origin}/auth/callback` },
+        options: {
+          redirectTo: `${window.location.origin}/auth/callback`,
+          // Without this, a browser already signed into one Google account gets
+          // silently logged straight in -- no screen, no chance to cancel.
+          // prompt=select_account forces Google's account-chooser page every
+          // time, which is the confirm/cancel step (Clint, 2026-07-12).
+          queryParams: { prompt: 'select_account' },
+        },
       })
       if (error) {
         setError(error.message)
