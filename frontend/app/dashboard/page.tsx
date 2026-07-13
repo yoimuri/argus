@@ -66,9 +66,9 @@ export default async function DashboardPage() {
   const isNew = (collections.count ?? 0) === 0
 
   const steps = [
-    { text: 'Create a collection — a folder for related documents.', href: '/dashboard/workspace' },
+    { text: 'Create a collection, a folder for related documents.', href: '/dashboard/workspace' },
     { text: 'Upload a PDF into it (previewed before it uploads).', href: '/dashboard/workspace' },
-    { text: 'Ask a question — six AI agents retrieve, answer, and self-check.', href: '/dashboard/workspace' },
+    { text: 'Ask a question. Six AI agents retrieve, answer, and self-check.', href: '/dashboard/workspace' },
     { text: 'Open the session to replay every agent step and its timing.', href: '/dashboard/sessions' },
     { text: 'Watch the SOC page for blocked injection attempts and system health.', href: '/dashboard/soc' },
   ]
@@ -78,7 +78,7 @@ export default async function DashboardPage() {
       <div>
         <h1 className="text-lg font-semibold text-ink">Welcome, {displayName}</h1>
         <p className="mt-1 text-sm text-ink-muted">
-          Upload a document, ask it questions, get cited answers — and see exactly how the
+          Upload a document, ask it questions, get cited answers, and see exactly how the
           system produced them.
         </p>
       </div>
@@ -159,8 +159,8 @@ export default async function DashboardPage() {
           </Link>
         )}
         <p className="mt-3 text-xs text-ink-muted">
-          Note: the backend sleeps when idle (free tier) — the first action after a quiet
-          period can take 30–60 seconds to wake it up.
+          Note: the backend sleeps when idle (free tier), so the first action after a quiet
+          period can take 30 to 60 seconds to wake it up.
         </p>
       </section>
 

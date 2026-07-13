@@ -7,6 +7,7 @@ import { createClient } from '@/utils/supabase/client'
 import { apiFetch, apiJson, ApiError } from '@/utils/api'
 import { splitReport } from '@/utils/report'
 import ConfidenceBadge from '@/components/ConfidenceBadge'
+import ReportGenerateModal from '@/components/reports/ReportGenerateModal'
 import ReactMarkdown from 'react-markdown'
 
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024 // matches backend; Render free tier is 512 MB RAM
@@ -820,7 +821,7 @@ export default function UploadPanel() {
                 before any usage is counted. */}
             {documents !== null && !hasReadyDocs && (
               <p className="rounded-md border border-warning-wash bg-warning-wash p-2 text-xs text-ink-secondary">
-                This collection has no ready documents yet. Upload a PDF above before asking —
+                This collection has no ready documents yet. Upload a PDF above before asking,
                 otherwise the question has nothing to search.
               </p>
             )}
@@ -860,49 +861,19 @@ export default function UploadPanel() {
             </div>
           </form>
 
-          {/* Report generation (Sprint 4.6a, D17) -- the product's headline:
-              a separate flow from Ask. ARGUS reads EVERY document in the
-              collection (not just the top search hits), picks a domain-fitting
-              report structure, and writes a formatted draft you can download
-              as an editable .docx. Same double-guard convention as Ask: button
-              disabled without ready docs, and the backend independently 400s. */}
-          <div className="space-y-2 rounded-lg border border-hairline bg-surface-page p-4">
-            <h3 className="text-sm font-semibold text-ink-secondary">Generate a report</h3>
-            <p className="text-xs text-ink-muted">
-              ARGUS turns this collection into a structured, formatted report draft — preview it,
-              then download it as an editable .docx. <span className="text-ink-secondary">Quick
-              draft</span> writes from a representative sample of the documents in seconds;{' '}
-              <span className="text-ink-secondary">Full report</span> reads everything and takes
-              minutes (free-tier AI limits pace it). Each counts one report toward your daily
-              limit.
-            </p>
-            <p className="rounded-md bg-accent-wash px-3 py-2 text-xs text-ink-secondary">
-              Best on a <span className="font-medium">focused</span> collection. A Full report
-              covers roughly the first ~50 pages of a collection in depth; beyond that (and always
-              in Quick), it reads a representative <span className="font-medium">sample</span>, not
-              every page — the draft says so when it samples. For a large corpus you get the most
-              complete result by splitting it into topic-focused collections and generating one
-              report per collection, rather than one giant report.
-            </p>
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={() => handleGenerateReport('quick')}
-                disabled={generatingReport || !hasReadyDocs}
-                className={primaryBtn}
-              >
-                {generatingReport ? 'Starting…' : 'Quick draft'}
-              </button>
-              <button
-                type="button"
-                onClick={() => handleGenerateReport('full')}
-                disabled={generatingReport || !hasReadyDocs}
-                className="rounded-md border border-hairline-strong px-4 py-2 text-sm font-medium text-ink transition-colors hover:bg-accent-wash disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                Full report
-              </button>
-            </div>
-          </div>
+          {/* Report generation (Sprint 4.6a, D17; popup #4 2026-07-14) -- the
+              product's headline, a separate flow from Ask. ARGUS reads EVERY
+              document in the collection (not just the top search hits), picks a
+              domain-fitting structure, and writes a formatted .docx draft. The
+              Quick/Full choice + the explainer live inside the popup so the
+              Workspace shows one button, not a wall of buttons + copy. Same
+              double-guard as Ask: trigger disabled without ready docs, and the
+              backend independently 400s. */}
+          <ReportGenerateModal
+            onGenerate={handleGenerateReport}
+            disabled={!hasReadyDocs}
+            busy={generatingReport}
+          />
 
           {parsed && (
             <div className="rounded-lg border border-hairline bg-surface p-4 text-sm text-ink">

@@ -182,7 +182,7 @@ export default function DangerZone({
               Schedules the account for permanent deletion after a {DELETION_GRACE_DAYS}-day grace
               period. You can withdraw from Settings any time before then. After that, all
               collections, documents, and research history are permanently removed and the account
-              is locked — it cannot be restored.
+              is locked. It cannot be restored.
             </p>
             <label className="mt-4 block text-xs text-ink-secondary">
               Type <span className="font-mono font-semibold text-critical">DELETE</span> to confirm:

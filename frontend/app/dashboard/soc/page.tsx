@@ -20,7 +20,7 @@ export default function SocPage() {
       <section className="rounded-lg border border-hairline bg-surface p-4 text-sm text-ink-secondary">
         <h2 className="text-sm font-semibold text-ink">What is this page?</h2>
         <p className="mt-2">
-          SOC stands for Security Operations Center — in a real company, the room where people
+          SOC stands for Security Operations Center, in a real company the room where people
           watch systems for attacks and outages. This is your personal version of that view,
           because transparency is part of ARGUS&apos;s design: you get to see the system defending
           your own data, not just trust that it does.
@@ -33,7 +33,7 @@ export default function SocPage() {
           </li>
           <li>
             <span className="font-medium text-ink">Security events</span> list moments the system
-            blocked something suspicious in <em>your</em> account — like a prompt-injection attempt
+            blocked something suspicious in <em>your</em> account, like a prompt-injection attempt
             hidden in a document or typed into the question box. Seeing entries here is the defense
             working, not something being wrong.
           </li>

@@ -99,7 +99,7 @@ export default function ReportView({ reportId }: { reportId: string }) {
       } else {
         // Transient poll failure (dyno cold start, network blip): keep the
         // last known state on screen rather than replacing it with an error.
-        setError('Connection hiccup while checking the report — retrying…')
+        setError('Connection hiccup while checking the report. Retrying…')
       }
       return null
     }
@@ -216,7 +216,7 @@ export default function ReportView({ reportId }: { reportId: string }) {
           <p className="mt-2 text-xs text-ink-muted">
             A Quick report usually lands in well under a minute once the server is awake; a Full
             report on a large collection is paced by the free-tier AI provider&apos;s per-minute
-            limits and can take several minutes. You can leave this page and come back — the
+            limits and can take several minutes. You can leave this page and come back, the
             report keeps generating.
           </p>
           <button
@@ -249,7 +249,7 @@ export default function ReportView({ reportId }: { reportId: string }) {
           title="Generation failed"
           hint={
             report.error_detail ||
-            'Something went wrong while writing this report (the AI service may have been unavailable, or the run was interrupted). It did not complete — try generating again from the Workspace.'
+            'Something went wrong while writing this report (the AI service may have been unavailable, or the run was interrupted). It did not complete, so try generating again from the Workspace.'
           }
           action={
             <Link href="/dashboard/workspace" className={buttonClasses('primary', 'sm')}>
@@ -267,7 +267,7 @@ export default function ReportView({ reportId }: { reportId: string }) {
           <div className="flex items-start gap-2 rounded-lg border border-warning-wash bg-warning-wash p-3 text-xs leading-relaxed text-ink-secondary">
             <TriangleAlert size={16} strokeWidth={2} className="mt-0.5 shrink-0 text-warning" aria-hidden />
             <p>
-              <strong className="font-semibold text-ink">AI-generated draft — proofread before use.</strong>{' '}
+              <strong className="font-semibold text-ink">AI-generated draft. Proofread before use.</strong>{' '}
               This report was assembled automatically from your uploaded documents. It can contain
               mistakes, omissions, or misread figures. Review and edit it before sharing or acting
               on it.

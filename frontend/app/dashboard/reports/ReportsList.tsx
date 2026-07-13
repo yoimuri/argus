@@ -101,7 +101,7 @@ export default function ReportsList() {
       <EmptyState
         icon={FileText}
         title="No reports yet"
-        hint="Open a collection in the Workspace and choose Generate report — ARGUS reads every document and writes a formatted draft."
+        hint="Open a collection in the Workspace and choose Generate report. ARGUS reads every document and writes a formatted draft."
         action={
           <Link href="/dashboard/workspace" className={buttonClasses('primary', 'sm')}>
             Go to Workspace

@@ -23,7 +23,7 @@ type Msg = { role: 'user' | 'bot'; text: string }
 
 const GREETING: Msg = {
   role: 'bot',
-  text: "Hi! I can answer questions about ARGUS — what it does, how it's built, how to find your way around the app, or how to reach its author. What would you like to know?",
+  text: "Hi! I can answer questions about ARGUS, like what it does, how it's built, how to find your way around the app, or how to reach its author. What would you like to know?",
 }
 
 const HEADER_BUTTON =
@@ -118,7 +118,7 @@ export default function ChatWidget() {
       if (res.status === 429) {
         setMessages((prev) => [
           ...prev,
-          { role: 'bot', text: "You're sending messages a bit fast — give it a few seconds and try again." },
+          { role: 'bot', text: "You're sending messages a bit fast. Give it a few seconds and try again." },
         ])
         return
       }
