@@ -10,15 +10,14 @@ python-multipart
 langgraph==1.2.6
 groq
 # Sprint 4.6a report generation (D17, ADR-022): builds the downloadable .docx
-# deliverable. Small, pure-Python (lxml is its only heavy wheel, a few MB),
-# imported lazily by the download endpoint only. Verified on PyPI 2026-07-13.
+# deliverable — the single report export format (the fix-batch-#3 fpdf2 PDF was
+# removed 2026-07-14: it didn't download reliably, and an editable .docx is what
+# users actually want over a locked-in-place PDF). Small, pure-Python (lxml is
+# its only heavy wheel, a few MB), imported lazily by the download endpoint
+# only. Verified on PyPI 2026-07-13.
 python-docx==1.2.0
-# Fix batch #3: the real Download-PDF deliverable (replaces print-to-PDF).
-# Pure-Python (Pillow/fonttools/defusedxml underneath, no system packages),
-# imported lazily by its download endpoint. Verified on PyPI 2026-07-14.
-fpdf2==2.8.7
-# Sprint 4.6b: renders validated chart SPECS into PNG figures for the
-# .docx/.pdf exports (Agg backend, imported lazily at download time only —
+# Sprint 4.6b: renders validated chart SPECS into PNG figures for the .docx
+# export (Agg backend, imported lazily at download time only —
 # the ~100MB+ matplotlib/numpy footprint must never load at boot on the
 # 512MB dyno; live memory behavior is a GATE-30 verification item).
 # Unpinned like groq: pip resolves the newest wheel for the dyno's Python.

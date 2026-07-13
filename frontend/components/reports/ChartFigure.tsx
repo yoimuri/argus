@@ -7,8 +7,8 @@
 // value labels wear ink tokens, never the series color; bars get a rounded
 // data-end and a square baseline; the line is 2px with a surface-ringed end
 // marker. Values are labeled directly because a report figure is a STATIC
-// artifact — the .docx/.pdf renders have no tooltip channel, and the preview
-// mirrors them.
+// artifact — the .docx render has no tooltip channel, and the preview
+// mirrors it.
 export interface FigureSpec {
   type: 'bar' | 'line'
   title: string

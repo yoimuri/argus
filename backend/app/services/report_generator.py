@@ -803,6 +803,20 @@ async def generate_report(report_id: str, collection_id: str, collection_name: s
                     source_blocks.append(f"### Notes from {filename}{coverage}\n{notes}")
                 source_files = [fn for fn, _, _ in doc_notes]
                 engine = "map_reduce"
+                if any(s for _, _, s in doc_notes):
+                    # Same deterministic-honesty mechanism as the quick path: when
+                    # the per-minute meter forced even-sampling of long documents
+                    # (or the whole collection past the map cap), the finished
+                    # report SAYS so, rather than leaving it to the model to
+                    # remember the per-document coverage note above. Keeps the
+                    # Workspace disclaimer's "the draft says so when it samples"
+                    # true for Full mode, not just Quick.
+                    sample_note = (
+                        "*Full report — this collection was large, so long "
+                        "documents were read as an even sample across their "
+                        "length, not page-by-page. Split a large corpus into "
+                        "focused collections for exhaustive coverage.*"
+                    )
 
             await _check_cancel(report_id, access_token)
             await _set_progress(report_id, access_token, "Writing the report…")

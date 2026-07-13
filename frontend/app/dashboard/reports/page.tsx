@@ -9,7 +9,7 @@ export default function ReportsPage() {
         <h1 className="text-base font-semibold text-ink">Reports</h1>
         <p className="mt-1 text-sm text-ink-muted">
           Formatted reports generated from your collections. Open one to preview it and
-          download it as .docx or PDF.
+          download it as an editable .docx.
         </p>
       </div>
       <ReportsList />

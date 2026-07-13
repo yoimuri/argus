@@ -83,7 +83,7 @@ export default function ReportView({ reportId }: { reportId: string }) {
   const [report, setReport] = useState<Report | null>(null)
   const [notFound, setNotFound] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [downloading, setDownloading] = useState<'docx' | 'pdf' | null>(null)
+  const [downloading, setDownloading] = useState(false)
   const [cancelling, setCancelling] = useState(false)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
@@ -141,19 +141,21 @@ export default function ReportView({ reportId }: { reportId: string }) {
     }
   }
 
-  // One handler for both deliverables — .docx and the real PDF (fix batch #3:
-  // a genuine download, not the browser's print dialog).
-  async function handleDownload(kind: 'docx' | 'pdf') {
-    setDownloading(kind)
+  // The .docx is the single report deliverable. An earlier fix batch also
+  // shipped a server-side PDF (fpdf2); it was removed 2026-07-14 because it
+  // didn't download reliably and an editable .docx is what users actually want
+  // over a locked-in-place PDF.
+  async function handleDownloadDocx() {
+    setDownloading(true)
     setError(null)
     try {
-      const res = await apiFetch(`/reports/${reportId}/${kind}`)
+      const res = await apiFetch(`/reports/${reportId}/docx`)
       const blob = await res.blob()
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
       const safe = (report?.title || 'argus-report').replace(/[^\w \-]/g, '').trim() || 'argus-report'
-      a.download = `${safe}.${kind}`
+      a.download = `${safe}.docx`
       document.body.appendChild(a)
       a.click()
       a.remove()
@@ -161,7 +163,7 @@ export default function ReportView({ reportId }: { reportId: string }) {
     } catch (err) {
       setError(err instanceof ApiError ? `Download failed (${err.status}).` : 'Download failed.')
     } finally {
-      setDownloading(null)
+      setDownloading(false)
     }
   }
 
@@ -275,19 +277,11 @@ export default function ReportView({ reportId }: { reportId: string }) {
           <div className="flex flex-wrap gap-2 print:hidden">
             <button
               type="button"
-              onClick={() => handleDownload('docx')}
-              disabled={downloading !== null}
+              onClick={handleDownloadDocx}
+              disabled={downloading}
               className={buttonClasses('primary', 'sm')}
             >
-              <Download size={14} aria-hidden /> {downloading === 'docx' ? 'Preparing…' : 'Download .docx'}
-            </button>
-            <button
-              type="button"
-              onClick={() => handleDownload('pdf')}
-              disabled={downloading !== null}
-              className={buttonClasses('secondary', 'sm')}
-            >
-              <Download size={14} aria-hidden /> {downloading === 'pdf' ? 'Preparing…' : 'Download PDF'}
+              <Download size={14} aria-hidden /> {downloading ? 'Preparing…' : 'Download .docx'}
             </button>
             <button
               type="button"

@@ -52,9 +52,9 @@ generating presentable, formatted report deliverables from messy input.
 Using the app (the widget also lives inside the signed-in dashboard -- help users find their way):
 - Dashboard: the overview -- your counts, usage meters, and getting-started steps.
 - Workspace: create a collection, upload PDFs into it (up to 25 MB each), then either ask
-  questions about the documents or generate a full formatted report from them. Reports are
-  AI-generated drafts: preview them, then download as .docx or save as PDF -- and always
-  proofread before using one.
+  questions about the documents or generate a formatted report from them (a fast Quick draft
+  or a thorough Full report). Reports are AI-generated drafts: preview them, then download as
+  an editable .docx -- and always proofread before using one.
 - Sessions: the history of past research queries, each with a step-by-step execution trace.
 - Reports: the list of generated reports and their status.
 - SOC: a live security dashboard -- blocked injection attempts and external-service health.

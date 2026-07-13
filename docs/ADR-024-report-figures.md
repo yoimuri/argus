@@ -35,7 +35,7 @@ proofread-before-use banner covers misread figures — the same honesty contract
 | Surface | Renderer | Why |
 |---|---|---|
 | Report page (preview) | `ChartFigure.tsx` — plain SVG, no chart library | Two single-series forms don't justify a dependency; design tokens make it theme-aware (the same spec reads correctly in light and dark) |
-| `.docx` / `.pdf` downloads | `figures.render_figure_png()` — matplotlib, Agg backend | The one place a raster is genuinely needed; python-docx/fpdf2 both embed PNG natively |
+| `.docx` download | `figures.render_figure_png()` — matplotlib, Agg backend | The one place a raster is genuinely needed; python-docx embeds PNG natively. (The fix-batch-#3 fpdf2 PDF, which also embedded these PNGs, was removed 2026-07-14 — see ADR-022 §5.) |
 
 Both renderers follow the dataviz skill's validated specs: a single series wears the brand accent
 (no legend box — the title names it); hairline solid gridlines; value labels in ink tokens, never

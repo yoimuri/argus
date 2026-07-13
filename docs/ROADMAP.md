@@ -121,11 +121,13 @@ implied as built. Full reasoning: `docs/ADR-018.md` Part 3.
   2026-07-14.** 4.6a (`docs/ADR-022.md`, GATE-28): quota-meter-paced generation on Groq's
   `gpt-oss-120b` bucket behind its own breaker, **Quick draft** (one sampled call, seconds on a
   warm dyno) / **Full report** (thorough, paced) modes, live progress, async generate + poll,
-  preview → `.docx` + a real **PDF download** (fpdf2), non-optional proofreading disclaimer,
-  `error_detail` reasons, metered via `usage_events` + migrations 017–020. 4.6b
+  preview → editable **`.docx`** download, non-optional proofreading disclaimer,
+  `error_detail` reasons, metered via `usage_events` + migrations 017–020. (A fix-batch-#3 fpdf2
+  **PDF** download was built then removed 2026-07-14 — unreliable download + an editable .docx
+  beats a locked PDF; ADR-022 §5.) 4.6b
   (`docs/ADR-024-report-figures.md`, GATE-30): model-emitted chart *specs* (never images,
   source-material numbers only) hard-validated server-side, theme-aware SVG in the preview,
-  matplotlib PNGs in the downloads. Upload-security audit + hardening landed the same pass
+  matplotlib PNGs in the `.docx`. Upload-security audit + hardening landed the same pass
   (`docs/ADR-023-upload-security.md`, GATE-29; PyMuPDF CVE-2026-3029 bump). Still to build:
   **4.6c** multimodal image reading (own threat-model ADR first — image-borne injection is a
   new, currently-uncovered attack surface; see `docs/BACKLOG.md` Item 4).

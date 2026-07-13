@@ -64,7 +64,7 @@ tested against the real app, and the results, pass and fail alike, are recorded 
   with Google sign-up and per-user usage limits — all live-verified. Two newer pieces are built
   but awaiting their live test runs: a public project-Q&A chatbot (rate-limited, statically
   grounded) and the headline report-generation flow (a collection of messy PDFs becomes a
-  domain-templated, downloadable `.docx`/PDF draft — with a visible proofread-before-use
+  domain-templated, downloadable editable `.docx` draft — with a visible proofread-before-use
   disclaimer by design). Figure generation and reading images inside PDFs are planned, not built.
   Some cross-account isolation checks are still tracked as pending rather than claimed done.
   Scope in `docs/ROADMAP.md` and `docs/PHASE4.md`.

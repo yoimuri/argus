@@ -17,11 +17,11 @@ to a broken report.
 
 Rendering happens at the edges, from the same specs:
 - the report page draws them client-side as SVG (ChartFigure.tsx, theme-aware);
-- the .docx/.pdf downloads call render_figure_png() here — matplotlib on the
+- the .docx download calls render_figure_png() here — matplotlib on the
   Agg backend, imported LAZILY inside the function so the ~100MB+
   matplotlib/numpy footprint is only paid on a download request, never at boot
-  (512MB dyno). If matplotlib is unavailable or rendering fails, exporters
-  fall back to figure_fallback_lines() — the data as plain text: honest, and
+  (512MB dyno). If matplotlib is unavailable or rendering fails, the exporter
+  falls back to figure_fallback_lines() — the data as plain text: honest, and
   never a broken download.
 
 Chart styling follows the dataviz skill's validated specs (single series → the
@@ -46,7 +46,7 @@ MAX_ABS_VALUE = 1e12
 CHART_FENCE = re.compile(r"```chart\s*\n(.*?)```", re.DOTALL)
 _CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
 
-# Light-page render colors (the .docx/.pdf page is white): ARGUS's validated
+# Light-page render colors (the .docx page is white): ARGUS's validated
 # light accent for the single data series; chrome/ink from the dataviz skill's
 # reference palette. Text never wears the series color.
 _ACCENT = "#0e7490"
@@ -152,7 +152,7 @@ def figure_fallback_lines(spec: dict) -> list[str]:
 
 
 def render_figure_png(spec: dict) -> bytes | None:
-    """One validated spec → PNG bytes for the .docx/.pdf exports, or None on
+    """One validated spec → PNG bytes for the .docx export, or None on
     any failure (caller falls back to figure_fallback_lines). matplotlib is
     imported lazily: the memory cost lands only on download requests."""
     try:

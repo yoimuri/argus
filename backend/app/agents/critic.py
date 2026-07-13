@@ -167,7 +167,24 @@ async def critic_node(state: ResearchState) -> dict:
 
         originals = state.get("refined_queries") or [state["query"]]
         new_queries = [q for q in retry_queries if q not in originals]
-        needs_retry = confidence == "low" and bool(new_queries)
+        # A retry re-runs retriever->synthesizer->critic (a full second pass),
+        # and on the un-paced interactive path its ~3.5k extra tokens can tip a
+        # single question over Groq's 8k/min meter into silent SDK backoff. That
+        # cost only pays off when the first answer was REAL but incomplete -- a
+        # gap-targeted retry can then find the missing section. When the first
+        # answer is itself a refusal ("the context doesn't contain this"), the
+        # information isn't in the collection, so re-retrieving finds equally
+        # weak chunks and grades "low" again -- pure wasted latency, the same
+        # futility the graph.py "meta" skip already avoids for summaries. So a
+        # refusal suppresses the retry here; the badge still reports the honest
+        # "low", we just don't burn a doomed second pass. Live-flagged
+        # 2026-07-14: broad, general-knowledge questions against a focused doc
+        # set hit this often ("critic takes longer, still low confidence").
+        needs_retry = (
+            confidence == "low"
+            and bool(new_queries)
+            and not _looks_like_refusal(answer)
+        )
 
         result = {
             **base,

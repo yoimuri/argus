@@ -435,7 +435,7 @@ every `/dashboard/*` route stays session-guarded (`proxy.ts` `isPublicPath` matc
 /research [POST,GET] · /research/{id} [GET,DELETE] · /research/{id}/trace [GET]
 /research/{id}/cancel [POST]
 /reports [POST,GET] · /reports/{id} [GET,DELETE] · /reports/{id}/cancel [POST]
-/reports/{id}/docx [GET] · /reports/{id}/pdf [GET]   (Sprint 4.6a/b report generation — ADR-022/024;
+/reports/{id}/docx [GET]   (Sprint 4.6a/b report generation — ADR-022/024;
                     POST takes collection_id OR session_id, plus mode: "quick" | "full")
 /account [DELETE]   (account-data purge after the 7-day grace period — ADR-020)
 /chat [POST]        (PUBLIC, unauthenticated — project-Q&A chatbot, rate-limited — ADR-021)
@@ -466,9 +466,10 @@ research (`POST /reports/{id}/cancel`); a failed run records a user-safe reason 
 `reports.error_detail` (migration 018). Reports may embed **generated figures** (Sprint 4.6b,
 ADR-024): the model emits validated chart *specs* (never images; numbers from the source material
 only), stored as `reports.figures` (migration 020), rendered as theme-aware SVG in the preview and
-as matplotlib PNGs in the downloads. `GET /reports/{id}/docx` (python-docx) and `GET
-/reports/{id}/pdf` (fpdf2 — a real download, replacing the old print-dialog flow) build the
-deliverables on demand. Metered by `usage_events` (`event_type='report'`) against
+as matplotlib PNGs in the download. `GET /reports/{id}/docx` (python-docx) builds the editable
+deliverable on demand. (A fpdf2 PDF download shipped in fix batch #3 and was removed 2026-07-14 —
+it didn't download reliably and an editable .docx is what users want over a locked PDF; browser
+Ctrl+P remains as a native fallback.) Metered by `usage_events` (`event_type='report'`) against
 `usage_limits.max_reports_per_day`. Every report carries a visible needs-proofreading disclaimer.
 
 Cancellation (Sprint 4.3 rework #2, 2026-07-10) is an explicit DB signal, not disconnect

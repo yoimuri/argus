@@ -5,8 +5,9 @@ real downloadable file, not chat text to copy-paste. python-docx is a small
 pure-Python dependency, imported lazily by main.py's download endpoint so it
 costs nothing on every other request.
 
-Line parsing lives in report_markdown.markdown_blocks() — shared with the PDF
-exporter (fix batch #3) so both downloads render the exact same structure.
+Line parsing lives in report_markdown.markdown_blocks() (fix batch #3) — kept
+as its own module for a future exporter, though the .docx is the only consumer
+today (the fpdf2 PDF was removed 2026-07-14).
 Figures (Sprint 4.6b) arrive as [[figure:N]] markers + validated specs: each
 renders as an embedded PNG chart (figures.render_figure_png), or as the
 chart's data in plain text when rendering is unavailable — the numbers always

@@ -1,8 +1,10 @@
-"""Shared Markdown-line parser for the report exporters (fix batch #3).
+"""Shared Markdown-line parser for the report exporter (fix batch #3).
 
-The .docx and .pdf downloads must render the exact same structure from the
-stored report Markdown, so the line-walking lives here once instead of being
-duplicated per exporter. It understands exactly the constructs the generator's
+Originally shared by the .docx and a fpdf2 PDF exporter; the PDF was removed
+2026-07-14, so today only docx_export.py consumes this. It stays a separate
+module (rather than folding back into docx_export) because it's the clean seam
+where a future exporter would plug in, and it keeps the parser honest and
+testable on its own. It understands exactly the constructs the generator's
 prompt is allowed to emit (report_generator.py constrains the model):
 # ## ### headings, - bullets, 1. numbered items, **bold** inline, plain
 paragraphs — plus the [[figure:N]] markers that reference validated chart

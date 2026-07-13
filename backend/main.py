@@ -1353,7 +1353,7 @@ async def delete_report(report_id: str, request: Request):
 
 
 async def _load_downloadable_report(report_id: str, access_token: str) -> tuple[dict, str, str, list]:
-    """Shared by the .docx and .pdf download endpoints: fetch the completed
+    """Used by the .docx download endpoint: fetch the completed
     report (figures included, with a pre-migration-020 fallback), enforce the
     same ownership/state guards, and derive title + footer note."""
     if not _valid_uuid(report_id):
@@ -1408,25 +1408,4 @@ async def download_report_docx(report_id: str, request: Request):
         content=docx_bytes,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         headers={"Content-Disposition": f'attachment; filename="{_safe_download_name(title)}.docx"'},
-    )
-
-
-@app.get("/reports/{report_id}/pdf")
-async def download_report_pdf(report_id: str, request: Request):
-    """The real PDF download (fix batch #3 — replaces the print-dialog flow).
-    Same guards and on-demand build as the .docx; fpdf2 imports lazily."""
-    report, title, generated_note, figures = await _load_downloadable_report(
-        report_id, request.state.access_token,
-    )
-
-    from app.services.pdf_export import markdown_report_to_pdf
-    from app.services.report_generator import DISCLAIMER
-
-    pdf_bytes = markdown_report_to_pdf(
-        report["content_md"], title, DISCLAIMER, generated_note, figures=figures,
-    )
-    return Response(
-        content=pdf_bytes,
-        media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="{_safe_download_name(title)}.pdf"'},
     )

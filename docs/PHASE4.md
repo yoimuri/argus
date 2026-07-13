@@ -934,6 +934,9 @@ Full design reasoning in `docs/ADR-022.md`; the short version:
   or **Save as PDF** (print-CSS; `@media print` forces light tokens so dark theme doesn't print
   white-on-white; all chrome `print:hidden`). The **needs-proofreading disclaimer** renders in
   the preview banner, inside the .docx, and in print — part of the design, not optional copy.
+  *(Later history: fix batch #3 turned "Save as PDF" into a real fpdf2 Download-PDF, then that
+  PDF was removed 2026-07-14 — the `.docx` is the sole export; `@media print` remains only as a
+  browser-native Ctrl+P fallback. See the fix-batch-#3 entry below.)*
 - **Metering:** one `usage_events` row (`event_type='report'`) per genuine run, counted against
   `usage_limits.max_reports_per_day` (migration **017**: `reports` table + the new cap column,
   tight default 3, existing accounts backfilled to the QA tier). Deleting a report or its
@@ -1063,11 +1066,15 @@ free-tier meter (8k tokens/min), so reports now have two modes (owner decision):
   would overclaim). Honest wake-up copy for the sleeping dyno case.
 `POST /reports` takes `mode: "quick"|"full"`; session-sourced reports are one-call regardless.
 
-**Phase B — a real Download PDF.** `GET /reports/{id}/pdf` via **fpdf2 2.8.7** (pure-Python;
-verified on PyPI 2026-07-14) replaces the print-dialog flow; the "Save as PDF" button is now
-"Download PDF" next to "Download .docx" (one shared blob-download handler). The markdown
-line-walker moved to `report_markdown.py`, shared by both exporters. Latin-1 transliteration for
-fpdf2's core fonts, stated in the exporter docstring. Print CSS stays as a harmless fallback.
+**Phase B — a real Download PDF (built, then removed the next day).** Fix batch #3 added `GET
+/reports/{id}/pdf` via **fpdf2 2.8.7** (pure-Python) to replace the print-dialog flow, with the
+markdown line-walker extracted to `report_markdown.py` and latin-1 transliteration for fpdf2's
+core fonts. **Removed 2026-07-14** (Clint's live test): the PDF didn't download reliably, and the
+deciding reason — an **editable `.docx`** is what users want over a PDF "locked in place." So the
+`.docx` is the single report export; `pdf_export.py`, the `/pdf` endpoint, the button, and the
+`fpdf2` dependency are all gone. `report_markdown.py` stays (clean seam for a future exporter,
+the .docx its only consumer today); the `@media print` CSS stays as a browser-native Ctrl+P
+fallback. See ADR-022 §5.
 
 **Phase C — upload security (Clint's question #1).** Full audit + hardening in
 **`docs/ADR-023-upload-security.md`**: the backend has NO execution primitives at all
@@ -1086,16 +1093,16 @@ re-flagged (it was never pasted, which is why failures showed no reason).
 spec (rebuilt from scratch, capped sizes, finite numbers) and stores survivors in
 `reports.figures` (**migration 020**) with `[[figure:N]]` markers in the body. Rendering at the
 edges: theme-aware dependency-free SVG in the preview (`ChartFigure.tsx`, dataviz-skill specs),
-matplotlib-Agg PNGs in the .docx/PDF exports (lazy import at download time only — the ~100MB+
+matplotlib-Agg PNGs in the .docx export (lazy import at download time only — the ~100MB+
 footprint must never load at boot; live memory behavior is GATE-30's check). Every failure
 degrades: invalid spec → no chart; matplotlib unavailable → the chart's data as text lines.
 
 **Clint's manual steps:** (1) paste migrations **018, 019, 020**; (2) verify the `documents`
 Storage bucket RLS policies scope to own-uid prefixes (GATE-29d, expected policy text in
-ADR-023); (3) `git push` (Render installs fpdf2 + matplotlib + the PyMuPDF bump); (4) run
-GATE-28 (Quick <30s warm / Full paced with progress), GATE-29 (upload security), GATE-30
-(figures + downloads + dyno memory); (5) delete the duplicate PDF copies left in the test
-collection.
+ADR-023); (3) `git push` (Render installs matplotlib + the PyMuPDF bump; fpdf2 was dropped again
+when the PDF export was removed); (4) run GATE-28 (Quick <30s warm / Full paced with progress),
+GATE-29 (upload security), GATE-30 (figures + `.docx` download + dyno memory); (5) delete the
+duplicate PDF copies left in the test collection.
 
 #### Sprint 4.6c — still to build
 
@@ -1113,7 +1120,7 @@ The honest answer to "why use ARGUS instead of free Claude/ChatGPT/Gemini?" is N
 "security" — a casual user feels neither, and for a single report a free frontier model often
 writes *better* (bigger model, sees the whole document). ARGUS's defensible value is the
 **deliverable layer** the free chat tools don't remove friction for:
-- a real downloadable **file** (`.docx`/PDF), not chat text to copy-paste-and-reformat;
+- a real downloadable **file** (an editable `.docx`), not chat text to copy-paste-and-reformat;
 - **consistent, domain-appropriate structure** via templates (a cybersec report looks like one
   every time), where a free chat gives a different shape each ask;
 - **generated figures embedded in the report**, not just described;

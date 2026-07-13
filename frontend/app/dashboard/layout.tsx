@@ -5,6 +5,7 @@ import ProfileMenu from '@/components/ProfileMenu'
 import DashboardNav from '@/components/dashboard/DashboardNav'
 import DeletionNotice from '@/components/settings/DeletionNotice'
 import ChatWidget from '@/components/landing/ChatWidget'
+import SessionKeepAlive from '@/components/auth/SessionKeepAlive'
 
 // D1: shared nav for every /dashboard/* route, hosts the auth check (dual-
 // guard alongside proxy.ts -- see proxy.ts's own comment) so individual
@@ -36,14 +37,19 @@ export default async function DashboardLayout({
 
   return (
     <div className="min-h-full flex flex-col">
+      {/* Keeps the session alive while the user is genuinely interacting, so a
+          long read/scroll without a navigation no longer trips the 30-min idle
+          logout (proxy.ts). Renders nothing. */}
+      <SessionKeepAlive />
       {(profile?.deletion_requested_at || profile?.account_deleted_at) && (
         <DeletionNotice
           requestedAt={profile?.deletion_requested_at ?? null}
           accountDeletedAt={profile?.account_deleted_at ?? null}
         />
       )}
-      {/* print:hidden: the Reports page's "Save as PDF" prints the page --
-          navigation chrome must not end up in the exported document. */}
+      {/* print:hidden: there's no in-app PDF export (the .docx is the
+          deliverable), but a user can still browser-print (Ctrl+P) a report --
+          keep the nav chrome out of that printout. */}
       <header className="border-b border-hairline bg-surface print:hidden">
         <div className="mx-auto flex max-w-5xl flex-wrap items-center gap-4 px-4 py-3">
           <Link

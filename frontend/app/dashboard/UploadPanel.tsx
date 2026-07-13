@@ -864,17 +864,25 @@ export default function UploadPanel() {
               a separate flow from Ask. ARGUS reads EVERY document in the
               collection (not just the top search hits), picks a domain-fitting
               report structure, and writes a formatted draft you can download
-              as .docx or PDF. Same double-guard convention as Ask: button
+              as an editable .docx. Same double-guard convention as Ask: button
               disabled without ready docs, and the backend independently 400s. */}
           <div className="space-y-2 rounded-lg border border-hairline bg-surface-page p-4">
             <h3 className="text-sm font-semibold text-ink-secondary">Generate a report</h3>
             <p className="text-xs text-ink-muted">
               ARGUS turns this collection into a structured, formatted report draft — preview it,
-              then download it as .docx or PDF. <span className="text-ink-secondary">Quick
+              then download it as an editable .docx. <span className="text-ink-secondary">Quick
               draft</span> writes from a representative sample of the documents in seconds;{' '}
               <span className="text-ink-secondary">Full report</span> reads everything and takes
               minutes (free-tier AI limits pace it). Each counts one report toward your daily
               limit.
+            </p>
+            <p className="rounded-md bg-accent-wash px-3 py-2 text-xs text-ink-secondary">
+              Best on a <span className="font-medium">focused</span> collection. A Full report
+              covers roughly the first ~50 pages of a collection in depth; beyond that (and always
+              in Quick), it reads a representative <span className="font-medium">sample</span>, not
+              every page — the draft says so when it samples. For a large corpus you get the most
+              complete result by splitting it into topic-focused collections and generating one
+              report per collection, rather than one giant report.
             </p>
             <div className="flex flex-wrap gap-2">
               <button
