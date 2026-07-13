@@ -551,14 +551,17 @@ export default function UploadPanel() {
     }
   }
 
-  async function handleGenerateReport() {
+  // Fix batch #3: two modes. "quick" = one sampled AI call (seconds on a warm
+  // server, the default); "full" = the thorough paced pipeline (minutes on
+  // free-tier AI limits). Both count one report toward the daily cap.
+  async function handleGenerateReport(mode: 'quick' | 'full') {
     if (!collectionId || generatingReport) return
     setError(null)
     setGeneratingReport(true)
     try {
       const data = await apiJson<{ report_id: string }>('/reports', {
         method: 'POST',
-        body: JSON.stringify({ collection_id: collectionId }),
+        body: JSON.stringify({ collection_id: collectionId, mode }),
       })
       // Counts a usage unit the moment the run starts -- refresh before we
       // navigate so a back-button return shows the right number.
@@ -866,19 +869,31 @@ export default function UploadPanel() {
           <div className="space-y-2 rounded-lg border border-hairline bg-surface-page p-4">
             <h3 className="text-sm font-semibold text-ink-secondary">Generate a report</h3>
             <p className="text-xs text-ink-muted">
-              ARGUS reads every document in this collection and writes a structured, formatted
-              report draft — preview it, then download it as .docx or save it as a PDF. A small
-              collection takes about a minute; large ones take several (free-tier AI limits).
-              Each generation counts toward your daily report limit.
+              ARGUS turns this collection into a structured, formatted report draft — preview it,
+              then download it as .docx or PDF. <span className="text-ink-secondary">Quick
+              draft</span> writes from a representative sample of the documents in seconds;{' '}
+              <span className="text-ink-secondary">Full report</span> reads everything and takes
+              minutes (free-tier AI limits pace it). Each counts one report toward your daily
+              limit.
             </p>
-            <button
-              type="button"
-              onClick={handleGenerateReport}
-              disabled={generatingReport || !hasReadyDocs}
-              className={primaryBtn}
-            >
-              {generatingReport ? 'Starting…' : 'Generate report'}
-            </button>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => handleGenerateReport('quick')}
+                disabled={generatingReport || !hasReadyDocs}
+                className={primaryBtn}
+              >
+                {generatingReport ? 'Starting…' : 'Quick draft'}
+              </button>
+              <button
+                type="button"
+                onClick={() => handleGenerateReport('full')}
+                disabled={generatingReport || !hasReadyDocs}
+                className="rounded-md border border-hairline-strong px-4 py-2 text-sm font-medium text-ink transition-colors hover:bg-accent-wash disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Full report
+              </button>
+            </div>
           </div>
 
           {parsed && (

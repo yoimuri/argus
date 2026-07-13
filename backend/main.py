@@ -67,6 +67,10 @@ class ReportCreateRequest(BaseModel):
     # answer — cheaper, Clint 2026-07-13).
     collection_id: Optional[str] = None
     session_id: Optional[str] = None
+    # Fix batch #3: "quick" (default) = one sampled model call, seconds on a
+    # warm dyno; "full" = the thorough paced pipeline, minutes on the
+    # free-tier token meter. Session-sourced reports are one call either way.
+    mode: str = "quick"
 
 
 # Sprint 4.6a: report generation runs as an in-process background task (the
@@ -466,6 +470,22 @@ async def upload_document(collection_id: str, req: DocumentUploadRequest, reques
     if req.document_id is not None and not _valid_uuid(req.document_id):
         raise HTTPException(status_code=400, detail="document_id must be a valid uuid.")
 
+    # Upload-path hardening (ADR-023, fix batch #3). file_path is client-
+    # supplied text that gets interpolated into a Storage URL: enforce that it
+    # sits under the caller's OWN user-id prefix and carries no traversal
+    # characters. Storage RLS is the real boundary; this is defense in depth
+    # on top of it, so a crafted path can't even leave this handler.
+    if (".." in req.file_path or "\\" in req.file_path or "\x00" in req.file_path
+            or not req.file_path.startswith(f"{request.state.user_id}/")):
+        raise HTTPException(status_code=400, detail="Invalid file path.")
+    # file_name is display text (stored, listed, fed to prompts as a label):
+    # strip path separators and control characters, cap the length.
+    clean_file_name = "".join(
+        c for c in req.file_name if c not in '/\\' and (c.isprintable())
+    ).strip()[:200]
+    if not clean_file_name:
+        clean_file_name = "document.pdf"
+
     storage_url = f"{SUPABASE_URL}/storage/v1/object/documents/{req.file_path}"
     headers = {
         "Authorization": f"Bearer {token}",
@@ -490,7 +510,7 @@ async def upload_document(collection_id: str, req: DocumentUploadRequest, reques
         row_body = {
             "collection_id": collection_id,
             "user_id": request.state.user_id,
-            "filename": req.file_name,
+            "filename": clean_file_name,
             "storage_path": req.file_path,
             "status": "processing",
         }
@@ -1133,6 +1153,8 @@ async def create_report(req: ReportCreateRequest, request: Request):
             status_code=400,
             detail="Provide exactly one of collection_id or session_id.",
         )
+    if req.mode not in ("quick", "full"):
+        raise HTTPException(status_code=400, detail="mode must be 'quick' or 'full'.")
 
     # -- Source B: from a completed research session (reuse its answer) ------
     if req.session_id:
@@ -1201,7 +1223,8 @@ async def create_report(req: ReportCreateRequest, request: Request):
 
     from app.services.report_generator import generate_report
     await _launch_report_task(
-        generate_report(report_id, req.collection_id, collection_name, user_id, token, user_agent)
+        generate_report(report_id, req.collection_id, collection_name, user_id, token,
+                        user_agent, mode=req.mode)
     )
     return {"report_id": report_id, "status": "running"}
 
@@ -1234,18 +1257,26 @@ async def get_report(report_id: str, request: Request):
         raise HTTPException(status_code=404, detail="Report not found.")
     base_select = "id,collection_id,collection_name,title,domain,template_source,content_md,status,created_at"
     try:
+        # Newest schema first (018 error_detail + 019 progress + 020 figures),
+        # then progressively older selects — deploy-order safety: the report
+        # page must load whichever migrations have actually been pasted.
         rows = await supabase_request(
             "GET",
-            f"reports?id=eq.{report_id}&select={base_select},error_detail",
+            f"reports?id=eq.{report_id}&select={base_select},error_detail,progress,figures",
             request.state.access_token,
         )
     except HTTPException:
-        # Deploy-order safety: before migration 018 is applied, selecting
-        # error_detail 400s — the report page must still load without it.
-        rows = await supabase_request(
-            "GET", f"reports?id=eq.{report_id}&select={base_select}",
-            request.state.access_token,
-        )
+        try:
+            rows = await supabase_request(
+                "GET",
+                f"reports?id=eq.{report_id}&select={base_select},error_detail",
+                request.state.access_token,
+            )
+        except HTTPException:
+            rows = await supabase_request(
+                "GET", f"reports?id=eq.{report_id}&select={base_select}",
+                request.state.access_token,
+            )
     if not rows:
         raise HTTPException(status_code=404, detail="Report not found.")
     report = rows[0]
@@ -1321,39 +1352,81 @@ async def delete_report(report_id: str, request: Request):
     return {"status": "deleted", "report_id": report_id}
 
 
-@app.get("/reports/{report_id}/docx")
-async def download_report_docx(report_id: str, request: Request):
-    """The .docx deliverable. Built on demand from the stored Markdown —
-    nothing binary is persisted. python-docx imports lazily so the dependency
-    costs nothing on any other request path."""
+async def _load_downloadable_report(report_id: str, access_token: str) -> tuple[dict, str, str, list]:
+    """Shared by the .docx and .pdf download endpoints: fetch the completed
+    report (figures included, with a pre-migration-020 fallback), enforce the
+    same ownership/state guards, and derive title + footer note."""
     if not _valid_uuid(report_id):
         raise HTTPException(status_code=404, detail="Report not found.")
-    rows = await supabase_request(
-        "GET",
-        f"reports?id=eq.{report_id}&select=title,collection_name,content_md,status,created_at",
-        request.state.access_token,
-    )
+    base_select = "title,collection_name,content_md,status,created_at"
+    try:
+        rows = await supabase_request(
+            "GET", f"reports?id=eq.{report_id}&select={base_select},figures", access_token,
+        )
+    except HTTPException:
+        rows = await supabase_request(
+            "GET", f"reports?id=eq.{report_id}&select={base_select}", access_token,
+        )
     if not rows:
         raise HTTPException(status_code=404, detail="Report not found.")
     report = rows[0]
     if report["status"] != "completed" or not report.get("content_md"):
         raise HTTPException(status_code=409, detail="This report has no downloadable content.")
 
-    from app.services.docx_export import markdown_report_to_docx
-    from app.services.report_generator import DISCLAIMER
-
     title = report.get("title") or f"Report: {report.get('collection_name') or 'Collection'}"
     generated_note = (
         f"Generated by ARGUS on {report['created_at'][:10]} — an AI-assembled draft for review."
     )
-    docx_bytes = markdown_report_to_docx(
-        report["content_md"], title, DISCLAIMER, generated_note,
+    figures = report.get("figures") or []
+    if not isinstance(figures, list):
+        figures = []
+    return report, title, generated_note, figures
+
+
+def _safe_download_name(title: str) -> str:
+    """Sanitize a report title into a safe ASCII filename for the header."""
+    return "".join(c for c in title if c.isalnum() or c in " -_").strip()[:80] or "argus-report"
+
+
+@app.get("/reports/{report_id}/docx")
+async def download_report_docx(report_id: str, request: Request):
+    """The .docx deliverable. Built on demand from the stored Markdown (and
+    figure specs, 4.6b) — nothing binary is persisted. python-docx (and
+    matplotlib, if there are figures) import lazily so the dependencies cost
+    nothing on any other request path."""
+    report, title, generated_note, figures = await _load_downloadable_report(
+        report_id, request.state.access_token,
     )
 
-    # Sanitize the title into a safe ASCII filename for the header.
-    safe_name = "".join(c for c in title if c.isalnum() or c in " -_").strip()[:80] or "argus-report"
+    from app.services.docx_export import markdown_report_to_docx
+    from app.services.report_generator import DISCLAIMER
+
+    docx_bytes = markdown_report_to_docx(
+        report["content_md"], title, DISCLAIMER, generated_note, figures=figures,
+    )
     return Response(
         content=docx_bytes,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        headers={"Content-Disposition": f'attachment; filename="{safe_name}.docx"'},
+        headers={"Content-Disposition": f'attachment; filename="{_safe_download_name(title)}.docx"'},
+    )
+
+
+@app.get("/reports/{report_id}/pdf")
+async def download_report_pdf(report_id: str, request: Request):
+    """The real PDF download (fix batch #3 — replaces the print-dialog flow).
+    Same guards and on-demand build as the .docx; fpdf2 imports lazily."""
+    report, title, generated_note, figures = await _load_downloadable_report(
+        report_id, request.state.access_token,
+    )
+
+    from app.services.pdf_export import markdown_report_to_pdf
+    from app.services.report_generator import DISCLAIMER
+
+    pdf_bytes = markdown_report_to_pdf(
+        report["content_md"], title, DISCLAIMER, generated_note, figures=figures,
+    )
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{_safe_download_name(title)}.pdf"'},
     )

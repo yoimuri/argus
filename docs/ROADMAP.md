@@ -117,13 +117,18 @@ implied as built. Full reasoning: `docs/ADR-018.md` Part 3.
   also mounts inside the dashboard (navigation help for signed-in users) and its grounding gained
   the author's professional contact channels — same backend, same limits, still tokenless.
 - **4.6 — Multimodal PDF ingestion + Report Generation.** 🟡 **4.6a (Report Generation core)
-  code-complete 2026-07-13** (`docs/ADR-022.md`, GATE-28): domain-templated whole-collection
-  map-reduce on Groq (reduce on `openai/gpt-oss-120b`), async generate + poll, preview →
-  `.docx`/print-PDF with a non-optional proofreading disclaimer, metered via `usage_events` +
-  migration 017. Still to build: **4.6b** figure generation (charts from doc data; matplotlib vs
-  inline-SVG needs a real memory test on the 512 MB dyno) and **4.6c** multimodal image reading
-  (own threat-model ADR first — image-borne injection is a new, currently-uncovered attack
-  surface; see `docs/BACKLOG.md` Item 4).
+  code-complete 2026-07-13 + two live-test fix batches; 4.6b (generated figures) code-complete
+  2026-07-14.** 4.6a (`docs/ADR-022.md`, GATE-28): quota-meter-paced generation on Groq's
+  `gpt-oss-120b` bucket behind its own breaker, **Quick draft** (one sampled call, seconds on a
+  warm dyno) / **Full report** (thorough, paced) modes, live progress, async generate + poll,
+  preview → `.docx` + a real **PDF download** (fpdf2), non-optional proofreading disclaimer,
+  `error_detail` reasons, metered via `usage_events` + migrations 017–020. 4.6b
+  (`docs/ADR-024-report-figures.md`, GATE-30): model-emitted chart *specs* (never images,
+  source-material numbers only) hard-validated server-side, theme-aware SVG in the preview,
+  matplotlib PNGs in the downloads. Upload-security audit + hardening landed the same pass
+  (`docs/ADR-023-upload-security.md`, GATE-29; PyMuPDF CVE-2026-3029 bump). Still to build:
+  **4.6c** multimodal image reading (own threat-model ADR first — image-borne injection is a
+  new, currently-uncovered attack surface; see `docs/BACKLOG.md` Item 4).
 
 **What's buildable in 4.1–4.4 with zero new admin machinery:** every user already has RLS
 row-level access to their own `security_events` and `research_sessions`; Realtime honors that

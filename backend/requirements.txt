@@ -1,16 +1,28 @@
 fastapi==0.137.2
 uvicorn[standard]==0.48.0
 PyJWT[crypto]==2.13.0
-PyMuPDF==1.24.7
+# Bumped from 1.24.7 (fix batch #3, ADR-023): CVE-2026-3029 (path traversal /
+# arbitrary file write, fixed in 1.26.7) plus two years of upstream MuPDF
+# parser fixes — this library parses UNTRUSTED user PDFs, so it stays current.
+PyMuPDF==1.26.7
 httpx==0.27.0
 python-multipart
 langgraph==1.2.6
 groq
 # Sprint 4.6a report generation (D17, ADR-022): builds the downloadable .docx
-# deliverable. The one approved new dependency for this feature — small,
-# pure-Python (lxml is its only heavy wheel, a few MB), imported lazily by the
-# download endpoint only. Latest version verified on PyPI 2026-07-13.
+# deliverable. Small, pure-Python (lxml is its only heavy wheel, a few MB),
+# imported lazily by the download endpoint only. Verified on PyPI 2026-07-13.
 python-docx==1.2.0
+# Fix batch #3: the real Download-PDF deliverable (replaces print-to-PDF).
+# Pure-Python (Pillow/fonttools/defusedxml underneath, no system packages),
+# imported lazily by its download endpoint. Verified on PyPI 2026-07-14.
+fpdf2==2.8.7
+# Sprint 4.6b: renders validated chart SPECS into PNG figures for the
+# .docx/.pdf exports (Agg backend, imported lazily at download time only —
+# the ~100MB+ matplotlib/numpy footprint must never load at boot on the
+# 512MB dyno; live memory behavior is a GATE-30 verification item).
+# Unpinned like groq: pip resolves the newest wheel for the dyno's Python.
+matplotlib
 # Latest SDK (v4, OTel-based), per Langfuse's official skill guidance ("always
 # use latest unless there's a good reason not to"). A prior version of this file
 # pinned v2 to dodge the OTel dependency tree; a real memory measurement showed

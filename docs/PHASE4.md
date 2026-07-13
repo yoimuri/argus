@@ -902,11 +902,12 @@ keys start with `AQ.`); add it as `GEMINI_API_KEY` on Render (optionally `GEMINI
 
 ### Sprint 4.6 — Multimodal PDF ingestion + Report Generation
 
-**Status:** 🟡 **4.6a (Report Generation core) code-complete 2026-07-13, not live-verified.**
-4.6b (figure generation) and 4.6c (multimodal image reading) ⏳ not started — 4.6c still gets its
-own threat-model ADR before build (image-borne prompt injection is a currently-uncovered channel;
-PyMuPDF is text-only today, see BACKLOG Item 4; vision captioning via a Groq vision model with
-captions scanned by the same regex + a new `image_derived` trust level stays the locked shape).
+**Status:** 🟡 **4.6a (Report Generation core) code-complete 2026-07-13 + two live-test fix
+batches; 4.6b (figure generation) code-complete 2026-07-14 (ADR-024). Neither live-verified.**
+4.6c (multimodal image reading) ⏳ not started — it still gets its own threat-model ADR before
+build (image-borne prompt injection is a currently-uncovered channel; PyMuPDF is text-only today,
+see BACKLOG Item 4; vision captioning via a Groq vision model with captions scanned by the same
+regex + a new `image_derived` trust level stays the locked shape).
 
 #### Sprint 4.6a — Report Generation core (built 2026-07-13)
 
@@ -1042,7 +1043,61 @@ chatbot's clickable links + voice. Also worth doing once: delete the duplicate c
 PDF left in the collection by the re-upload workaround — the dedupe makes them harmless to
 retrieval, but they still count against the document cap.
 
-#### Sprint 4.6b / 4.6c — still to build
+##### Sprint 4.6a fix batch #3 + Sprint 4.6b built together (2026-07-14, from the approved plan)
+
+Executed from the plan file locked with Clint on 2026-07-13 ("Report speed, real PDF, upload
+security, error detail") plus, on his instruction, **the next sprint (4.6b figures) in the same
+pass**. Status 🟡 code-complete, not live-verified.
+
+**Phase A — speed: Quick/Full modes + a real progress bar.** The <30s goal collides with the
+free-tier meter (8k tokens/min), so reports now have two modes (owner decision):
+- **Quick draft (default):** ONE model call. The collection is sampled (~9k chars; lead chunk of
+  every doc + evenly spaced sections) and template choice folds into the same prompt — no
+  classify round-trip, no Tavily. Warm dyno ≈ 10–20s. A sampled draft says so, in a
+  code-injected line under the title ("representative sample of N of M sections").
+- **Full report:** the thorough classify → template → paced map → reduce pipeline, minutes by
+  design, exhaustive-or-honestly-sampled.
+- **Progress:** the generator writes stage strings to `reports.progress` (**migration 019**) —
+  "Reading documents (3/8)…", "Writing the report…" — and the report page shows them under an
+  animated bar (indeterminate on purpose: the text carries the real state; a fake percentage
+  would overclaim). Honest wake-up copy for the sleeping dyno case.
+`POST /reports` takes `mode: "quick"|"full"`; session-sourced reports are one-call regardless.
+
+**Phase B — a real Download PDF.** `GET /reports/{id}/pdf` via **fpdf2 2.8.7** (pure-Python;
+verified on PyPI 2026-07-14) replaces the print-dialog flow; the "Save as PDF" button is now
+"Download PDF" next to "Download .docx" (one shared blob-download handler). The markdown
+line-walker moved to `report_markdown.py`, shared by both exporters. Latin-1 transliteration for
+fpdf2's core fonts, stated in the exporter docstring. Print CSS stays as a harmless fallback.
+
+**Phase C — upload security (Clint's question #1).** Full audit + hardening in
+**`docs/ADR-023-upload-security.md`**: the backend has NO execution primitives at all
+(grep-proven), files are parsed never executed, magic-byte + size caps are the real gates — a
+`.php` upload cannot run anything. Hardened anyway: `file_path` must sit under the caller's own
+user-id prefix with no traversal chars (400 otherwise); `file_name` sanitized before storage.
+**PyMuPDF bumped 1.24.7 → 1.26.7** (CVE-2026-3029 path-traversal fixed upstream in 1.26.7,
+verified 2026-07-14 — the CLI path we don't call, but two years of parser fixes for a library
+whose job is parsing untrusted PDFs). Manual half: the Storage bucket RLS check (GATE-29).
+
+**Phase D — error detail finished.** `_describe_failure` gained a timeout case; migration 018
+re-flagged (it was never pasted, which is why failures showed no reason).
+
+**Sprint 4.6b — figures (ADR-024).** The writing prompts may emit up to 2 fenced `chart` blocks
+(bar/line, labels + values **from the source material only**); `figures.py` hard-validates each
+spec (rebuilt from scratch, capped sizes, finite numbers) and stores survivors in
+`reports.figures` (**migration 020**) with `[[figure:N]]` markers in the body. Rendering at the
+edges: theme-aware dependency-free SVG in the preview (`ChartFigure.tsx`, dataviz-skill specs),
+matplotlib-Agg PNGs in the .docx/PDF exports (lazy import at download time only — the ~100MB+
+footprint must never load at boot; live memory behavior is GATE-30's check). Every failure
+degrades: invalid spec → no chart; matplotlib unavailable → the chart's data as text lines.
+
+**Clint's manual steps:** (1) paste migrations **018, 019, 020**; (2) verify the `documents`
+Storage bucket RLS policies scope to own-uid prefixes (GATE-29d, expected policy text in
+ADR-023); (3) `git push` (Render installs fpdf2 + matplotlib + the PyMuPDF bump); (4) run
+GATE-28 (Quick <30s warm / Full paced with progress), GATE-29 (upload security), GATE-30
+(figures + downloads + dyno memory); (5) delete the duplicate PDF copies left in the test
+collection.
+
+#### Sprint 4.6c — still to build
 
 **Owner clarifications (Clint, 2026-07-11 — this is the product's headline capability):** the
 point of ARGUS is generating meaningful, presentable output from messy/raw/unorganized reports.

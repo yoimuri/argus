@@ -8,13 +8,12 @@ import {
   ArrowLeft,
   Download,
   FileText,
-  Loader2,
-  Printer,
   TriangleAlert,
 } from 'lucide-react'
 import { apiFetch, apiJson, ApiError } from '@/utils/api'
 import StatusPill from '@/components/StatusPill'
 import EmptyState from '@/components/ui/EmptyState'
+import ChartFigure, { type FigureSpec } from '@/components/reports/ChartFigure'
 import { buttonClasses } from '@/components/ui/Button'
 
 // Sprint 4.6a (D17): the preview-before-download viewer. Generation runs as a
@@ -33,6 +32,8 @@ interface Report {
   content_md: string | null
   status: string
   error_detail?: string | null
+  progress?: string | null
+  figures?: FigureSpec[] | null
   created_at: string
 }
 
@@ -53,6 +54,28 @@ const TEMPLATE_SOURCE_LABEL: Record<string, string> = {
   built_in: 'built-in template',
   web_lookup: 'looked-up template',
   general: 'general template',
+  quick: 'quick draft',
+}
+
+// 4.6b: the report body carries [[figure:N]] markers where validated chart
+// specs belong. Split the Markdown on them and interleave ReactMarkdown
+// segments with client-rendered SVG charts.
+const FIGURE_MARKER = /\[\[figure:(\d+)\]\]/g
+
+function ReportBody({ contentMd, figures }: { contentMd: string; figures: FigureSpec[] }) {
+  const parts: React.ReactNode[] = []
+  let lastIndex = 0
+  let key = 0
+  for (const match of contentMd.matchAll(FIGURE_MARKER)) {
+    const before = contentMd.slice(lastIndex, match.index)
+    if (before.trim()) parts.push(<ReactMarkdown key={key++}>{before}</ReactMarkdown>)
+    const spec = figures[Number(match[1]) - 1]
+    if (spec) parts.push(<ChartFigure key={key++} spec={spec} />)
+    lastIndex = (match.index ?? 0) + match[0].length
+  }
+  const rest = contentMd.slice(lastIndex)
+  if (rest.trim()) parts.push(<ReactMarkdown key={key++}>{rest}</ReactMarkdown>)
+  return <>{parts}</>
 }
 
 export default function ReportView({ reportId }: { reportId: string }) {
@@ -60,7 +83,7 @@ export default function ReportView({ reportId }: { reportId: string }) {
   const [report, setReport] = useState<Report | null>(null)
   const [notFound, setNotFound] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [downloading, setDownloading] = useState(false)
+  const [downloading, setDownloading] = useState<'docx' | 'pdf' | null>(null)
   const [cancelling, setCancelling] = useState(false)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
@@ -118,17 +141,19 @@ export default function ReportView({ reportId }: { reportId: string }) {
     }
   }
 
-  async function handleDownloadDocx() {
-    setDownloading(true)
+  // One handler for both deliverables — .docx and the real PDF (fix batch #3:
+  // a genuine download, not the browser's print dialog).
+  async function handleDownload(kind: 'docx' | 'pdf') {
+    setDownloading(kind)
     setError(null)
     try {
-      const res = await apiFetch(`/reports/${reportId}/docx`)
+      const res = await apiFetch(`/reports/${reportId}/${kind}`)
       const blob = await res.blob()
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
       const safe = (report?.title || 'argus-report').replace(/[^\w \-]/g, '').trim() || 'argus-report'
-      a.download = `${safe}.docx`
+      a.download = `${safe}.${kind}`
       document.body.appendChild(a)
       a.click()
       a.remove()
@@ -136,7 +161,7 @@ export default function ReportView({ reportId }: { reportId: string }) {
     } catch (err) {
       setError(err instanceof ApiError ? `Download failed (${err.status}).` : 'Download failed.')
     } finally {
-      setDownloading(false)
+      setDownloading(null)
     }
   }
 
@@ -177,19 +202,21 @@ export default function ReportView({ reportId }: { reportId: string }) {
 
       {report.status === 'running' && (
         <div className="rounded-lg border border-hairline bg-surface p-6">
-          <div className="flex items-center gap-3">
-            <Loader2 size={20} strokeWidth={2} className="animate-spin text-accent" aria-hidden />
-            <div>
-              <p className="text-sm font-medium text-ink">Generating your report…</p>
-              <p className="mt-1 text-xs text-ink-muted">
-                ARGUS is reading every document in “{report.collection_name}”, choosing a report
-                structure, and writing the draft. A small collection takes about a minute; a large
-                one can take several — the free-tier AI provider limits how much text can be
-                processed per minute, so big collections are paced, not stuck. You can leave this
-                page and come back; the report keeps generating.
-              </p>
-            </div>
+          <p className="text-sm font-medium text-ink">Generating your report…</p>
+          {/* Live progress: an indeterminate bar plus the generator's actual
+              stage string (reports.progress, polled with the row). */}
+          <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-hairline">
+            <div className="h-full w-2/5 rounded-full bg-accent animate-[report-progress_1.6s_ease-in-out_infinite]" />
           </div>
+          <p className="mt-2 text-xs font-medium text-ink-secondary">
+            {report.progress || 'Starting up… (a sleeping free-tier server can take up to a minute to wake)'}
+          </p>
+          <p className="mt-2 text-xs text-ink-muted">
+            A Quick report usually lands in well under a minute once the server is awake; a Full
+            report on a large collection is paced by the free-tier AI provider&apos;s per-minute
+            limits and can take several minutes. You can leave this page and come back — the
+            report keeps generating.
+          </p>
           <button
             type="button"
             onClick={handleCancel}
@@ -248,18 +275,19 @@ export default function ReportView({ reportId }: { reportId: string }) {
           <div className="flex flex-wrap gap-2 print:hidden">
             <button
               type="button"
-              onClick={handleDownloadDocx}
-              disabled={downloading}
+              onClick={() => handleDownload('docx')}
+              disabled={downloading !== null}
               className={buttonClasses('primary', 'sm')}
             >
-              <Download size={14} aria-hidden /> {downloading ? 'Preparing…' : 'Download .docx'}
+              <Download size={14} aria-hidden /> {downloading === 'docx' ? 'Preparing…' : 'Download .docx'}
             </button>
             <button
               type="button"
-              onClick={() => window.print()}
+              onClick={() => handleDownload('pdf')}
+              disabled={downloading !== null}
               className={buttonClasses('secondary', 'sm')}
             >
-              <Printer size={14} aria-hidden /> Save as PDF
+              <Download size={14} aria-hidden /> {downloading === 'pdf' ? 'Preparing…' : 'Download PDF'}
             </button>
             <button
               type="button"
@@ -271,7 +299,7 @@ export default function ReportView({ reportId }: { reportId: string }) {
           </div>
 
           <article className="report-body rounded-lg border border-hairline bg-surface p-6 text-sm text-ink-secondary print:border-0 print:p-0">
-            <ReactMarkdown>{report.content_md}</ReactMarkdown>
+            <ReportBody contentMd={report.content_md} figures={report.figures ?? []} />
           </article>
         </>
       )}

@@ -138,6 +138,15 @@ GENERAL_TEMPLATE = {
 # max_tokens (output + hidden reasoning both count against the meter).
 TPM_BUDGET = 6_500          # spend per rolling minute; ~1.5k headroom under 8k
 
+# Quick mode (fix batch #3, Clint's <30s goal): ONE model call, total. The
+# collection is sampled down to this many chars (lead chunk of every document
+# + evenly spaced chunks across each), and domain/template choice folds into
+# the same call (the model picks from the built-in structures) — no classify
+# round-trip, no Tavily lookup. ~9k chars ≈ 2.3k tokens in + 3k out fits one
+# minute-window, so a warm-dyno quick draft is bounded by ONE Groq call's
+# latency (~10-20s), not by pacing.
+QUICK_SAMPLE_CHARS = 9_000
+
 # Single-pass threshold: content + prompt overhead + the reduce output budget
 # must fit ONE minute-window. The math: 10k chars ≈ 2.5k tokens in, ~0.5k of
 # prompt/template overhead, 3,072 out → ~6.1k ≤ TPM_BUDGET. (~4 pages of text;
@@ -227,6 +236,26 @@ _TRUST_FRAMING = (
 )
 
 
+# Sprint 4.6b: the writing prompts allow chart SPECS (never images) as fenced
+# blocks; figures.extract_figures() validates and strips them after the call.
+# The instruction is strict about grounding: chart numbers must exist in the
+# source material — the disclaimer covers mistakes, but inventing data would
+# be a different class of failure.
+_CHART_INSTRUCTIONS = (
+    "- Optionally include up to 2 charts, ONLY where the source material "
+    "contains a meaningful numeric series (3 or more related numbers, e.g. "
+    "counts per category or values over time). Emit each chart as a fenced "
+    "block on its own lines, exactly:\n"
+    "```chart\n"
+    '{"type": "bar", "title": "<short title>", "labels": ["..."], '
+    '"values": [1, 2], "y_label": "<unit, optional>"}\n'
+    "```\n"
+    "type is \"bar\" (categories) or \"line\" (a series over time/order). "
+    "Every value MUST be a number stated in the source material — never "
+    "invented, estimated, or extrapolated. No other code blocks of any kind.\n"
+)
+
+
 class ReportGenerationFailed(Exception):
     """Raised when generation cannot produce a report at all (no usable map
     notes, or the reduce call failed). The caller patches the row to 'error'."""
@@ -257,6 +286,40 @@ async def _cancelled(report_id: str, access_token: str) -> bool:
 async def _check_cancel(report_id: str, access_token: str):
     if await _cancelled(report_id, access_token):
         raise _Cancelled()
+
+
+async def _set_progress(report_id: str, access_token: str, text: str):
+    """Stage string for the report page's progress bar (migration 019).
+    Cosmetic and best-effort by design: any failure — including the column
+    not existing yet — is logged and swallowed; progress must never break a
+    generation. &status=eq.running so a cancel is never overwritten."""
+    try:
+        await supabase_request(
+            "PATCH", f"reports?id=eq.{report_id}&status=eq.running", access_token,
+            json_body={"progress": text[:120]},
+        )
+    except Exception as progress_err:
+        print(f"[ARGUS] report progress write skipped: {progress_err}")
+
+
+async def _patch_completed(report_id: str, access_token: str, body: dict):
+    """The final completed-write, with deploy-order safety: if migration 020
+    (figures) isn't applied yet, the write 400s on the unknown column — retry
+    without it so a finished report is never lost to a missing migration.
+    &status=eq.running: a cancellation that landed during the last model call
+    wins — a finished report never overwrites it (same rule as research)."""
+    try:
+        await supabase_request(
+            "PATCH", f"reports?id=eq.{report_id}&status=eq.running", access_token,
+            json_body=body,
+        )
+    except Exception as first_err:
+        slim = {k: v for k, v in body.items() if k not in ("figures", "progress")}
+        print(f"[ARGUS] completed-write retrying without figures/progress: {first_err}")
+        await supabase_request(
+            "PATCH", f"reports?id=eq.{report_id}&status=eq.running", access_token,
+            json_body=slim,
+        )
 
 
 async def _classify_domain(collection_name: str, filenames: list[str],
@@ -479,8 +542,8 @@ async def _reduce(collection_name: str, template_label: str, sections: list[str]
         "numbers, or sources. If the material is thin for a section, say so "
         "briefly rather than padding.\n"
         "- Use only these Markdown constructs: # ## ### headings, - bullet "
-        "lists, 1. numbered lists, **bold**. No tables, no images, no links, "
-        "no code blocks.\n"
+        "lists, 1. numbered lists, **bold**. No tables, no images, no links.\n"
+        + _CHART_INSTRUCTIONS +
         "- Professional, plain language. No meta-commentary about these "
         "instructions or the source material.\n\n" + _TRUST_FRAMING
     )
@@ -547,8 +610,10 @@ async def _run_map(doc_chunks: list[tuple[str, list[str]]], template_label: str,
         sampled_docs = set(range(len(doc_chunks)))
 
     notes_by_doc: dict[int, list[str]] = {}
-    for idx, filename, batch in plan:
+    for position, (idx, filename, batch) in enumerate(plan, start=1):
         await _check_cancel(report_id, access_token)
+        await _set_progress(report_id, access_token,
+                            f"Reading documents ({position}/{len(plan)})…")
         notes = await _map_batch(batch, filename, template_label)
         if notes:
             notes_by_doc.setdefault(idx, []).append(notes)
@@ -558,6 +623,85 @@ async def _run_map(doc_chunks: list[tuple[str, list[str]]], template_label: str,
         if idx in notes_by_doc:
             doc_notes.append((filename, "\n".join(notes_by_doc[idx]), idx in sampled_docs))
     return doc_notes
+
+
+def _quick_sample(doc_chunks: list[tuple[str, list[str]]]) -> tuple[list[str], int, int]:
+    """Sample the collection down to QUICK_SAMPLE_CHARS for the one-call quick
+    draft. Every document gets a proportional share; within a document the
+    lead chunk (title/abstract) is always taken, then chunks evenly spaced
+    across the rest — start, middle, and end all represented, same honesty
+    rule as the map sampler. Returns (blocks, sections_used, sections_total)."""
+    total_chunks = sum(len(contents) for _, contents in doc_chunks)
+    total_chars = sum(len(c) for _, contents in doc_chunks for c in contents)
+    used = 0
+    blocks = []
+    for filename, contents in doc_chunks:
+        share = max(1_200, int(QUICK_SAMPLE_CHARS * (sum(len(c) for c in contents) / max(total_chars, 1))))
+        picked: list[str] = []
+        size = 0
+        # Lead chunk first, then even spacing over the remainder.
+        candidate_order = [0] if contents else []
+        rest = list(range(1, len(contents)))
+        if rest:
+            # Walk an evenly-spaced index sequence until the share is spent.
+            step = max(1, len(rest) // max(1, share // 800))
+            candidate_order += rest[::step]
+        for index in candidate_order:
+            chunk = contents[index]
+            if size + len(chunk) > share and picked:
+                break
+            picked.append(chunk)
+            size += len(chunk)
+        used += len(picked)
+        blocks.append(f"### {filename}\n" + " ".join(picked))
+    return blocks, used, total_chunks
+
+
+async def _quick_write(collection_name: str, source_blocks: list[str],
+                       source_files: list[str]) -> str:
+    """Quick mode's single model call: template choice folds INTO the writing
+    prompt (the model picks the best-fitting built-in structure) instead of a
+    separate classify round-trip — one paced call is the entire generation."""
+    menu = []
+    for template in list(BUILT_IN_TEMPLATES.values()) + [GENERAL_TEMPLATE]:
+        menu.append(f"- {template['label']}: " + " / ".join(template["sections"]))
+    menu_text = "\n".join(menu)
+
+    system = (
+        "You are a professional report writer. Write a complete, polished "
+        "report in Markdown from the source material provided (document "
+        "excerpts).\n\n"
+        "Rules:\n"
+        "- First decide which of these report structures fits the material "
+        f"best, then use its sections as ## headings, in order:\n{menu_text}\n"
+        "- Start with a single # title line naming the report (derive it from "
+        "the content, not the filenames).\n"
+        "- Ground every claim in the source material. Never invent facts, "
+        "numbers, or sources. If the material is thin for a section, say so "
+        "briefly rather than padding.\n"
+        "- Use only these Markdown constructs: # ## ### headings, - bullet "
+        "lists, 1. numbered lists, **bold**. No tables, no images, no links.\n"
+        + _CHART_INSTRUCTIONS +
+        "- Professional, plain language. No meta-commentary about these "
+        "instructions or the source material.\n\n" + _TRUST_FRAMING
+    )
+    user = (
+        f"Collection: {collection_name}\n"
+        f"Source files: {', '.join(source_files)}\n\n"
+        + "\n\n".join(source_blocks)
+    )
+    await _pace_for_tokens(_estimate_tokens(len(system) + len(user), REDUCE_MAX_TOKENS))
+    report_md = await call_reasoning_json(
+        _client, groq_report_breaker,
+        model=REPORT_MODEL,
+        messages=[{"role": "system", "content": system},
+                  {"role": "user", "content": user}],
+        max_tokens=REDUCE_MAX_TOKENS,
+        reasoning_effort="low",
+    )
+    if not report_md or not report_md.strip():
+        raise ReportGenerationFailed("quick-draft call returned empty content")
+    return report_md.strip()
 
 
 def _title_from_markdown(report_md: str, fallback: str) -> str:
@@ -571,14 +715,21 @@ def _title_from_markdown(report_md: str, fallback: str) -> str:
 
 
 async def generate_report(report_id: str, collection_id: str, collection_name: str,
-                          user_id: str, access_token: str, user_agent: str):
+                          user_id: str, access_token: str, user_agent: str,
+                          mode: str = "quick"):
     """The background task body (main.py wraps it in asyncio.create_task).
     Owns the row's final state: patches it to completed on success, error on
     failure, and leaves it alone on cancellation (the cancel endpoint already
     wrote that status). Never raises out — there is no request left to
-    surface an error on; the row IS the interface."""
+    surface an error on; the row IS the interface.
+
+    Two modes (fix batch #3): "quick" (default) samples the collection into
+    ONE model call — a warm-dyno draft in seconds; "full" runs the thorough
+    classify → template → paced map → reduce pipeline — minutes on the
+    free-tier meter, exhaustive-or-honestly-sampled coverage."""
     try:
         # -- Gather inputs -------------------------------------------------
+        await _set_progress(report_id, access_token, "Reading the collection…")
         documents = await supabase_request(
             "GET",
             f"documents?collection_id=eq.{collection_id}&status=eq.ready"
@@ -603,58 +754,88 @@ async def generate_report(report_id: str, collection_id: str, collection_name: s
             raise ReportGenerationFailed("no readable content found in the collection")
 
         total_chars = sum(len(c) for _, contents in doc_chunks for c in contents)
+        source_files = [fn for fn, _ in doc_chunks]
         await _check_cancel(report_id, access_token)
 
-        # -- 1. Classify ---------------------------------------------------
-        sample = " ".join(doc_chunks[0][1][:4])  # first ~4 chunks of the first doc
-        classification = await _classify_domain(
-            collection_name, [f for f, _ in doc_chunks], sample,
-        )
-        domain, label = classification["domain"], classification["label"]
-
-        await _check_cancel(report_id, access_token)
-
-        # -- 2. Template ---------------------------------------------------
-        template_label, sections, template_source, stored_domain = await _select_template(
-            domain, label, user_id, access_token, user_agent,
-        )
-
-        # -- 3. Assemble source material (single-pass when it fits) --------
-        if total_chars <= SINGLE_PASS_CHARS:
-            source_blocks = [f"### {fn}\n{' '.join(contents)}" for fn, contents in doc_chunks]
-            source_files = [fn for fn, _ in doc_chunks]
-            engine = "single_pass"
+        sample_note = None
+        if mode == "quick":
+            # ---- QUICK: one call, sampled when the collection is bigger
+            # than the call. Template choice happens inside the same prompt.
+            if total_chars <= QUICK_SAMPLE_CHARS:
+                source_blocks = [f"### {fn}\n{' '.join(contents)}" for fn, contents in doc_chunks]
+                engine = "quick_full_content"
+            else:
+                await _set_progress(report_id, access_token,
+                                    "Selecting representative sections…")
+                source_blocks, used, total = _quick_sample(doc_chunks)
+                engine = "quick_sampled"
+                sample_note = (
+                    f"*Quick draft — generated from a representative sample "
+                    f"({used} of {total} sections). Run a Full report for "
+                    f"thorough coverage.*"
+                )
+            await _set_progress(report_id, access_token, "Writing the report…")
+            report_md = await _quick_write(collection_name, source_blocks, source_files)
+            template_source = "quick"
+            stored_domain = None
         else:
-            doc_notes = await _run_map(doc_chunks, template_label, report_id, access_token)
-            if not doc_notes:
-                raise ReportGenerationFailed("all map passes failed — no notes to write from")
-            source_blocks = []
-            for filename, notes, sampled in doc_notes:
-                coverage = " (long document — evenly sampled, not exhaustive)" if sampled else ""
-                source_blocks.append(f"### Notes from {filename}{coverage}\n{notes}")
-            source_files = [fn for fn, _, _ in doc_notes]
-            engine = "map_reduce"
+            # ---- FULL: classify → template → paced map → reduce.
+            await _set_progress(report_id, access_token, "Choosing a report structure…")
+            sample = " ".join(doc_chunks[0][1][:4])  # first ~4 chunks of the first doc
+            classification = await _classify_domain(collection_name, source_files, sample)
+            domain, label = classification["domain"], classification["label"]
 
-        await _check_cancel(report_id, access_token)
+            await _check_cancel(report_id, access_token)
+            template_label, sections, template_source, stored_domain = await _select_template(
+                domain, label, user_id, access_token, user_agent,
+            )
 
-        # -- 4. Reduce -------------------------------------------------------
-        report_md = await _reduce(collection_name, template_label, sections, source_blocks, source_files)
-        title = _title_from_markdown(report_md, f"{template_label}: {collection_name}")
+            if total_chars <= SINGLE_PASS_CHARS:
+                source_blocks = [f"### {fn}\n{' '.join(contents)}" for fn, contents in doc_chunks]
+                engine = "single_pass"
+            else:
+                doc_notes = await _run_map(doc_chunks, template_label, report_id, access_token)
+                if not doc_notes:
+                    raise ReportGenerationFailed("all map passes failed — no notes to write from")
+                source_blocks = []
+                for filename, notes, sampled in doc_notes:
+                    coverage = " (long document — evenly sampled, not exhaustive)" if sampled else ""
+                    source_blocks.append(f"### Notes from {filename}{coverage}\n{notes}")
+                source_files = [fn for fn, _, _ in doc_notes]
+                engine = "map_reduce"
 
-        # status=eq.running: a cancellation that landed during the reduce call
-        # wins — a finished report never overwrites it (same rule as research).
-        await supabase_request(
-            "PATCH", f"reports?id=eq.{report_id}&status=eq.running", access_token,
-            json_body={
-                "content_md": report_md,
-                "title": title[:200],
-                "domain": stored_domain[:60] if stored_domain else None,
-                "template_source": template_source,
-                "status": "completed",
-            },
-        )
+            await _check_cancel(report_id, access_token)
+            await _set_progress(report_id, access_token, "Writing the report…")
+            report_md = await _reduce(collection_name, template_label, sections,
+                                      source_blocks, source_files)
+
+        # -- Figures (4.6b) + finalize ---------------------------------------
+        from app.services.figures import extract_figures
+
+        report_md, figure_specs = extract_figures(report_md)
+        if sample_note:
+            # Deterministic honesty line, injected right after the title (not
+            # prompt-hoped): quick drafts SAY they sampled.
+            lines = report_md.splitlines()
+            insert_at = 1 if lines and lines[0].startswith("# ") else 0
+            lines.insert(insert_at, "\n" + sample_note)
+            report_md = "\n".join(lines)
+
+        fallback_label = BUILT_IN_TEMPLATES.get(stored_domain or "", GENERAL_TEMPLATE)["label"]
+        title = _title_from_markdown(report_md, f"{fallback_label}: {collection_name}")
+
+        await _patch_completed(report_id, access_token, {
+            "content_md": report_md,
+            "title": title[:200],
+            "domain": stored_domain[:60] if stored_domain else None,
+            "template_source": template_source,
+            "figures": figure_specs or None,
+            "progress": None,
+            "status": "completed",
+        })
         print(f"[ARGUS] report {report_id} completed "
-              f"({engine}, {template_source}, {total_chars} src chars, {len(report_md)} chars)")
+              f"({engine}, {template_source}, {total_chars} src chars, "
+              f"{len(report_md)} chars, {len(figure_specs)} figures)")
 
     except _Cancelled:
         print(f"[ARGUS] report {report_id} cancelled by user, stopping.")
@@ -677,6 +858,9 @@ def _describe_failure(err: Exception) -> str:
     if "breaker open" in text:
         return ("The AI service had repeated failures and was paused briefly. "
                 "Wait a minute and generate again.")
+    if "timeout" in text or "timed out" in text:
+        return ("The AI service took too long to respond and the call timed "
+                "out. Try generating again — a Quick report is the fastest path.")
     if isinstance(err, ReportGenerationFailed):
         return str(err)[:200]
     return "The AI service failed while writing this report. Try generating again."
@@ -716,6 +900,7 @@ async def generate_report_from_session(report_id: str, session_query: str,
     try:
         await _check_cancel(report_id, access_token)
 
+        await _set_progress(report_id, access_token, "Choosing a report structure…")
         classification = await _classify_domain(collection_name, [], session_answer)
         domain, label = classification["domain"], classification["label"]
 
@@ -728,22 +913,25 @@ async def generate_report_from_session(report_id: str, session_query: str,
         # question it answered so the reduce keeps that focus.
         source_blocks = [f"### Findings for the question: {session_query}\n{session_answer}"]
         await _check_cancel(report_id, access_token)
+        await _set_progress(report_id, access_token, "Writing the report…")
         report_md = await _reduce(collection_name, template_label, sections,
                                   source_blocks, [collection_name])
+
+        from app.services.figures import extract_figures
+        report_md, figure_specs = extract_figures(report_md)
         title = _title_from_markdown(report_md, f"{template_label}: {collection_name}")
 
-        await supabase_request(
-            "PATCH", f"reports?id=eq.{report_id}&status=eq.running", access_token,
-            json_body={
-                "content_md": report_md,
-                "title": title[:200],
-                "domain": stored_domain[:60] if stored_domain else None,
-                "template_source": template_source,
-                "status": "completed",
-            },
-        )
+        await _patch_completed(report_id, access_token, {
+            "content_md": report_md,
+            "title": title[:200],
+            "domain": stored_domain[:60] if stored_domain else None,
+            "template_source": template_source,
+            "figures": figure_specs or None,
+            "progress": None,
+            "status": "completed",
+        })
         print(f"[ARGUS] report {report_id} completed from session "
-              f"({template_source}, {len(report_md)} chars)")
+              f"({template_source}, {len(report_md)} chars, {len(figure_specs)} figures)")
 
     except _Cancelled:
         print(f"[ARGUS] report {report_id} (from session) cancelled by user, stopping.")

@@ -180,6 +180,27 @@ body {
   }
 }
 
+/* Indeterminate progress bar for report generation (fix batch #3): a 40%-wide
+   accent segment sweeping a hairline track. Indeterminate on purpose — the
+   stage TEXT under it (reports.progress) carries the real state; faking a
+   percentage would overclaim what the backend knows. */
+@keyframes report-progress {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(350%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-\[report-progress_1\.6s_ease-in-out_infinite\] {
+    animation: none;
+    transform: none;
+    width: 100%;
+    opacity: 0.5;
+  }
+}
+
 /* Generated-report typography (Sprint 4.6a). ReactMarkdown outputs bare
    h1/h2/h3/ul/ol/p tags; Tailwind's preflight strips their default styling,
    so the report preview styles them here, scoped under .report-body, on the

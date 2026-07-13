@@ -396,7 +396,7 @@ yet configured.
 | `usage_limits` | 🟡 **Sprint 4.4, migration 011 — code-complete, not yet applied live.** Per-user free-tier caps (`max_collections`/`max_documents`/`max_research_per_day`). `SELECT`-only to clients (own-row RLS) so a user can read but never raise their caps; a `SECURITY DEFINER` signup trigger seeds tight defaults, the owner edits in Studio to raise. Enforced in `main.py` (429 before billable work). Migration 013 adds a `usage_limits_readable` VIEW joining `user_profiles` for Studio browsing. See `docs/ADR-019.md` |
 | `chat_usage` | 🟡 **Sprint 4.5, migration 016.** One row per UTC day, a global counter for the public chatbot's daily cap. Locked down (RLS, no policies/grants); reachable only through the `bump_chat_usage()` SECURITY DEFINER RPC (execute granted to anon), so the unauthenticated backend can increment but nothing can read/reset it directly. See ADR-021 |
 | `usage_events` | 🟡 **Sprint 4.4, migration 014.** Append-only rate-limit accounting (one row per real research run: `user_id`, `event_type`, `created_at`). No collection FK and no client delete/update, so the daily research cap it feeds can't be reset by deleting a collection (fixes a bypass where `research_sessions`, which cascade with collections, were the count source). Own-row `SELECT`/`INSERT` only. Sprint 4.6a now meters report generation through it (`event_type='report'`), exactly as migration 014 anticipated; still the foundation for the Phase 4b "reset usage" reward |
-| `reports` | 🟡 **Sprint 4.6a, migration 017 — code-complete, not yet applied live.** One row per generated report: created `running` before the background task starts, patched to `completed` (with the Markdown body) / `error` / `cancelled` — the row is what the frontend polls, and the cancel signal lives in its status (same DB-signal idiom as research). `collection_id` is `ON DELETE SET NULL` + a `collection_name` snapshot: a report is a deliverable that survives its source collection. Own-row RLS on all four verbs (the backend writes with the user's token); deleting a report never refunds the daily cap (that lives in `usage_events`). Migration 017 also adds `usage_limits.max_reports_per_day` (tight default 3; existing accounts backfilled to the QA tier); migration 018 adds `error_detail` (a user-safe failure reason shown on the report page). See `docs/ADR-022.md` |
+| `reports` | 🟡 **Sprint 4.6a/b, migrations 017 + 018 (`error_detail`) + 019 (`progress`) + 020 (`figures`) — code-complete, not yet applied live.** One row per generated report: created `running` before the background task starts, patched to `completed` (with the Markdown body, live `progress` stage strings along the way, and any validated chart specs in `figures`) / `error` (with a user-safe reason in `error_detail`) / `cancelled` — the row is what the frontend polls, and the cancel signal lives in its status (same DB-signal idiom as research). `collection_id` is `ON DELETE SET NULL` + a `collection_name` snapshot: a report is a deliverable that survives its source collection. Own-row RLS on all four verbs (the backend writes with the user's token); deleting a report never refunds the daily cap (that lives in `usage_events`). Migration 017 also adds `usage_limits.max_reports_per_day` (tight default 3; existing accounts backfilled to the QA tier); migration 018 adds `error_detail` (a user-safe failure reason shown on the report page). See `docs/ADR-022.md` |
 
 **Phase 4b, not built** (see `docs/ADR-018.md` Part 3 — these all assume an admin role that
 doesn't exist yet):
@@ -435,7 +435,8 @@ every `/dashboard/*` route stays session-guarded (`proxy.ts` `isPublicPath` matc
 /research [POST,GET] · /research/{id} [GET,DELETE] · /research/{id}/trace [GET]
 /research/{id}/cancel [POST]
 /reports [POST,GET] · /reports/{id} [GET,DELETE] · /reports/{id}/cancel [POST]
-/reports/{id}/docx [GET]   (Sprint 4.6a report generation — ADR-022; POST takes collection_id OR session_id)
+/reports/{id}/docx [GET] · /reports/{id}/pdf [GET]   (Sprint 4.6a/b report generation — ADR-022/024;
+                    POST takes collection_id OR session_id, plus mode: "quick" | "full")
 /account [DELETE]   (account-data purge after the 7-day grace period — ADR-020)
 /chat [POST]        (PUBLIC, unauthenticated — project-Q&A chatbot, rate-limited — ADR-021)
 ```
@@ -457,10 +458,17 @@ Every report call runs on the `gpt-oss-120b` quota bucket and its own `groq_repo
 report run can neither starve nor blind the interactive Q&A pipeline (which lives on `gpt-oss-20b`
 and the shared `groq` breaker). `POST /reports` takes exactly one of `collection_id`
 (whole-collection) or `session_id` (reuse a completed research session's answer — one reduce call,
-no re-processing). Cancel is the same DB-signal pattern as research (`POST /reports/{id}/cancel`);
-a failed run records a user-safe reason in `reports.error_detail` (migration 018). `GET
-/reports/{id}/docx` builds the downloadable `.docx` on demand via python-docx; the PDF path is
-print-CSS on the preview page. Metered by `usage_events` (`event_type='report'`) against
+no re-processing), plus a `mode` (fix batch #3): **"quick"** (default — ONE sampled model call,
+seconds on a warm dyno, with an honest "representative sample" line when it sampled) or **"full"**
+(the thorough paced pipeline above). The generator writes live stage strings to `reports.progress`
+(migration 019) for the report page's progress bar. Cancel is the same DB-signal pattern as
+research (`POST /reports/{id}/cancel`); a failed run records a user-safe reason in
+`reports.error_detail` (migration 018). Reports may embed **generated figures** (Sprint 4.6b,
+ADR-024): the model emits validated chart *specs* (never images; numbers from the source material
+only), stored as `reports.figures` (migration 020), rendered as theme-aware SVG in the preview and
+as matplotlib PNGs in the downloads. `GET /reports/{id}/docx` (python-docx) and `GET
+/reports/{id}/pdf` (fpdf2 — a real download, replacing the old print-dialog flow) build the
+deliverables on demand. Metered by `usage_events` (`event_type='report'`) against
 `usage_limits.max_reports_per_day`. Every report carries a visible needs-proofreading disclaimer.
 
 Cancellation (Sprint 4.3 rework #2, 2026-07-10) is an explicit DB signal, not disconnect
