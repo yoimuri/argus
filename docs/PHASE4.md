@@ -991,6 +991,57 @@ manual steps are unchanged: paste 017, push, re-test):
    still find real missing info there). The confidence badge still reports the honest first-pass
    grade. This is a latency fix on the documented ADR-015 non-determinism, not a claim it's gone.
 
+##### Sprint 4.6a fix batch #2 (2026-07-13, later) — the real root cause: the rate METER
+
+Clint's second live round (reports still failing, Ask on an existing collection refusing to
+summarize, everything intermittently slow) prompted a step-back diagnosis instead of another spot
+fix. The finding, verified against Groq's live rate-limit docs: **the free tier meters each model
+at 8,000 tokens/minute, 30 requests/minute, 200k tokens/day** — and every report engine so far had
+been sized against the model's 131k context window instead of that meter. Fix batch #1's
+"single-pass ≤120k chars" call could literally never succeed (30k tokens into an 8k/min meter),
+its concurrent map made the 429 storm worse, and — the cascade that tied all the symptoms
+together — those failures counted against the **shared** `groq` breaker, so a failed report run
+degraded interactive Q&A itself for the next minute (orchestrator fail-open → raw-query retrieval
+with no meta sampling → "it doesn't see the existing PDF"; synthesizer/critic fail-open → low
+confidence and fallback answers). "Re-uploading the PDF fixes it" was the ~90 seconds of
+re-embedding quietly letting the meter window and breaker reset — a wait disguised as a fix. Full
+design revision in `docs/ADR-022.md` (revision 2). What shipped:
+
+1. **The engine is sized from the meter** (`report_generator.py`): single-pass only up to 10k
+   chars (one window-sized call); sequential paced map (18k-char batches, ≤8 calls, ~1/minute)
+   for larger collections; a client-side token budgeter (`_pace_for_tokens`, 6,500/min with
+   headroom) that sleeps instead of 429ing; reduce input head-trimmed to fit one window.
+2. **Two isolations so reports can never break Q&A again:** all report calls moved to the
+   `gpt-oss-120b` quota bucket (Q&A lives entirely on `gpt-oss-20b` — separate 8k/min meters), and
+   onto their own **`groq_report` breaker** (new SOC card via `/status/breakers`).
+3. **Failures now say why** — migration **018** adds `reports.error_detail`; the backend writes a
+   short user-safe reason (rate limit / daily quota / paused service / interrupted run) and the
+   report page shows it instead of a bare "Generation failed". Deploy-order-safe: every write and
+   read falls back cleanly if 018 isn't pasted yet.
+4. **The summarize-Ask refusal** ("not enough information to summarize the full PDF reports", Low
+   badge): three-part fix — `critic.py` now short-circuits on `meta` intent with **no Groq call**
+   (a chunk-grounding grade on a whole-document summary is structurally meaningless; the badge
+   honestly reads "Not assessed"), the retriever keeps a wider cut for meta
+   (`META_FINAL_TOP_N=14`), and retrieval now **dedupes identical chunk content** — his collection
+   held the same PDF twice (the re-upload workaround), and the twins were burning top-N slots
+   pairwise (the "Chunk 0 twice" in his screenshot). ADR-015 revision updated.
+5. **Chatbot round 2 (his live feedback):** bot replies must carry real hyperlinks — the prompt
+   now requires labeled Markdown links, and the widget wraps any bare URL into one before
+   rendering (written without regex lookbehind: older Safari throws on it, and the widget is on
+   the public landing page). The voice rules gained an explicit ban on assistant-speak ("As an
+   AI…", "Great question!", "I'd be happy to…", "Hope this helps", etc.) so it reads like the
+   author talking, not a bot.
+6. Honest timing copy in the UI: a small collection ≈ a minute; large ones several (the meter,
+   not a hang) — set where the user waits (report page + Workspace).
+
+**Clint's manual steps after fix batch #2: paste migration 017 (if not already) AND migration
+018, then push.** Re-test: GATE-28 (report caps/cancel/disclaimer + timing expectation), a
+summarize Ask on the existing collection (expect a real summary attempt from 14 deduped chunks,
+"Not assessed" badge, no retry pass in the trace), the SOC panel's new `groq_report` card, and the
+chatbot's clickable links + voice. Also worth doing once: delete the duplicate copies of the same
+PDF left in the collection by the re-upload workaround — the dedupe makes them harmless to
+retrieval, but they still count against the document cap.
+
 #### Sprint 4.6b / 4.6c — still to build
 
 **Owner clarifications (Clint, 2026-07-11 — this is the product's headline capability):** the

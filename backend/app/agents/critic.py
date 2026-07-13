@@ -74,6 +74,23 @@ async def critic_node(state: ResearchState) -> dict:
     # graph.py's router still holds — there is no path to an infinite loop.
     base = {"loop_count": loop_count + 1}
 
+    if state.get("intent") == "meta":
+        # 2026-07-13 (ADR-015 revision): no self-check for summarize/overview
+        # queries — not just no retry (graph.py), no Groq call at all. A
+        # full-document summary generalizes past any handful of retrieved
+        # chunks by nature, so chunk-level grounding always grades it "low"
+        # (observed live: low → retry → low, ~18s wasted) while telling the
+        # user nothing true about the summary's quality. Empty flags render
+        # honestly as "Not assessed" in the reporter. This also saves the
+        # critic's ~3k tokens from the per-minute Groq budget on every
+        # summary run.
+        return {
+            **base,
+            "confidence_flags": [],
+            "needs_retry": False,
+            "trace_detail": "skipped: chunk-level self-check not applicable to a full-document summary",
+        }
+
     if (not chunks and not web_snippets) or not answer:
         # Nothing to grade (no chunks/web snippets, or every chunk was
         # flagged by the injection scan). A retry can't help without gap

@@ -15,17 +15,28 @@ The pipeline, per generation:
   3. GENERATE — the WHOLE collection, not top-5 RAG (PHASE4's caution #2: the
      Q&A retriever is deliberately not reused; retrieval answers "find the
      passage", a report needs "synthesize the document"). Two engines by size:
-       - SINGLE-PASS (the common case): if the whole collection fits in the
-         large model's context (<= SINGLE_PASS_CHARS), ALL of it goes into one
-         reduce call. Strictly higher quality (whole document in context, no
-         lossy intermediate step) AND far faster — ONE model call instead of
-         ~25. This is what makes a normal report finish in seconds.
-       - MAP-REDUCE (large collections only): the small model condenses each
-         document batch-by-batch into dense notes, running batches CONCURRENTLY
-         (bounded), then one reduce call writes the report from the notes.
-  4. REDUCE — one large-model call (openai/gpt-oss-120b, Groq's biggest
-     production model — the one flow that justifies it, PHASE4's caution #1)
-     writes the full report in Markdown following the chosen template.
+       - SINGLE-PASS: if the whole collection fits ONE quota-sized call
+         (<= SINGLE_PASS_CHARS), all of it goes into one reduce call.
+       - MAP-REDUCE (larger collections): batches are condensed into dense
+         notes SEQUENTIALLY, paced by the token budgeter, then one reduce call
+         writes the report from the notes.
+  4. REDUCE — one call on openai/gpt-oss-120b writes the full report in
+     Markdown following the chosen template.
+
+THE DESIGN CONSTRAINT THAT OWNS EVERY NUMBER IN THIS FILE (learned the hard
+way, 2026-07-13, ADR-022 revision 2): Groq's free tier meters each model at
+8,000 tokens/minute, 30 requests/minute, 200k tokens/day — verified against
+console.groq.com/docs/rate-limits that day. The model's 131k context window is
+IRRELEVANT next to that: any single request bigger than the per-minute meter
+can never succeed, and a second large call in the same minute 429s. Two prior
+versions of this file failed live by designing against the context window
+(sequential 5k-token calls, then a 30k-token single pass + concurrent maps).
+Hence: every call is sized to fit one minute-window with headroom, calls are
+paced by _pace_for_tokens(), map runs sequentially (concurrency under a shared
+per-minute meter only makes the 429 storm worse), and ALL report calls run on
+the gpt-oss-120b bucket + their own groq_report breaker so a report run can
+neither starve nor blind the interactive Q&A pipeline (which lives on the
+gpt-oss-20b bucket and the shared groq breaker).
 
 A completed research session can also be the source (generate_report_from_
 session): its already-synthesized answer feeds the reduce directly, so a user
@@ -50,21 +61,24 @@ by design.
 """
 import asyncio
 import os
+import time
 from groq import AsyncGroq
 
 from app.services.supabase_client import supabase_request
-from app.services.circuit_breaker import groq_breaker, tavily_breaker
+from app.services.circuit_breaker import groq_report_breaker, tavily_breaker
 from app.services.injection_patterns import matches_any
 from app.services.llm_json import call_reasoning_json, extract_json
 
-# Model split (ADR-022): the map/classify passes run on the fast small model
-# (same one the Q&A pipeline uses); the final reduce runs on Groq's largest
-# PRODUCTION text model. Both env-overridable so a model deprecation is a
-# config change, not a deploy. IDs verified against console.groq.com/docs/models
-# on 2026-07-13 — the Llama 3.x models are deprecation-listed, gpt-oss-120b/20b
-# are the production pair.
+# ALL report calls (classify, template distill, map, reduce) run on
+# gpt-oss-120b — deliberately the model the Q&A pipeline does NOT use. Groq
+# meters each model separately (8k tokens/min each), so putting every report
+# call on the 120b bucket means a running report consumes ZERO of the 20b
+# budget that the orchestrator/synthesizer/critic need — quota-level isolation
+# of batch work from interactive work, to match the breaker-level isolation
+# below. Quality is also equal-or-better (the map notes come from the larger
+# model). Both env vars kept so a model deprecation is a config change.
 REPORT_MODEL = os.getenv("GROQ_REPORT_MODEL", "openai/gpt-oss-120b")
-REPORT_MAP_MODEL = os.getenv("GROQ_REPORT_MAP_MODEL", "openai/gpt-oss-20b")
+REPORT_MAP_MODEL = os.getenv("GROQ_REPORT_MAP_MODEL", REPORT_MODEL)
 
 _client = AsyncGroq(api_key=os.environ["GROQ_API_KEY"], timeout=60.0)
 
@@ -118,36 +132,85 @@ GENERAL_TEMPLATE = {
     ],
 }
 
-# Single-pass threshold (2026-07-13 speed fix). If the whole collection is at
-# or under this many characters, skip the map step entirely and put everything
-# in one reduce call — one model call instead of ~25. ~120k chars ≈ ~30k input
-# tokens; well inside gpt-oss-120b's 131k-token context alongside the reduce's
-# reasoning + output budget, and small enough to be one quick call. Most real
-# collections (a handful of PDFs) land here, which is the whole point: a normal
-# report should not take minutes.
-SINGLE_PASS_CHARS = 120_000
+# Every size below is derived from ONE number: Groq's free-tier 8,000
+# tokens/minute meter (per model), with headroom for estimation error. The
+# budgeter estimates tokens as chars/4 (English prose) plus the call's
+# max_tokens (output + hidden reasoning both count against the meter).
+TPM_BUDGET = 6_500          # spend per rolling minute; ~1.5k headroom under 8k
 
-# Map-phase budgets, for collections too big for a single pass. Chunks are 800
-# chars each (document_processor.py); a ~40k-char batch is ~50 chunks ≈ 10k
-# tokens — still comfortable for the small model, and half as many calls as the
-# old 20k batches. Batches run CONCURRENTLY (bounded by MAP_CONCURRENCY) so map
-# time is roughly (total_batches / concurrency) × per-call latency, not the sum.
-# When a document exceeds its cap, batches are sampled evenly across its length
-# (start/middle/end all represented) and the report says so — sampled honestly
-# beats truncated silently.
-MAP_BATCH_CHARS = 40_000
+# Single-pass threshold: content + prompt overhead + the reduce output budget
+# must fit ONE minute-window. The math: 10k chars ≈ 2.5k tokens in, ~0.5k of
+# prompt/template overhead, 3,072 out → ~6.1k ≤ TPM_BUDGET. (~4 pages of text;
+# anything bigger goes through the paced map.)
+SINGLE_PASS_CHARS = 10_000
+
+# Reduce input ceiling for the map/session paths: 8 map notes can total ~14k
+# chars, which would push the reduce call past the budget — blocks are
+# head-trimmed proportionally to this cap before the call (notes are dense
+# bullets, so a head-trim loses the tail of a note list, not whole documents).
+MAX_REDUCE_INPUT_CHARS = 11_000
+
+# Map-phase budgets, for collections beyond single-pass. An 18k-char batch
+# (~4.5k tokens in) + 1k output ≈ 5.7k tokens — one batch per minute-window.
+# SEQUENTIAL by design: under a shared per-minute meter, concurrency doesn't
+# make anything faster, it just converts pacing into 429s (live-proven
+# 2026-07-13). The global cap bounds a worst-case run to ~8 paced minutes,
+# safely inside the 20-minute stale-marker window; a collection past the cap is
+# sampled evenly across its length (start/middle/end all represented) and the
+# report says so — sampled honestly beats truncated silently.
+MAP_BATCH_CHARS = 18_000
+MAP_MAX_TOKENS = 1_024
 MAX_BATCHES_PER_DOC = 4
-MAX_MAP_CALLS_TOTAL = 16
-MAP_CONCURRENCY = 3
+MAX_MAP_CALLS_TOTAL = 8
 
-# Reduce budget. A full report is ~2-4k tokens of visible output; max_tokens is
-# shared with hidden reasoning (the ADR-014/D18 token trap), so this is set
-# generously to avoid a truncation-failure on a long report. reasoning_effort
-# stays "low": the section structure is supplied explicitly by the template, so
-# the model spends its budget writing, not planning — faster and far less
-# likely to truncate than "medium" was (a real cause of the 2026-07-13 slow
-# failures). gpt-oss-120b supports up to 65536 output tokens.
-REDUCE_MAX_TOKENS = 16384
+# Reduce output budget. 3072 tokens ≈ a 2,000+ word draft, and input + output
+# still fit one minute-window. reasoning_effort stays "low": the section
+# structure comes explicitly from the template, so the model spends its budget
+# writing, not planning.
+REDUCE_MAX_TOKENS = 3_072
+
+
+# --- Client-side token budgeter ---------------------------------------------
+# Groq rejects/429s calls that overrun the per-minute meter, and its SDK's
+# hidden retries turn that into minutes of silent backoff before a failure
+# (exactly the "took forever then failed while logs show 200" behavior). So we
+# don't let calls reach the meter blind: every report Groq call declares its
+# estimated spend first, and if the rolling minute is too full, we sleep until
+# the window rolls over. One shared ledger (module-level, lock-guarded) covers
+# concurrent report tasks too.
+_budget_lock = asyncio.Lock()
+_window_start = 0.0
+_window_spend = 0
+
+
+def _estimate_tokens(input_chars: int, max_tokens: int) -> int:
+    return input_chars // 4 + max_tokens
+
+
+async def _pace_for_tokens(estimated: int):
+    """Block until `estimated` tokens fit in the current rolling minute.
+
+    Escape hatch: an estimate larger than the whole budget (shouldn't happen —
+    call sizes are derived from it — but estimates are estimates) gets a FRESH
+    window to itself instead of waiting forever; the real spend may still fit
+    under the provider's true 8k limit since TPM_BUDGET keeps 1.5k headroom."""
+    global _window_start, _window_spend
+    while True:
+        async with _budget_lock:
+            now = time.monotonic()
+            if now - _window_start >= 60:
+                _window_start = now
+                _window_spend = 0
+            if _window_spend + estimated <= TPM_BUDGET or (
+                _window_spend == 0 and estimated > TPM_BUDGET
+            ):
+                _window_spend += estimated
+                return
+            wait = 60 - (now - _window_start)
+        wait = max(wait, 1.0)
+        print(f"[ARGUS] report pacing: waiting {wait:.0f}s for the next token window "
+              f"(want {estimated}, spent {_window_spend}/{TPM_BUDGET})")
+        await asyncio.sleep(wait)
 
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 
@@ -221,8 +284,9 @@ async def _classify_domain(collection_name: str, filenames: list[str],
         f"Content sample:\n{sample_text[:3000]}"
     )
     try:
+        await _pace_for_tokens(_estimate_tokens(len(system) + len(user), 1024))
         raw = await call_reasoning_json(
-            _client, groq_breaker,
+            _client, groq_report_breaker,
             model=REPORT_MAP_MODEL,
             messages=[{"role": "system", "content": system},
                       {"role": "user", "content": user}],
@@ -308,8 +372,9 @@ async def _template_from_web(label: str, user_id: str, access_token: str,
     )
     user = f"Report type: {label}\n\nReference notes:\n" + "\n---\n".join(snippets)
     try:
+        await _pace_for_tokens(_estimate_tokens(len(system) + len(user), 1024))
         raw = await call_reasoning_json(
-            _client, groq_breaker,
+            _client, groq_report_breaker,
             model=REPORT_MAP_MODEL,
             messages=[{"role": "system", "content": system},
                       {"role": "user", "content": user}],
@@ -368,12 +433,13 @@ async def _map_batch(batch_text: str, filename: str, template_label: str) -> str
         f"Source file: {filename}\n\nExcerpt:\n{batch_text}"
     )
     try:
+        await _pace_for_tokens(_estimate_tokens(len(system) + len(user), MAP_MAX_TOKENS))
         notes = await call_reasoning_json(
-            _client, groq_breaker,
+            _client, groq_report_breaker,
             model=REPORT_MAP_MODEL,
             messages=[{"role": "system", "content": system},
                       {"role": "user", "content": user}],
-            max_tokens=2048,
+            max_tokens=MAP_MAX_TOKENS,
             reasoning_effort="low",
         )
         return notes.strip() if notes and notes.strip() else None
@@ -389,6 +455,17 @@ async def _reduce(collection_name: str, template_label: str, sections: list[str]
     '### heading\\nbody' strings — the body is raw document text (single-pass),
     extracted notes (map-reduce), or a prior answer (session-based); the prompt
     is worded to accept any of them."""
+    # Keep the call inside one minute-window of the token meter: if the blocks
+    # total more than the reduce-input ceiling, head-trim each proportionally
+    # (map notes are dense bullets, so a head-trim drops the tail of a note
+    # list, never a whole document).
+    total = sum(len(b) for b in source_blocks)
+    if total > MAX_REDUCE_INPUT_CHARS:
+        ratio = MAX_REDUCE_INPUT_CHARS / total
+        source_blocks = [b[: max(400, int(len(b) * ratio))] for b in source_blocks]
+        print(f"[ARGUS] reduce input trimmed {total} -> "
+              f"{sum(len(b) for b in source_blocks)} chars to fit the token window")
+
     section_lines = "\n".join(f"{i + 1}. {s}" for i, s in enumerate(sections))
     system = (
         "You are a professional report writer. Write a complete, polished "
@@ -412,8 +489,9 @@ async def _reduce(collection_name: str, template_label: str, sections: list[str]
         f"Source files: {', '.join(source_files)}\n\n"
         + "\n\n".join(source_blocks)
     )
+    await _pace_for_tokens(_estimate_tokens(len(system) + len(user), REDUCE_MAX_TOKENS))
     report_md = await call_reasoning_json(
-        _client, groq_breaker,
+        _client, groq_report_breaker,
         model=REPORT_MODEL,
         messages=[{"role": "system", "content": system},
                   {"role": "user", "content": user}],
@@ -445,13 +523,12 @@ async def _select_template(domain: str, label: str, user_id: str,
 async def _run_map(doc_chunks: list[tuple[str, list[str]]], template_label: str,
                    report_id: str, access_token: str) -> list[tuple[str, str, bool]]:
     """Map phase for collections too big for a single pass. Builds one flat,
-    globally-capped list of (doc, batch) work items and runs them CONCURRENTLY
-    behind a bounded semaphore, then regroups the notes per document in order.
-    Returns [(filename, joined_notes, sampled)]. Cancel is checked before the
-    concurrent wave launches (map only runs for large collections, and the
-    wave is bounded and fast)."""
-    await _check_cancel(report_id, access_token)
-
+    globally-capped list of (doc, batch) work items and runs them SEQUENTIALLY
+    — under a shared per-minute token meter, concurrency doesn't speed anything
+    up, it just turns pacing into 429s (live-proven 2026-07-13). Sequential
+    also restores a cancel check before every call, so a paced multi-minute run
+    stops within one batch of the user hitting Cancel. Returns
+    [(filename, joined_notes, sampled)]."""
     plan: list[tuple[int, str, str]] = []  # (doc_index, filename, batch_text)
     sampled_docs: set[int] = set()
     for idx, (filename, contents) in enumerate(doc_chunks):
@@ -469,17 +546,10 @@ async def _run_map(doc_chunks: list[tuple[str, list[str]]], template_label: str,
         plan = [plan[int(i * step)] for i in range(MAX_MAP_CALLS_TOTAL)]
         sampled_docs = set(range(len(doc_chunks)))
 
-    semaphore = asyncio.Semaphore(MAP_CONCURRENCY)
-
-    async def _run(item: tuple[int, str, str]) -> tuple[int, str | None]:
-        idx, filename, batch = item
-        async with semaphore:
-            return idx, await _map_batch(batch, filename, template_label)
-
-    results = await asyncio.gather(*[_run(item) for item in plan])
-
     notes_by_doc: dict[int, list[str]] = {}
-    for idx, notes in results:
+    for idx, filename, batch in plan:
+        await _check_cancel(report_id, access_token)
+        notes = await _map_batch(batch, filename, template_label)
         if notes:
             notes_by_doc.setdefault(idx, []).append(notes)
 
@@ -592,6 +662,26 @@ async def generate_report(report_id: str, collection_id: str, collection_name: s
         await _mark_report_error(report_id, access_token, err)
 
 
+def _describe_failure(err: Exception) -> str:
+    """A short, user-safe sentence for reports.error_detail (migration 018) so
+    a failed run tells the user WHY instead of a bare 'Generation failed'.
+    Groq's 429 body mentions rate limits explicitly; a breaker-open failure is
+    our own typed message; everything else stays generic (no internals leaked)."""
+    text = str(err).lower()
+    if "rate limit" in text or "429" in text or "too many requests" in text:
+        return ("The AI provider's free-tier rate limit was hit during this run. "
+                "Wait a minute or two and generate again.")
+    if "tokens per day" in text or "tpd" in text:
+        return ("The AI provider's daily token allowance is used up. "
+                "Try again after the daily quota resets.")
+    if "breaker open" in text:
+        return ("The AI service had repeated failures and was paused briefly. "
+                "Wait a minute and generate again.")
+    if isinstance(err, ReportGenerationFailed):
+        return str(err)[:200]
+    return "The AI service failed while writing this report. Try generating again."
+
+
 async def _mark_report_error(report_id: str, access_token: str, err: Exception):
     """ReportGenerationFailed and anything unexpected land here: mark the row so
     the polling frontend sees a terminal state, never a forever-'running'.
@@ -600,10 +690,19 @@ async def _mark_report_error(report_id: str, access_token: str, err: Exception):
     try:
         await supabase_request(
             "PATCH", f"reports?id=eq.{report_id}&status=eq.running", access_token,
-            json_body={"status": "error"},
+            json_body={"status": "error", "error_detail": _describe_failure(err)},
         )
-    except Exception as patch_err:
-        print(f"[ARGUS] could not mark report {report_id} as error: {patch_err}")
+    except Exception:
+        # Deploy-order safety: if migration 018 (error_detail) isn't applied
+        # yet, the write above 400s — the row must STILL reach 'error', never
+        # stay 'running' forever, so retry without the new column.
+        try:
+            await supabase_request(
+                "PATCH", f"reports?id=eq.{report_id}&status=eq.running", access_token,
+                json_body={"status": "error"},
+            )
+        except Exception as patch_err:
+            print(f"[ARGUS] could not mark report {report_id} as error: {patch_err}")
 
 
 async def generate_report_from_session(report_id: str, session_query: str,

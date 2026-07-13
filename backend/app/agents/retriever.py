@@ -11,6 +11,16 @@ SPECIFIC_MATCH_COUNT = 5
 BROAD_MATCH_COUNT = 8
 FINAL_TOP_N = 8
 
+# 2026-07-13: a "summarize this" (meta) query needs BREADTH more than
+# precision — 8 chunks of a 300-chunk collection made the synthesizer honestly
+# refuse ("not enough information to summarize the full reports", live
+# screenshot). Meta queries now keep more of what the multi-query fan-out
+# already retrieved. 14 chunks ≈ 11k chars ≈ 3k tokens — still one comfortable
+# synthesizer call, and the meta path no longer pays for a critic call
+# (critic.py skips meta), so the whole run stays inside Groq's free-tier
+# per-minute token meter.
+META_FINAL_TOP_N = 14
+
 # Sprint 3a.2 refinement: a "meta" query ("summarize this for me") has no real
 # topic, so semantic search under-samples positional info like a document's
 # title/author, which lives in its opening chunk. Forcing chunk_index=0 into
@@ -59,7 +69,26 @@ async def retriever_node(state: ResearchState) -> dict:
     match_count = SPECIFIC_MATCH_COUNT if intent == "specific" else BROAD_MATCH_COUNT
 
     seen_ids = set()
+    # Content-level dedupe on top of id-level (2026-07-13): a collection can
+    # hold the same PDF twice (live-seen — re-upload workarounds), and its twin
+    # chunks have different ids but identical text. Without this, duplicates
+    # burn top-N slots pairwise (the live screenshot showed "Chunk 0" twice),
+    # halving the breadth a summary sees. Keyed on a prefix — identical opening
+    # 300 chars means the same source text for 800-char fixed-window chunks.
+    seen_content = set()
     merged = []
+
+    def _is_new(row) -> bool:
+        row_id = row.get("id")
+        if row_id in seen_ids:
+            return False
+        content_key = (row.get("content") or "")[:300]
+        if content_key and content_key in seen_content:
+            return False
+        seen_ids.add(row_id)
+        if content_key:
+            seen_content.add(content_key)
+        return True
 
     for sub_query in refined_queries:
         query_embedding = await embed_query(sub_query)
@@ -83,11 +112,8 @@ async def retriever_node(state: ResearchState) -> dict:
         print(f"[ARGUS] retriever sub_query={sub_query!r} embed_dim={dim} rows={len(rows)}")
 
         for row in rows:
-            row_id = row.get("id")
-            if row_id in seen_ids:
-                continue
-            seen_ids.add(row_id)
-            merged.append(row)
+            if _is_new(row):
+                merged.append(row)
 
     merged.sort(key=lambda r: r.get("similarity", 0), reverse=True)
 
@@ -95,17 +121,17 @@ async def retriever_node(state: ResearchState) -> dict:
     if intent == "meta":
         candidates = await _fetch_lead_chunks(state["collection_id"], state["access_token"])
         for row in candidates:
-            row_id = row.get("id")
-            if row_id in seen_ids:
+            if not _is_new(row):
                 continue
-            seen_ids.add(row_id)
             lead_chunks.append(row)
             if len(lead_chunks) >= MAX_LEAD_CHUNKS:
                 break
         print(f"[ARGUS] retriever meta lead-chunks={len(lead_chunks)}")
 
-    # Lead chunks go first so the top-N cap can't drop them.
-    final = (lead_chunks + merged)[:FINAL_TOP_N]
+    # Lead chunks go first so the top-N cap can't drop them. Meta keeps a wider
+    # cut (see META_FINAL_TOP_N) because a summary needs breadth.
+    top_n = META_FINAL_TOP_N if intent == "meta" else FINAL_TOP_N
+    final = (lead_chunks + merged)[:top_n]
     print(
         f"[ARGUS] retriever intent={intent!r} sub_queries={len(refined_queries)} "
         f"merged={len(merged)} returned={len(final)}"

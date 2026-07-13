@@ -124,3 +124,13 @@ hf_embedding_breaker = CircuitBreaker("hf_embedding", fail_threshold=5, failure_
 # (Groq/HF/Tavily) or vice versa. Same thresholds; no scale evidence to tune
 # differently yet.
 gemini_breaker = CircuitBreaker("gemini_chat", fail_threshold=5, failure_window_s=120, recover_timeout_s=60)
+
+# Sprint 4.6a fix batch #2 (2026-07-13, ADR-022 revision): guards the report
+# generator's Groq calls, SEPARATE from groq_breaker on this file's own rule --
+# two unrelated failure modes must not share one circuit. Live-proven cost of
+# sharing: a report run that exhausted the free-tier token meter (429s) opened
+# the shared breaker and degraded interactive Q&A for the next minute
+# (orchestrator/synthesizer/critic all fail-open) even though Groq itself was
+# perfectly healthy. Background batch work and interactive queries now fail
+# independently.
+groq_report_breaker = CircuitBreaker("groq_report", fail_threshold=5, failure_window_s=120, recover_timeout_s=60)

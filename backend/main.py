@@ -15,7 +15,7 @@ from app.services.document_processor import extract_chunks_from_pdf_file, iter_e
 from app.services.supabase_client import supabase_request
 from app.services.injection_guard import check_query, InjectionDetected
 from app.services.injection_patterns import matches_any
-from app.services.circuit_breaker import groq_breaker, hf_breaker, hf_embedding_breaker, tavily_breaker, gemini_breaker, CircuitBreakerOpen
+from app.services.circuit_breaker import groq_breaker, groq_report_breaker, hf_breaker, hf_embedding_breaker, tavily_breaker, gemini_breaker, CircuitBreakerOpen
 from app.services import observability
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -290,6 +290,7 @@ async def circuit_breaker_health(request: Request):
     where filter lists don't exist, so it keeps its conventional name."""
     return {
         "groq": await groq_breaker.snapshot(),
+        "groq_report": await groq_report_breaker.snapshot(),
         "hf_prompt_guard": await hf_breaker.snapshot(),
         "hf_embedding": await hf_embedding_breaker.snapshot(),
         "tavily": await tavily_breaker.snapshot(),
@@ -1231,12 +1232,20 @@ async def list_reports(request: Request, collection_id: Optional[str] = None,
 async def get_report(report_id: str, request: Request):
     if not _valid_uuid(report_id):
         raise HTTPException(status_code=404, detail="Report not found.")
-    rows = await supabase_request(
-        "GET",
-        f"reports?id=eq.{report_id}"
-        "&select=id,collection_id,collection_name,title,domain,template_source,content_md,status,created_at",
-        request.state.access_token,
-    )
+    base_select = "id,collection_id,collection_name,title,domain,template_source,content_md,status,created_at"
+    try:
+        rows = await supabase_request(
+            "GET",
+            f"reports?id=eq.{report_id}&select={base_select},error_detail",
+            request.state.access_token,
+        )
+    except HTTPException:
+        # Deploy-order safety: before migration 018 is applied, selecting
+        # error_detail 400s — the report page must still load without it.
+        rows = await supabase_request(
+            "GET", f"reports?id=eq.{report_id}&select={base_select}",
+            request.state.access_token,
+        )
     if not rows:
         raise HTTPException(status_code=404, detail="Report not found.")
     report = rows[0]
@@ -1249,12 +1258,23 @@ async def get_report(report_id: str, request: Request):
             created = datetime.fromisoformat(report["created_at"].replace("Z", "+00:00"))
             age_min = (datetime.now(timezone.utc) - created).total_seconds() / 60
             if age_min > REPORT_STALE_MINUTES:
-                await supabase_request(
-                    "PATCH", f"reports?id=eq.{report_id}&status=eq.running",
-                    request.state.access_token,
-                    json_body={"status": "error"},
-                )
+                stale_detail = ("The run was interrupted (likely a server restart mid-generation) "
+                                "and never finished. Generate again.")
+                try:
+                    await supabase_request(
+                        "PATCH", f"reports?id=eq.{report_id}&status=eq.running",
+                        request.state.access_token,
+                        json_body={"status": "error", "error_detail": stale_detail},
+                    )
+                except HTTPException:
+                    # Pre-018 fallback: the status flip matters more than the note.
+                    await supabase_request(
+                        "PATCH", f"reports?id=eq.{report_id}&status=eq.running",
+                        request.state.access_token,
+                        json_body={"status": "error"},
+                    )
                 report["status"] = "error"
+                report["error_detail"] = stale_detail
         except Exception as stale_err:
             print(f"[ARGUS] report staleness check failed (returning as-is): {stale_err}")
 

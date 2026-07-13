@@ -35,6 +35,22 @@ const HEADER_BUTTON =
 // these components just make links open safely in a new tab and keep the
 // bubble's spacing tight. User messages stay plain text -- never rendered as
 // markdown, so a user can't inject formatting into their own bubble.
+
+// Bare-URL autolink (Clint, 2026-07-13: links must be CLICKABLE, like his
+// portfolio bot). CommonMark does not auto-link a bare https://... string, and
+// the model sometimes emits one despite being told to use [text](url) -- so
+// any bare URL is wrapped into a Markdown link before rendering. A URL already
+// inside [text](url) is preceded by "(", which the leading group excludes --
+// written without regex lookbehind on purpose (older Safari throws on
+// lookbehind at parse time, and this widget is on the public landing page:
+// the works-on-ANY-browser rule applies).
+function autolinkBareUrls(text: string): string {
+  return text.replace(
+    /(^|[^([\]])(https?:\/\/[^\s)\]}"'<>]+)/g,
+    (_match, prefix: string, url: string) =>
+      `${prefix}[${url.replace(/^https?:\/\/(www\.)?/, '').replace(/\/$/, '')}](${url})`,
+  )
+}
 const MARKDOWN_COMPONENTS = {
   a: ({ href, children }: { href?: string; children?: React.ReactNode }) => (
     <a
@@ -198,7 +214,9 @@ export default function ChatWidget() {
                   {m.role === 'user' ? (
                     m.text
                   ) : (
-                    <ReactMarkdown components={MARKDOWN_COMPONENTS}>{m.text}</ReactMarkdown>
+                    <ReactMarkdown components={MARKDOWN_COMPONENTS}>
+                      {autolinkBareUrls(m.text)}
+                    </ReactMarkdown>
                   )}
                 </div>
               </div>

@@ -867,8 +867,9 @@ export default function UploadPanel() {
             <h3 className="text-sm font-semibold text-ink-secondary">Generate a report</h3>
             <p className="text-xs text-ink-muted">
               ARGUS reads every document in this collection and writes a structured, formatted
-              report draft — preview it, then download it as .docx or save it as a PDF.
-              Generation takes a few minutes and counts toward your daily report limit.
+              report draft — preview it, then download it as .docx or save it as a PDF. A small
+              collection takes about a minute; large ones take several (free-tier AI limits).
+              Each generation counts toward your daily report limit.
             </p>
             <button
               type="button"

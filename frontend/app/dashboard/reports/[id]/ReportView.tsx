@@ -32,6 +32,7 @@ interface Report {
   template_source: string | null
   content_md: string | null
   status: string
+  error_detail?: string | null
   created_at: string
 }
 
@@ -182,8 +183,10 @@ export default function ReportView({ reportId }: { reportId: string }) {
               <p className="text-sm font-medium text-ink">Generating your report…</p>
               <p className="mt-1 text-xs text-ink-muted">
                 ARGUS is reading every document in “{report.collection_name}”, choosing a report
-                structure, and writing the draft. This usually takes a few minutes — you can leave
-                this page and come back; the report keeps generating.
+                structure, and writing the draft. A small collection takes about a minute; a large
+                one can take several — the free-tier AI provider limits how much text can be
+                processed per minute, so big collections are paced, not stuck. You can leave this
+                page and come back; the report keeps generating.
               </p>
             </div>
           </div>
@@ -215,7 +218,10 @@ export default function ReportView({ reportId }: { reportId: string }) {
         <EmptyState
           icon={TriangleAlert}
           title="Generation failed"
-          hint="Something went wrong while writing this report (the AI service may have been unavailable, or the run was interrupted). It did not complete — try generating again from the Workspace."
+          hint={
+            report.error_detail ||
+            'Something went wrong while writing this report (the AI service may have been unavailable, or the run was interrupted). It did not complete — try generating again from the Workspace.'
+          }
           action={
             <Link href="/dashboard/workspace" className={buttonClasses('primary', 'sm')}>
               Go to Workspace
