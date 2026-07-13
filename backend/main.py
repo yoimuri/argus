@@ -6,7 +6,7 @@ import httpx
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from urllib.parse import quote
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -59,6 +59,18 @@ class ChatRequest(BaseModel):
     # Length-capped server-side (project_chat.MAX_HISTORY_TURNS) so a client
     # can't inflate the Gemini payload.
     history: list[dict] = []
+
+
+class ReportCreateRequest(BaseModel):
+    collection_id: str
+
+
+# Sprint 4.6a: report generation runs as an in-process background task (the
+# run is many model calls long — minutes; Render's proxy already proved during
+# the cancel rework that it can't be trusted with long synchronous requests).
+# asyncio only holds a WEAK reference to tasks, so an un-anchored task can be
+# garbage-collected mid-run — this set keeps each one alive until it finishes.
+_report_tasks: set = set()
 
 
 # --- Public chatbot rate limiting (Sprint 4.5, ADR-021) --------------------
@@ -131,6 +143,9 @@ DEFAULT_USAGE_LIMITS = {
     "max_collections": 3,
     "max_documents": 15,
     "max_research_per_day": 15,
+    # Sprint 4.6a: report generation is the costliest flow in the app (many
+    # Groq calls incl. the large model per run) — tightest default of all.
+    "max_reports_per_day": 3,
 }
 
 
@@ -141,7 +156,8 @@ async def _get_usage_limits(user_id, access_token):
     try:
         rows = await supabase_request(
             "GET",
-            f"usage_limits?user_id=eq.{user_id}&select=max_collections,max_documents,max_research_per_day",
+            f"usage_limits?user_id=eq.{user_id}"
+            "&select=max_collections,max_documents,max_research_per_day,max_reports_per_day",
             access_token,
         )
         if rows:
@@ -1033,3 +1049,226 @@ async def get_research_trace(session_id: str, request: Request):
         request.state.access_token,
     )
     return {"session_id": session_id, "steps": steps}
+
+
+# --- Report Generation (Sprint 4.6a, D17, ADR-022) --------------------------
+
+# A 'running' report older than this is orphaned (dyno restart mid-generation
+# killed the in-process task — an honest limit of not having a job queue) and
+# gets marked 'error' on the next read instead of spinning forever in the UI.
+REPORT_STALE_MINUTES = 20
+
+
+@app.post("/reports")
+async def create_report(req: ReportCreateRequest, request: Request):
+    """Starts a report generation and returns immediately (the row is the
+    interface — the frontend polls GET /reports/{id}). Validation order
+    mirrors /research: ownership → content → cap → insert row → meter →
+    launch task, so a rejected request costs no Groq/Tavily quota."""
+    token = request.state.access_token
+    user_id = request.state.user_id
+
+    if not _valid_uuid(req.collection_id):
+        raise HTTPException(status_code=404, detail="Collection not found.")
+    owned = await supabase_request(
+        "GET", f"collections?id=eq.{req.collection_id}&select=id,name", token,
+    )
+    if not owned:
+        raise HTTPException(status_code=404, detail="Collection not found.")
+    collection_name = owned[0].get("name") or "Collection"
+
+    ready_docs = await _count_rows(
+        f"documents?collection_id=eq.{req.collection_id}&status=eq.ready&select=id", token,
+    )
+    if ready_docs == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="This collection has no ready documents yet. Upload a PDF first, then generate.",
+        )
+
+    # Daily cap — counts usage_events (append-only, migration 014), same
+    # bypass-proof source as the research cap: deleting reports or collections
+    # never refunds a unit.
+    limits = await _get_usage_limits(user_id, token)
+    since = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    reports_today = await _count_rows(
+        f"usage_events?user_id=eq.{user_id}&event_type=eq.report&created_at=gte.{since}&select=id",
+        token,
+    )
+    if reports_today >= limits["max_reports_per_day"]:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Free-tier limit reached: {limits['max_reports_per_day']} generated reports per day. "
+            "Try again tomorrow.",
+        )
+
+    rows = await supabase_request(
+        "POST", "reports", token,
+        json_body={
+            "user_id": user_id,
+            "collection_id": req.collection_id,
+            "collection_name": collection_name,
+            "status": "running",
+        },
+    )
+    if not rows:
+        raise HTTPException(status_code=500, detail="Failed to create the report record.")
+    report_id = rows[0]["id"]
+
+    # Meter AFTER all checks passed, so only genuine runs consume a unit.
+    # Best-effort, same stance as the research metering write.
+    try:
+        await supabase_request(
+            "POST", "usage_events", token,
+            json_body={"user_id": user_id, "event_type": "report"},
+        )
+    except Exception as usage_err:
+        print(f"[ARGUS] could not log report usage_event (metering degraded for this run): {usage_err}")
+
+    # Lazy import (groq client construction), then fire the background task.
+    # The _report_tasks anchor prevents asyncio's weak reference from letting
+    # the task be garbage-collected mid-generation.
+    from app.services.report_generator import generate_report
+
+    user_agent = request.headers.get("user-agent", "")[:300]
+    task = asyncio.create_task(
+        generate_report(report_id, req.collection_id, collection_name, user_id, token, user_agent)
+    )
+    _report_tasks.add(task)
+    task.add_done_callback(_report_tasks.discard)
+
+    return {"report_id": report_id, "status": "running"}
+
+
+@app.get("/reports")
+async def list_reports(request: Request, collection_id: Optional[str] = None,
+                       limit: int = 20, offset: int = 0):
+    """Same shape and double-scoping rules as GET /research: explicit
+    user_id filter on top of RLS, clamped paging, no content_md in the list
+    (reports can be long — the body loads when one is opened)."""
+    limit = max(1, min(limit, 50))
+    offset = max(0, offset)
+    filters = f"user_id=eq.{request.state.user_id}"
+    if collection_id:
+        if not _valid_uuid(collection_id):
+            return []
+        filters += f"&collection_id=eq.{collection_id}"
+    return await supabase_request(
+        "GET",
+        f"reports?{filters}"
+        "&select=id,collection_id,collection_name,title,domain,template_source,status,created_at"
+        f"&order=created_at.desc&limit={limit}&offset={offset}",
+        request.state.access_token,
+    )
+
+
+@app.get("/reports/{report_id}")
+async def get_report(report_id: str, request: Request):
+    if not _valid_uuid(report_id):
+        raise HTTPException(status_code=404, detail="Report not found.")
+    rows = await supabase_request(
+        "GET",
+        f"reports?id=eq.{report_id}"
+        "&select=id,collection_id,collection_name,title,domain,template_source,content_md,status,created_at",
+        request.state.access_token,
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="Report not found.")
+    report = rows[0]
+
+    # Orphan detection: a dyno restart mid-generation leaves the row 'running'
+    # forever (in-process task, no queue — ADR-022's honest limit). Mark it on
+    # read so the polling UI reaches a terminal state instead of spinning.
+    if report["status"] == "running":
+        try:
+            created = datetime.fromisoformat(report["created_at"].replace("Z", "+00:00"))
+            age_min = (datetime.now(timezone.utc) - created).total_seconds() / 60
+            if age_min > REPORT_STALE_MINUTES:
+                await supabase_request(
+                    "PATCH", f"reports?id=eq.{report_id}&status=eq.running",
+                    request.state.access_token,
+                    json_body={"status": "error"},
+                )
+                report["status"] = "error"
+        except Exception as stale_err:
+            print(f"[ARGUS] report staleness check failed (returning as-is): {stale_err}")
+
+    return report
+
+
+@app.post("/reports/{report_id}/cancel")
+async def cancel_report(report_id: str, request: Request):
+    """Same DB-signal cancel as research: flip the row, the generator checks
+    it between model calls. &status=eq.running so a finished report can't be
+    'cancelled' after the fact."""
+    if not _valid_uuid(report_id):
+        raise HTTPException(status_code=404, detail="Report not found.")
+    rows = await supabase_request(
+        "GET", f"reports?id=eq.{report_id}&select=id,status", request.state.access_token,
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="Report not found.")
+    updated = await supabase_request(
+        "PATCH", f"reports?id=eq.{report_id}&status=eq.running",
+        request.state.access_token,
+        json_body={"status": "cancelled"},
+    )
+    return {
+        "report_id": report_id,
+        "status": "cancelled" if updated else rows[0]["status"],
+    }
+
+
+@app.delete("/reports/{report_id}")
+async def delete_report(report_id: str, request: Request):
+    """Reports are deletable history (like research sessions) — the metering
+    lives in usage_events, so deleting a report never refunds the daily cap."""
+    if not _valid_uuid(report_id):
+        raise HTTPException(status_code=404, detail="Report not found.")
+    rows = await supabase_request(
+        "GET", f"reports?id=eq.{report_id}&select=id", request.state.access_token,
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="Report not found.")
+    await supabase_request(
+        "DELETE", f"reports?id=eq.{report_id}", request.state.access_token,
+    )
+    return {"status": "deleted", "report_id": report_id}
+
+
+@app.get("/reports/{report_id}/docx")
+async def download_report_docx(report_id: str, request: Request):
+    """The .docx deliverable. Built on demand from the stored Markdown —
+    nothing binary is persisted. python-docx imports lazily so the dependency
+    costs nothing on any other request path."""
+    if not _valid_uuid(report_id):
+        raise HTTPException(status_code=404, detail="Report not found.")
+    rows = await supabase_request(
+        "GET",
+        f"reports?id=eq.{report_id}&select=title,collection_name,content_md,status,created_at",
+        request.state.access_token,
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="Report not found.")
+    report = rows[0]
+    if report["status"] != "completed" or not report.get("content_md"):
+        raise HTTPException(status_code=409, detail="This report has no downloadable content.")
+
+    from app.services.docx_export import markdown_report_to_docx
+    from app.services.report_generator import DISCLAIMER
+
+    title = report.get("title") or f"Report: {report.get('collection_name') or 'Collection'}"
+    generated_note = (
+        f"Generated by ARGUS on {report['created_at'][:10]} — an AI-assembled draft for review."
+    )
+    docx_bytes = markdown_report_to_docx(
+        report["content_md"], title, DISCLAIMER, generated_note,
+    )
+
+    # Sanitize the title into a safe ASCII filename for the header.
+    safe_name = "".join(c for c in title if c.isalnum() or c in " -_").strip()[:80] or "argus-report"
+    return Response(
+        content=docx_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="{safe_name}.docx"'},
+    )

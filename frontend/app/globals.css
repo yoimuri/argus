@@ -179,3 +179,73 @@ body {
     transition: none !important;
   }
 }
+
+/* Generated-report typography (Sprint 4.6a). ReactMarkdown outputs bare
+   h1/h2/h3/ul/ol/p tags; Tailwind's preflight strips their default styling,
+   so the report preview styles them here, scoped under .report-body, on the
+   same design tokens as everything else. (No typography plugin -- these few
+   rules don't justify a dependency.) */
+.report-body h1 {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--color-ink);
+  margin: 1.25rem 0 0.5rem;
+}
+.report-body h2 {
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: var(--color-ink);
+  margin: 1.25rem 0 0.4rem;
+  padding-bottom: 0.25rem;
+  border-bottom: 1px solid var(--color-hairline);
+}
+.report-body h3 {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--color-ink);
+  margin: 1rem 0 0.3rem;
+}
+.report-body p {
+  margin: 0.5rem 0;
+  line-height: 1.65;
+}
+.report-body ul,
+.report-body ol {
+  margin: 0.5rem 0 0.75rem;
+  padding-left: 1.4rem;
+}
+.report-body ul {
+  list-style: disc;
+}
+.report-body ol {
+  list-style: decimal;
+}
+.report-body li {
+  margin: 0.25rem 0;
+  line-height: 1.6;
+}
+.report-body strong {
+  font-weight: 600;
+  color: var(--color-ink);
+}
+
+/* Print = the report's free PDF export path (Sprint 4.6a: "Save as PDF" calls
+   window.print(); the .docx download covers the editable format). Two rules:
+   1. Force the LIGHT token set regardless of the chosen theme -- browsers
+      don't print backgrounds by default, so dark theme's white ink would
+      print invisibly on white paper.
+   2. Chrome (nav header, buttons, chat launcher) carries print:hidden classes
+      at the component level; this block only handles the color safety net. */
+@media print {
+  :root,
+  [data-theme="dark"] {
+    --color-surface: #ffffff;
+    --color-surface-page: #ffffff;
+    --color-surface-raised: #ffffff;
+    --color-hairline: #d5d4cd;
+    --color-ink: #0b0b0b;
+    --color-ink-secondary: #52514e;
+    --color-ink-muted: #6b6a65;
+    --color-accent: #0e7490;
+  }
+}

@@ -394,7 +394,8 @@ yet configured.
 | `security_events` | Injection/quarantine event log. Feeds the Phase 4 per-user events feed via Realtime (migration 009) |
 | `usage_limits` | 🟡 **Sprint 4.4, migration 011 — code-complete, not yet applied live.** Per-user free-tier caps (`max_collections`/`max_documents`/`max_research_per_day`). `SELECT`-only to clients (own-row RLS) so a user can read but never raise their caps; a `SECURITY DEFINER` signup trigger seeds tight defaults, the owner edits in Studio to raise. Enforced in `main.py` (429 before billable work). Migration 013 adds a `usage_limits_readable` VIEW joining `user_profiles` for Studio browsing. See `docs/ADR-019.md` |
 | `chat_usage` | 🟡 **Sprint 4.5, migration 016.** One row per UTC day, a global counter for the public chatbot's daily cap. Locked down (RLS, no policies/grants); reachable only through the `bump_chat_usage()` SECURITY DEFINER RPC (execute granted to anon), so the unauthenticated backend can increment but nothing can read/reset it directly. See ADR-021 |
-| `usage_events` | 🟡 **Sprint 4.4, migration 014.** Append-only rate-limit accounting (one row per real research run: `user_id`, `event_type`, `created_at`). No collection FK and no client delete/update, so the daily research cap it feeds can't be reset by deleting a collection (fixes a bypass where `research_sessions`, which cascade with collections, were the count source). Own-row `SELECT`/`INSERT` only. Foundation for Sprint 4.6 report metering and the Phase 4b "reset usage" reward |
+| `usage_events` | 🟡 **Sprint 4.4, migration 014.** Append-only rate-limit accounting (one row per real research run: `user_id`, `event_type`, `created_at`). No collection FK and no client delete/update, so the daily research cap it feeds can't be reset by deleting a collection (fixes a bypass where `research_sessions`, which cascade with collections, were the count source). Own-row `SELECT`/`INSERT` only. Sprint 4.6a now meters report generation through it (`event_type='report'`), exactly as migration 014 anticipated; still the foundation for the Phase 4b "reset usage" reward |
+| `reports` | 🟡 **Sprint 4.6a, migration 017 — code-complete, not yet applied live.** One row per generated report: created `running` before the background task starts, patched to `completed` (with the Markdown body) / `error` / `cancelled` — the row is what the frontend polls, and the cancel signal lives in its status (same DB-signal idiom as research). `collection_id` is `ON DELETE SET NULL` + a `collection_name` snapshot: a report is a deliverable that survives its source collection. Own-row RLS on all four verbs (the backend writes with the user's token); deleting a report never refunds the daily cap (that lives in `usage_events`). Migration 017 also adds `usage_limits.max_reports_per_day` (tight default 3; existing accounts backfilled to the QA tier). See `docs/ADR-022.md` |
 
 **Phase 4b, not built** (see `docs/ADR-018.md` Part 3 — these all assume an admin role that
 doesn't exist yet):
@@ -432,6 +433,8 @@ every `/dashboard/*` route stays session-guarded (`proxy.ts` `isPublicPath` matc
 /collections/{id}/documents [POST,GET] · /documents/{id} [DELETE]
 /research [POST,GET] · /research/{id} [GET,DELETE] · /research/{id}/trace [GET]
 /research/{id}/cancel [POST]
+/reports [POST,GET] · /reports/{id} [GET,DELETE] · /reports/{id}/cancel [POST]
+/reports/{id}/docx [GET]   (Sprint 4.6a report generation — ADR-022)
 /account [DELETE]   (account-data purge after the 7-day grace period — ADR-020)
 /chat [POST]        (PUBLIC, unauthenticated — project-Q&A chatbot, rate-limited — ADR-021)
 ```
@@ -440,6 +443,17 @@ every `/dashboard/*` route stays session-guarded (`proxy.ts` `isPublicPath` matc
 for the Phase 4 session-history UI — metadata only (`id, collection_id, query, status,
 created_at`), no `report` field, so opening the list doesn't pull every stored report over
 the wire.
+
+Report generation (Sprint 4.6a, ADR-022) is deliberately asynchronous: `POST /reports` creates a
+`reports` row (migration 017) and returns immediately; an in-process background task classifies
+the collection's domain, picks a template (built-in cybersec/data-sci, Tavily-looked-up for other
+recognized domains with the same injection scan as Web Scout, general fallback), map-reduces ALL
+of the collection's chunks (not top-5 retrieval) through Groq — the fast small model for map
+passes, `openai/gpt-oss-120b` for the final write — and patches the row; the frontend polls it.
+Cancel is the same DB-signal pattern as research (`POST /reports/{id}/cancel`). `GET
+/reports/{id}/docx` builds the downloadable `.docx` on demand via python-docx; the PDF path is
+print-CSS on the preview page. Metered by `usage_events` (`event_type='report'`) against
+`usage_limits.max_reports_per_day`. Every report carries a visible needs-proofreading disclaimer.
 
 Cancellation (Sprint 4.3 rework #2, 2026-07-10) is an explicit DB signal, not disconnect
 detection — Render's proxy buffers the request cycle, so the backend can never observe a client

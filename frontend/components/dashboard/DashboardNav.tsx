@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { LayoutDashboard, FolderKanban, History, ShieldCheck, LifeBuoy, type LucideIcon } from 'lucide-react'
+import { LayoutDashboard, FolderKanban, History, FileText, ShieldCheck, LifeBuoy, type LucideIcon } from 'lucide-react'
 
 // Dashboard nav extracted to a client component (presentability pass,
 // 2026-07-11) so it can highlight the ACTIVE route -- the nav-state-active
@@ -13,6 +13,7 @@ const ITEMS: { href: string; label: string; icon: LucideIcon }[] = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/dashboard/workspace', label: 'Workspace', icon: FolderKanban },
   { href: '/dashboard/sessions', label: 'Sessions', icon: History },
+  { href: '/dashboard/reports', label: 'Reports', icon: FileText },
   { href: '/dashboard/soc', label: 'SOC', icon: ShieldCheck },
   { href: '/dashboard/support', label: 'Support', icon: LifeBuoy },
 ]

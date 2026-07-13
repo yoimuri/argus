@@ -4,6 +4,7 @@ import Link from 'next/link'
 import ProfileMenu from '@/components/ProfileMenu'
 import DashboardNav from '@/components/dashboard/DashboardNav'
 import DeletionNotice from '@/components/settings/DeletionNotice'
+import ChatWidget from '@/components/landing/ChatWidget'
 
 // D1: shared nav for every /dashboard/* route, hosts the auth check (dual-
 // guard alongside proxy.ts -- see proxy.ts's own comment) so individual
@@ -41,7 +42,9 @@ export default async function DashboardLayout({
           accountDeletedAt={profile?.account_deleted_at ?? null}
         />
       )}
-      <header className="border-b border-hairline bg-surface">
+      {/* print:hidden: the Reports page's "Save as PDF" prints the page --
+          navigation chrome must not end up in the exported document. */}
+      <header className="border-b border-hairline bg-surface print:hidden">
         <div className="mx-auto flex max-w-5xl flex-wrap items-center gap-4 px-4 py-3">
           <Link
             href="/dashboard"
@@ -56,6 +59,11 @@ export default async function DashboardLayout({
         </div>
       </header>
       <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-6">{children}</main>
+      {/* The project chatbot lives inside the dashboard too (Clint,
+          2026-07-13): signed-in users can ask it how to navigate the app,
+          not just what ARGUS is. Same public /chat backend, same rate
+          limits -- the widget never sends the user's token. */}
+      <ChatWidget />
     </div>
   )
 }

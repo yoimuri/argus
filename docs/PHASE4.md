@@ -902,12 +902,58 @@ keys start with `AQ.`); add it as `GEMINI_API_KEY` on Render (optionally `GEMINI
 
 ### Sprint 4.6 — Multimodal PDF ingestion + Report Generation
 
-**Status:** ⏳ Not started. Own threat-model planning pass required before build — image-borne
-prompt injection is a currently-uncovered channel (PyMuPDF is text-only today; see BACKLOG
-Item 4). Two locked shapes so far: vision captioning via Groq Llama 4 Scout with captions scanned
-by the same regex + a new `image_derived` trust level; a separate "Generate report" flow with a
-domain-tailored template, preview-before-download, and `.docx`/PDF export, metered by
-`usage_limits`.
+**Status:** 🟡 **4.6a (Report Generation core) code-complete 2026-07-13, not live-verified.**
+4.6b (figure generation) and 4.6c (multimodal image reading) ⏳ not started — 4.6c still gets its
+own threat-model ADR before build (image-borne prompt injection is a currently-uncovered channel;
+PyMuPDF is text-only today, see BACKLOG Item 4; vision captioning via a Groq vision model with
+captions scanned by the same regex + a new `image_derived` trust level stays the locked shape).
+
+#### Sprint 4.6a — Report Generation core (built 2026-07-13)
+
+Full design reasoning in `docs/ADR-022.md`; the short version:
+
+- **Engine:** domain classification → template (built-in cybersec/data-sci; Tavily-looked-up
+  structure for other recognized domains, every snippet injection-scanned like Web Scout's;
+  general fallback) → whole-collection **map-reduce over ALL chunks** (not top-5 RAG — the
+  plan's caution #2 confronted, `retriever.py` deliberately bypassed) → one large-model write.
+- **Models:** map/classify on `openai/gpt-oss-20b`, the final reduce on **`openai/gpt-oss-120b`**
+  — Groq's largest production model, the one flow that justifies it (caution #1 confronted).
+  IDs verified against Groq's live model list 2026-07-13; env-overridable.
+- **Async by design:** `POST /reports` inserts the row and returns; an in-process background task
+  generates and patches it; the frontend polls. Render's proxy already proved (Sprint 4.3, twice)
+  it can't be trusted with long synchronous requests. Cancel = the same DB-signal idiom
+  (`POST /reports/{id}/cancel`, checked between model calls, completed-write filtered
+  `status=eq.running`). Honest limit: no job queue — a dyno restart orphans the run; a `running`
+  row older than 20 min is marked `error` on next read so the UI always terminates.
+- **Deliverables:** preview page (`/dashboard/reports/[id]`, polls while running) → download
+  `.docx` (python-docx 1.2.0, the one approved new dep, built on demand from the stored Markdown)
+  or **Save as PDF** (print-CSS; `@media print` forces light tokens so dark theme doesn't print
+  white-on-white; all chrome `print:hidden`). The **needs-proofreading disclaimer** renders in
+  the preview banner, inside the .docx, and in print — part of the design, not optional copy.
+- **Metering:** one `usage_events` row (`event_type='report'`) per genuine run, counted against
+  `usage_limits.max_reports_per_day` (migration **017**: `reports` table + the new cap column,
+  tight default 3, existing accounts backfilled to the QA tier). Deleting a report or its
+  collection never refunds a unit. Friendly 429 past the cap, checked before any billable work.
+- **UI:** new **Reports** tab (list, StatusPill, delete), "Generate a report" section in the
+  Workspace collection view (double-guarded: disabled without ready docs + backend 400), usage
+  strip and Settings meters gained "Reports today".
+
+**Also in this session (Clint's request, 2026-07-13): the project chatbot now lives inside the
+dashboard too**, not just the landing page — mounted in `dashboard/layout.tsx` so signed-in users
+can ask how to navigate the app. Its static grounding gained a plain-words tour of every
+dashboard tab and the report flow, plus the author's professional contact channels (portfolio
+contact form, LinkedIn, professional email — the only three it may give out). Same public `/chat`
+backend, same rate limits, still no token attached — the bot can never touch user data (ADR-021's
+posture unchanged).
+
+**Clint's manual steps for 4.6a:** (1) paste migration **017** into the Supabase SQL editor —
+**before or immediately after the push**: until it runs, every limits read fails back to the
+tight defaults (including his own account) and report generation 502s cleanly on the missing
+table; (2) `git push` (Render installs python-docx from requirements.txt, Vercel rebuilds);
+(3) run GATE-28 (below) and re-run GATE-27(a) to confirm the chatbot's new dashboard placement +
+contact answers.
+
+#### Sprint 4.6b / 4.6c — still to build
 
 **Owner clarifications (Clint, 2026-07-11 — this is the product's headline capability):** the
 point of ARGUS is generating meaningful, presentable output from messy/raw/unorganized reports.

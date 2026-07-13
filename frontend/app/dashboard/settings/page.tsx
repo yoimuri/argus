@@ -19,11 +19,11 @@ export default async function SettingsPage() {
   } = await supabase.auth.getUser()
 
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
-  const [{ data: limits }, collections, documents, researchToday, { data: profile }] =
+  const [{ data: limits }, collections, documents, researchToday, reportsToday, { data: profile }] =
     await Promise.all([
       supabase
         .from('usage_limits')
-        .select('max_collections,max_documents,max_research_per_day')
+        .select('max_collections,max_documents,max_research_per_day,max_reports_per_day')
         .maybeSingle(),
       supabase.from('collections').select('id', { count: 'exact', head: true }),
       supabase.from('documents').select('id', { count: 'exact', head: true }),
@@ -31,6 +31,12 @@ export default async function SettingsPage() {
         .from('usage_events')
         .select('id', { count: 'exact', head: true })
         .eq('event_type', 'research')
+        .gte('created_at', since),
+      // Report generations (Sprint 4.6a) meter through usage_events too.
+      supabase
+        .from('usage_events')
+        .select('id', { count: 'exact', head: true })
+        .eq('event_type', 'report')
         .gte('created_at', since),
       supabase.from('user_profiles').select('deletion_requested_at').maybeSingle(),
     ])
@@ -42,6 +48,11 @@ export default async function SettingsPage() {
       label: 'Research queries (last 24h)',
       used: researchToday.count ?? 0,
       max: limits?.max_research_per_day ?? 15,
+    },
+    {
+      label: 'Generated reports (last 24h)',
+      used: reportsToday.count ?? 0,
+      max: limits?.max_reports_per_day ?? 3,
     },
   ]
 

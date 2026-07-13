@@ -20,7 +20,7 @@ change makes any doc stale, fix it in the same turn.
 | Phase 2 — Security hardening | ✅ |
 | Phase 3a — Full agent pipeline + observability (all sprints + document management) | ✅ live-verified 2026-07-08 |
 | Phase 3b — Web Scout | ✅ live-verified 2026-07-09 |
-| Phase 4 — Dashboard, sessions, public landing, chatbot, multimodal | 🟡 in progress (4.1–4.4 ✅ live-verified; presentability pass next, then 4.5–4.6) |
+| Phase 4 — Dashboard, sessions, public landing, chatbot, multimodal | 🟡 in progress (4.1–4.4 ✅ live-verified; presentability pass + 4.5 + 4.6a built 🟡 awaiting live tests; 4.6b/4.6c + final design pass remain) |
 | Phase 4b — Admin-role SOC features (parking lot, not scheduled) | ⏳ not started |
 | Phase 5 — MCP Server, CI/CD, Polish | ⏳ not started |
 
@@ -111,11 +111,19 @@ implied as built. Full reasoning: `docs/ADR-018.md` Part 3.
   `usage_events`). Honest gate that remains: ADR-019 records that building the OAuth button does
   NOT discharge ADR-013's privacy-policy / sub-processor-disclosure items — enabling real public
   signups stays gated on those.
-- **4.5 — Project Q&A chatbot + rate limiting** (own threat-model planning pass first — a
-  public unauthenticated LLM endpoint is a new attack surface).
-- **4.6 — Multimodal PDF ingestion + Report Generation** (own threat-model planning pass
-  first — image-borne injection is a new, currently-uncovered attack surface; see
-  `docs/BACKLOG.md` Item 4).
+- **4.5 — Project Q&A chatbot + rate limiting.** 🟡 Built 2026-07-11 with its threat model first
+  (`docs/ADR-021.md`): public Gemini-backed `/chat`, static grounding, per-IP window + persisted
+  global daily cap (migration 016). Live-test fix batch 2026-07-12. 2026-07-13: the widget now
+  also mounts inside the dashboard (navigation help for signed-in users) and its grounding gained
+  the author's professional contact channels — same backend, same limits, still tokenless.
+- **4.6 — Multimodal PDF ingestion + Report Generation.** 🟡 **4.6a (Report Generation core)
+  code-complete 2026-07-13** (`docs/ADR-022.md`, GATE-28): domain-templated whole-collection
+  map-reduce on Groq (reduce on `openai/gpt-oss-120b`), async generate + poll, preview →
+  `.docx`/print-PDF with a non-optional proofreading disclaimer, metered via `usage_events` +
+  migration 017. Still to build: **4.6b** figure generation (charts from doc data; matplotlib vs
+  inline-SVG needs a real memory test on the 512 MB dyno) and **4.6c** multimodal image reading
+  (own threat-model ADR first — image-borne injection is a new, currently-uncovered attack
+  surface; see `docs/BACKLOG.md` Item 4).
 
 **What's buildable in 4.1–4.4 with zero new admin machinery:** every user already has RLS
 row-level access to their own `security_events` and `research_sessions`; Realtime honors that

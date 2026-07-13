@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef, type FormEvent } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { createClient } from '@/utils/supabase/client'
 import { apiFetch, apiJson, ApiError } from '@/utils/api'
 import { splitReport } from '@/utils/report'
@@ -81,6 +82,7 @@ interface DocumentRow {
 }
 
 export default function UploadPanel() {
+  const router = useRouter()
   const [collectionName, setCollectionName] = useState('')
   const [creatingCollection, setCreatingCollection] = useState(false)
   const [collectionId, setCollectionId] = useState<string | null>(null)
@@ -118,6 +120,11 @@ export default function UploadPanel() {
   const researchSessionIdRef = useRef<string | null>(null)
   const queryRef = useRef<HTMLTextAreaElement>(null)
 
+  // Report generation (Sprint 4.6a): the POST returns immediately (the
+  // backend generates in a background task) and we navigate to the report
+  // page, which polls the row -- so this flag only guards the double-click.
+  const [generatingReport, setGeneratingReport] = useState(false)
+
   const [collections, setCollections] = useState<Collection[]>([])
   // Starts true so the first render shows "Loading..." without an effect having
   // to set it synchronously (react-hooks' set-state-in-effect rule flags a
@@ -134,15 +141,17 @@ export default function UploadPanel() {
     max_collections: number
     max_documents: number
     max_research_per_day: number
+    max_reports_per_day: number
   } | null>(null)
   const [docCount, setDocCount] = useState<number | null>(null)
   const [researchToday, setResearchToday] = useState<number | null>(null)
+  const [reportsToday, setReportsToday] = useState<number | null>(null)
 
   const refreshCounts = useCallback(async () => {
     try {
       const supabase = createClient()
       const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
-      const [docs, research] = await Promise.all([
+      const [docs, research, reports] = await Promise.all([
         supabase.from('documents').select('id', { count: 'exact', head: true }),
         // usage_events (migration 014), matching the backend's daily cap source
         // -- research_sessions would undercount after a collection delete.
@@ -151,9 +160,16 @@ export default function UploadPanel() {
           .select('id', { count: 'exact', head: true })
           .eq('event_type', 'research')
           .gte('created_at', since),
+        // Report generations (Sprint 4.6a) meter through the same table.
+        supabase
+          .from('usage_events')
+          .select('id', { count: 'exact', head: true })
+          .eq('event_type', 'report')
+          .gte('created_at', since),
       ])
       setDocCount(docs.count ?? null)
       setResearchToday(research.count ?? null)
+      setReportsToday(reports.count ?? null)
     } catch {
       // The strip is informational; a failed count must never break the panel.
     }
@@ -164,12 +180,19 @@ export default function UploadPanel() {
     const supabase = createClient()
     supabase
       .from('usage_limits')
-      .select('max_collections,max_documents,max_research_per_day')
+      .select('max_collections,max_documents,max_research_per_day,max_reports_per_day')
       .maybeSingle()
       .then(({ data }) => {
         // Missing row -> same tight defaults the backend falls back to.
         if (!ignore)
-          setLimits(data ?? { max_collections: 3, max_documents: 15, max_research_per_day: 15 })
+          setLimits(
+            data ?? {
+              max_collections: 3,
+              max_documents: 15,
+              max_research_per_day: 15,
+              max_reports_per_day: 3,
+            },
+          )
       })
     void refreshCounts()
     return () => {
@@ -528,6 +551,27 @@ export default function UploadPanel() {
     }
   }
 
+  async function handleGenerateReport() {
+    if (!collectionId || generatingReport) return
+    setError(null)
+    setGeneratingReport(true)
+    try {
+      const data = await apiJson<{ report_id: string }>('/reports', {
+        method: 'POST',
+        body: JSON.stringify({ collection_id: collectionId }),
+      })
+      // Counts a usage unit the moment the run starts -- refresh before we
+      // navigate so a back-button return shows the right number.
+      void refreshCounts()
+      router.push(`/dashboard/reports/${data.report_id}`)
+    } catch (err) {
+      setError(describeError(err, 'Could not start the report'))
+      setGeneratingReport(false)
+    }
+    // No finally-reset on success: we're navigating away; resetting here
+    // would blink the button back to enabled for a frame first.
+  }
+
   const parsed = report ? splitReport(report) : null
   // "ready" is the only status the retriever can actually search; processing/
   // failed docs don't count toward being able to ask.
@@ -560,6 +604,11 @@ export default function UploadPanel() {
           {researchToday !== null && (
             <span className={researchToday >= limits.max_research_per_day ? 'font-medium text-critical' : ''}>
               Research today {researchToday}/{limits.max_research_per_day}
+            </span>
+          )}
+          {reportsToday !== null && (
+            <span className={reportsToday >= limits.max_reports_per_day ? 'font-medium text-critical' : ''}>
+              Reports today {reportsToday}/{limits.max_reports_per_day}
             </span>
           )}
         </div>
@@ -786,6 +835,29 @@ export default function UploadPanel() {
               )}
             </div>
           </form>
+
+          {/* Report generation (Sprint 4.6a, D17) -- the product's headline:
+              a separate flow from Ask. ARGUS reads EVERY document in the
+              collection (not just the top search hits), picks a domain-fitting
+              report structure, and writes a formatted draft you can download
+              as .docx or PDF. Same double-guard convention as Ask: button
+              disabled without ready docs, and the backend independently 400s. */}
+          <div className="space-y-2 rounded-lg border border-hairline bg-surface-page p-4">
+            <h3 className="text-sm font-semibold text-ink-secondary">Generate a report</h3>
+            <p className="text-xs text-ink-muted">
+              ARGUS reads every document in this collection and writes a structured, formatted
+              report draft — preview it, then download it as .docx or save it as a PDF.
+              Generation takes a few minutes and counts toward your daily report limit.
+            </p>
+            <button
+              type="button"
+              onClick={handleGenerateReport}
+              disabled={generatingReport || !hasReadyDocs}
+              className={primaryBtn}
+            >
+              {generatingReport ? 'Starting…' : 'Generate report'}
+            </button>
+          </div>
 
           {parsed && (
             <div className="rounded-lg border border-hairline bg-surface p-4 text-sm text-ink">

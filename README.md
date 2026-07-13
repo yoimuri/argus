@@ -59,13 +59,15 @@ tested against the real app, and the results, pass and fail alike, are recorded 
   planning), the Critic with a bounded self-check retry loop, Langfuse tracing, the Postgres
   execution log, and the Web Scout live-web-search agent, each behind its own threat model.
   See `docs/PHASE3.md`.
-- **Phase 4, dashboard + public landing: in progress.** A live view of the system's own health
-  and security events, a research-session timeline UI, a public landing page, and Google
-  sign-up. Six sprints; the first two (backend hardening, theme system + SOC page) are
-  live-verified for functionality, the third (session history, execution timeline, cancel
-  support) is code-complete. The dashboard's per-account data isolation is enforced by database
-  row-level security but its cross-account test is still pending a second account, and is tracked
-  as such rather than claimed done. Scope in `docs/ROADMAP.md` and `docs/PHASE4.md`.
+- **Phase 4, dashboard + public landing + deliverables: in progress.** A live view of the
+  system's own health and security events, a research-session timeline UI, a public landing page
+  with Google sign-up and per-user usage limits — all live-verified. Two newer pieces are built
+  but awaiting their live test runs: a public project-Q&A chatbot (rate-limited, statically
+  grounded) and the headline report-generation flow (a collection of messy PDFs becomes a
+  domain-templated, downloadable `.docx`/PDF draft — with a visible proofread-before-use
+  disclaimer by design). Figure generation and reading images inside PDFs are planned, not built.
+  Some cross-account isolation checks are still tracked as pending rather than claimed done.
+  Scope in `docs/ROADMAP.md` and `docs/PHASE4.md`.
 
 This project follows a deliberate phased build plan, shipping and deploying after every phase
 instead of building everything at once. Full plan in `docs/BLUEPRINT.md`, current roadmap in

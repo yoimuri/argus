@@ -4,10 +4,13 @@ import { useEffect, useRef, useState } from 'react'
 import { MessageCircle, X, Send, Loader2, Minus, Maximize2, Minimize2 } from 'lucide-react'
 
 // Public project-Q&A chatbot widget (Sprint 4.5), floating on the landing page
-// for recruiters who'd rather ask than read. Calls our own backend /chat
-// (already in the CSP connect-src via NEXT_PUBLIC_API_URL); the backend does
-// the Gemini call server-side, defended by rate limiting + static grounding
-// (ADR-021). Unauthenticated -- no token attached.
+// for recruiters who'd rather ask than read -- and, since 2026-07-13 (Clint's
+// request), on every dashboard page too, so signed-in users can ask how to
+// navigate the app. Calls our own backend /chat (already in the CSP
+// connect-src via NEXT_PUBLIC_API_URL); the backend does the Gemini call
+// server-side, defended by rate limiting + static grounding (ADR-021).
+// Unauthenticated by design -- no token attached even when mounted behind
+// login, so the bot can never touch user data.
 //
 // Window controls (Clint, 2026-07-12): minimize keeps the conversation and
 // collapses back to the launcher; close also resets the thread; expand toggles
@@ -19,7 +22,7 @@ type Msg = { role: 'user' | 'bot'; text: string }
 
 const GREETING: Msg = {
   role: 'bot',
-  text: "Hi! I can answer questions about ARGUS — what it does, how it's built, or the security behind it. What would you like to know?",
+  text: "Hi! I can answer questions about ARGUS — what it does, how it's built, how to find your way around the app, or how to reach its author. What would you like to know?",
 }
 
 const HEADER_BUTTON =
@@ -97,7 +100,7 @@ export default function ChatWidget() {
           type="button"
           onClick={() => setOpen(true)}
           aria-label="Ask about ARGUS"
-          className="fixed bottom-5 right-5 z-40 flex cursor-pointer items-center gap-2 rounded-full bg-accent px-4 py-3 text-sm font-medium text-accent-contrast shadow-lg transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
+          className="fixed bottom-5 right-5 z-40 flex cursor-pointer items-center gap-2 rounded-full bg-accent px-4 py-3 text-sm font-medium text-accent-contrast shadow-lg transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface print:hidden"
         >
           <MessageCircle size={18} strokeWidth={2} aria-hidden />
           Ask about ARGUS
@@ -107,7 +110,7 @@ export default function ChatWidget() {
       {open && (
         <div
           className={
-            'fixed bottom-5 right-5 z-40 flex w-[calc(100vw-2.5rem)] flex-col overflow-hidden rounded-2xl border border-hairline bg-surface-raised shadow-lg ' +
+            'fixed bottom-5 right-5 z-40 flex w-[calc(100vw-2.5rem)] flex-col overflow-hidden rounded-2xl border border-hairline bg-surface-raised shadow-lg print:hidden ' +
             (expanded
               ? 'h-[min(42rem,calc(100vh-5rem))] max-w-xl'
               : 'h-[28rem] max-w-sm')
@@ -117,7 +120,7 @@ export default function ChatWidget() {
             <MessageCircle size={16} strokeWidth={1.75} className="text-accent" aria-hidden />
             <div className="min-w-0 flex-1">
               <p className="text-sm font-semibold text-ink">Ask about ARGUS</p>
-              <p className="text-[11px] text-ink-muted">Answers about the project only.</p>
+              <p className="text-[11px] text-ink-muted">Answers about ARGUS and how to use it.</p>
             </div>
             <button
               type="button"
