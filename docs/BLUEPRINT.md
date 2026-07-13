@@ -434,7 +434,7 @@ every `/dashboard/*` route stays session-guarded (`proxy.ts` `isPublicPath` matc
 /research [POST,GET] · /research/{id} [GET,DELETE] · /research/{id}/trace [GET]
 /research/{id}/cancel [POST]
 /reports [POST,GET] · /reports/{id} [GET,DELETE] · /reports/{id}/cancel [POST]
-/reports/{id}/docx [GET]   (Sprint 4.6a report generation — ADR-022)
+/reports/{id}/docx [GET]   (Sprint 4.6a report generation — ADR-022; POST takes collection_id OR session_id)
 /account [DELETE]   (account-data purge after the 7-day grace period — ADR-020)
 /chat [POST]        (PUBLIC, unauthenticated — project-Q&A chatbot, rate-limited — ADR-021)
 ```
@@ -446,14 +446,18 @@ the wire.
 
 Report generation (Sprint 4.6a, ADR-022) is deliberately asynchronous: `POST /reports` creates a
 `reports` row (migration 017) and returns immediately; an in-process background task classifies
-the collection's domain, picks a template (built-in cybersec/data-sci, Tavily-looked-up for other
-recognized domains with the same injection scan as Web Scout, general fallback), map-reduces ALL
-of the collection's chunks (not top-5 retrieval) through Groq — the fast small model for map
-passes, `openai/gpt-oss-120b` for the final write — and patches the row; the frontend polls it.
-Cancel is the same DB-signal pattern as research (`POST /reports/{id}/cancel`). `GET
-/reports/{id}/docx` builds the downloadable `.docx` on demand via python-docx; the PDF path is
-print-CSS on the preview page. Metered by `usage_events` (`event_type='report'`) against
-`usage_limits.max_reports_per_day`. Every report carries a visible needs-proofreading disclaimer.
+the domain, picks a template (built-in cybersec/data-sci, Tavily-looked-up for other recognized
+domains with the same injection scan as Web Scout, general fallback), generates the whole-collection
+report (not top-5 retrieval) through Groq, and patches the row; the frontend polls it. The engine is
+size-tiered (2026-07-13): a **single-pass** call on `openai/gpt-oss-120b` when the whole collection
+fits its context (the common case — one call), or a **concurrent map-reduce** (fast small model for
+the map passes, `gpt-oss-120b` for the final write) for large collections. `POST /reports` takes
+exactly one of `collection_id` (whole-collection) or `session_id` (reuse a completed research
+session's answer — one reduce call, no re-processing). Cancel is the same DB-signal pattern as
+research (`POST /reports/{id}/cancel`). `GET /reports/{id}/docx` builds the downloadable `.docx` on
+demand via python-docx; the PDF path is print-CSS on the preview page. Metered by `usage_events`
+(`event_type='report'`) against `usage_limits.max_reports_per_day`. Every report carries a visible
+needs-proofreading disclaimer.
 
 Cancellation (Sprint 4.3 rework #2, 2026-07-10) is an explicit DB signal, not disconnect
 detection — Render's proxy buffers the request cycle, so the backend can never observe a client

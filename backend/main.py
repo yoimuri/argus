@@ -62,7 +62,11 @@ class ChatRequest(BaseModel):
 
 
 class ReportCreateRequest(BaseModel):
-    collection_id: str
+    # Exactly one source (validated in the handler): a collection (full
+    # whole-collection generation) OR a completed research session (reuse its
+    # answer — cheaper, Clint 2026-07-13).
+    collection_id: Optional[str] = None
+    session_id: Optional[str] = None
 
 
 # Sprint 4.6a: report generation runs as an in-process background task (the
@@ -1059,15 +1063,120 @@ async def get_research_trace(session_id: str, request: Request):
 REPORT_STALE_MINUTES = 20
 
 
+async def _launch_report_task(coro):
+    """Fire a report background task and anchor it in _report_tasks so asyncio's
+    weak reference can't let it be garbage-collected mid-generation."""
+    task = asyncio.create_task(coro)
+    _report_tasks.add(task)
+    task.add_done_callback(_report_tasks.discard)
+
+
+async def _check_report_cap(user_id, token):
+    """Shared by both report sources. Daily cap counts usage_events (append-only,
+    migration 014) — same bypass-proof source as the research cap: deleting
+    reports or collections never refunds a unit. Raises 429 at the cap."""
+    limits = await _get_usage_limits(user_id, token)
+    since = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    reports_today = await _count_rows(
+        f"usage_events?user_id=eq.{user_id}&event_type=eq.report&created_at=gte.{since}&select=id",
+        token,
+    )
+    if reports_today >= limits["max_reports_per_day"]:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Free-tier limit reached: {limits['max_reports_per_day']} generated reports per day. "
+            "Try again tomorrow.",
+        )
+
+
+async def _create_report_row_and_meter(user_id, token, collection_id, collection_name):
+    """Insert the 'running' row (the polling interface) and log the metering
+    event. Returns the new report id. Metered only AFTER all checks passed, so
+    only genuine runs consume a unit."""
+    rows = await supabase_request(
+        "POST", "reports", token,
+        json_body={
+            "user_id": user_id,
+            "collection_id": collection_id,
+            "collection_name": collection_name,
+            "status": "running",
+        },
+    )
+    if not rows:
+        raise HTTPException(status_code=500, detail="Failed to create the report record.")
+    report_id = rows[0]["id"]
+    try:
+        await supabase_request(
+            "POST", "usage_events", token,
+            json_body={"user_id": user_id, "event_type": "report"},
+        )
+    except Exception as usage_err:
+        print(f"[ARGUS] could not log report usage_event (metering degraded for this run): {usage_err}")
+    return report_id
+
+
 @app.post("/reports")
 async def create_report(req: ReportCreateRequest, request: Request):
     """Starts a report generation and returns immediately (the row is the
-    interface — the frontend polls GET /reports/{id}). Validation order
-    mirrors /research: ownership → content → cap → insert row → meter →
-    launch task, so a rejected request costs no Groq/Tavily quota."""
+    interface — the frontend polls GET /reports/{id}). Two sources, exactly one
+    per request: a whole COLLECTION (full generation) or a completed research
+    SESSION (reuse its answer — cheaper). Validation order mirrors /research:
+    ownership → content → cap → insert row → meter → launch task, so a rejected
+    request costs no Groq/Tavily quota."""
     token = request.state.access_token
     user_id = request.state.user_id
+    user_agent = request.headers.get("user-agent", "")[:300]
 
+    if bool(req.collection_id) == bool(req.session_id):
+        raise HTTPException(
+            status_code=400,
+            detail="Provide exactly one of collection_id or session_id.",
+        )
+
+    # -- Source B: from a completed research session (reuse its answer) ------
+    if req.session_id:
+        if not _valid_uuid(req.session_id):
+            raise HTTPException(status_code=404, detail="Session not found.")
+        # RLS scopes this to the caller's own sessions, so foreign/nonexistent
+        # both 404 identically.
+        sessions = await supabase_request(
+            "GET",
+            f"research_sessions?id=eq.{req.session_id}&select=collection_id,query,report,status",
+            token,
+        )
+        if not sessions:
+            raise HTTPException(status_code=404, detail="Session not found.")
+        session = sessions[0]
+        if session["status"] not in ("completed", "completed_with_fallback") or not session.get("report"):
+            raise HTTPException(
+                status_code=400,
+                detail="This session has no completed answer to build a report from.",
+            )
+        # Best-effort collection name for the label; the collection may have
+        # been deleted since (report survives that — reports.collection_id is
+        # SET NULL), so fall back to a generic label rather than failing.
+        collection_name = "Collection"
+        coll_id = session.get("collection_id")
+        if coll_id:
+            coll = await supabase_request(
+                "GET", f"collections?id=eq.{coll_id}&select=name", token,
+            )
+            if coll:
+                collection_name = coll[0].get("name") or collection_name
+
+        await _check_report_cap(user_id, token)
+        report_id = await _create_report_row_and_meter(user_id, token, coll_id, collection_name)
+
+        from app.services.report_generator import generate_report_from_session
+        await _launch_report_task(
+            generate_report_from_session(
+                report_id, session["query"], session["report"], collection_name,
+                user_id, token, user_agent,
+            )
+        )
+        return {"report_id": report_id, "status": "running"}
+
+    # -- Source A: from a whole collection -----------------------------------
     if not _valid_uuid(req.collection_id):
         raise HTTPException(status_code=404, detail="Collection not found.")
     owned = await supabase_request(
@@ -1086,57 +1195,13 @@ async def create_report(req: ReportCreateRequest, request: Request):
             detail="This collection has no ready documents yet. Upload a PDF first, then generate.",
         )
 
-    # Daily cap — counts usage_events (append-only, migration 014), same
-    # bypass-proof source as the research cap: deleting reports or collections
-    # never refunds a unit.
-    limits = await _get_usage_limits(user_id, token)
-    since = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    reports_today = await _count_rows(
-        f"usage_events?user_id=eq.{user_id}&event_type=eq.report&created_at=gte.{since}&select=id",
-        token,
-    )
-    if reports_today >= limits["max_reports_per_day"]:
-        raise HTTPException(
-            status_code=429,
-            detail=f"Free-tier limit reached: {limits['max_reports_per_day']} generated reports per day. "
-            "Try again tomorrow.",
-        )
+    await _check_report_cap(user_id, token)
+    report_id = await _create_report_row_and_meter(user_id, token, req.collection_id, collection_name)
 
-    rows = await supabase_request(
-        "POST", "reports", token,
-        json_body={
-            "user_id": user_id,
-            "collection_id": req.collection_id,
-            "collection_name": collection_name,
-            "status": "running",
-        },
-    )
-    if not rows:
-        raise HTTPException(status_code=500, detail="Failed to create the report record.")
-    report_id = rows[0]["id"]
-
-    # Meter AFTER all checks passed, so only genuine runs consume a unit.
-    # Best-effort, same stance as the research metering write.
-    try:
-        await supabase_request(
-            "POST", "usage_events", token,
-            json_body={"user_id": user_id, "event_type": "report"},
-        )
-    except Exception as usage_err:
-        print(f"[ARGUS] could not log report usage_event (metering degraded for this run): {usage_err}")
-
-    # Lazy import (groq client construction), then fire the background task.
-    # The _report_tasks anchor prevents asyncio's weak reference from letting
-    # the task be garbage-collected mid-generation.
     from app.services.report_generator import generate_report
-
-    user_agent = request.headers.get("user-agent", "")[:300]
-    task = asyncio.create_task(
+    await _launch_report_task(
         generate_report(report_id, req.collection_id, collection_name, user_id, token, user_agent)
     )
-    _report_tasks.add(task)
-    task.add_done_callback(_report_tasks.discard)
-
     return {"report_id": report_id, "status": "running"}
 
 

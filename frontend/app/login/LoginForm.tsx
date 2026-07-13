@@ -54,11 +54,14 @@ export default function LoginForm() {
         // Supabase Auth → URL Configuration (Clint's manual step).
         options: {
           redirectTo: `${window.location.origin}/auth/callback`,
-          // Without this, a browser already signed into one Google account gets
-          // silently logged straight in -- no screen, no chance to cancel.
-          // prompt=select_account forces Google's account-chooser page every
-          // time, which is the confirm/cancel step (Clint, 2026-07-12).
-          queryParams: { prompt: 'select_account' },
+          // prompt=consent forces Google's consent screen -- the "Google will
+          // allow ... to access this info / Continue or Cancel" page, with the
+          // account shown and a switcher on it -- EVERY time, instead of
+          // silently reusing an existing Google session. That confirm/cancel
+          // step is exactly what Clint wanted shown on every sign-in
+          // (2026-07-13, correcting the earlier select_account, which only
+          // showed the account picker and could still skip the consent step).
+          queryParams: { prompt: 'consent' },
         },
       })
       if (error) {

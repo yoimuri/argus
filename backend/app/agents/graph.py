@@ -39,6 +39,19 @@ def route_after_critic(state) -> str:
     # On a retry, the diary (execution_steps) shows retriever/synthesizer/critic
     # running TWICE with a continuous step_index (0-7 total) — that's the
     # intended, visible record of the self-check loop firing, not a bug.
+    #
+    # Skip the retry for "meta" intent (2026-07-13, live latency fix). A
+    # summarize/overview query spans the whole document, so the critic almost
+    # always grades it "low" (a summary generalizes past any 8 retrieved
+    # chunks) and asks for a retry -- but the second pass retrieves similarly
+    # broad chunks and grades "low" again (observed live: low -> retry -> low),
+    # so it only DOUBLES latency without changing the outcome. Specific and
+    # broad questions can still have real missing info a targeted retry finds,
+    # so they keep the loop. The confidence badge still reports the critic's
+    # honest first-pass grade; we just don't burn a second pass we know won't
+    # move it.
+    if state.get("intent") == "meta":
+        return "done"
     if state.get("needs_retry") and state.get("loop_count", 0) < 2:
         return "retry"
     return "done"

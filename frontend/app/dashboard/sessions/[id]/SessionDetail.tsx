@@ -2,11 +2,14 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import ReactMarkdown from 'react-markdown'
+import { FileText } from 'lucide-react'
 import { apiJson, ApiError } from '@/utils/api'
 import { splitReport } from '@/utils/report'
 import StatusPill from '@/components/StatusPill'
 import ConfidenceBadge from '@/components/ConfidenceBadge'
+import { buttonClasses } from '@/components/ui/Button'
 import ExecutionTimeline from './ExecutionTimeline'
 
 interface SessionData {
@@ -30,11 +33,38 @@ interface TraceStep {
 const POLL_MS = 4000
 
 export default function SessionDetail({ sessionId }: { sessionId: string }) {
+  const router = useRouter()
   const [session, setSession] = useState<SessionData | null>(null)
   const [steps, setSteps] = useState<TraceStep[]>([])
   const [notFound, setNotFound] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [generatingReport, setGeneratingReport] = useState(false)
+  // Separate from `error` above on purpose: `error` drives a full-page "could
+  // not load" state, but a failed report-start must NOT blank the session view.
+  const [reportError, setReportError] = useState<string | null>(null)
+
+  // Concern 4 (Clint, 2026-07-13): reuse this completed answer as a report
+  // instead of re-processing the collection. Backend does one reduce call.
+  async function handleGenerateReport() {
+    if (generatingReport) return
+    setReportError(null)
+    setGeneratingReport(true)
+    try {
+      const data = await apiJson<{ report_id: string }>('/reports', {
+        method: 'POST',
+        body: JSON.stringify({ session_id: sessionId }),
+      })
+      router.push(`/dashboard/reports/${data.report_id}`)
+    } catch (err) {
+      setReportError(
+        err instanceof ApiError && err.status === 429
+          ? 'You have reached your daily report limit. Try again tomorrow.'
+          : 'Could not start the report.',
+      )
+      setGeneratingReport(false)
+    }
+  }
 
   // Parallel fetch, both endpoints independently 404 for "not owned" OR
   // "doesn't exist" (RLS makes the two indistinguishable) -- Promise.all
@@ -131,6 +161,22 @@ export default function SessionDetail({ sessionId }: { sessionId: string }) {
               </div>
             )}
           </div>
+          {/* Reuse this completed answer as a formatted report (concern 4). */}
+          <div className="mt-3 flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={handleGenerateReport}
+              disabled={generatingReport}
+              className={buttonClasses('secondary', 'sm')}
+            >
+              <FileText size={14} aria-hidden />
+              {generatingReport ? 'Starting…' : 'Generate report from this answer'}
+            </button>
+            <span className="text-xs text-ink-muted">
+              Turns this answer into a formatted, downloadable report.
+            </span>
+          </div>
+          {reportError && <p className="mt-2 text-xs text-critical">{reportError}</p>}
         </section>
       )}
     </div>

@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { MessageCircle, X, Send, Loader2, Minus, Maximize2, Minimize2 } from 'lucide-react'
+import ReactMarkdown from 'react-markdown'
 
 // Public project-Q&A chatbot widget (Sprint 4.5), floating on the landing page
 // for recruiters who'd rather ask than read -- and, since 2026-07-13 (Clint's
@@ -27,6 +28,34 @@ const GREETING: Msg = {
 
 const HEADER_BUTTON =
   'flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-ink-muted transition-colors hover:bg-accent-wash hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent'
+
+// Bot replies are Markdown (the model may emit **bold**, a short list, or a
+// link). Rendering it is what stops the raw `*`/`**` symbols the plain-text
+// bubble used to show. react-markdown outputs no raw HTML by default (safe);
+// these components just make links open safely in a new tab and keep the
+// bubble's spacing tight. User messages stay plain text -- never rendered as
+// markdown, so a user can't inject formatting into their own bubble.
+const MARKDOWN_COMPONENTS = {
+  a: ({ href, children }: { href?: string; children?: React.ReactNode }) => (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="font-medium text-accent underline underline-offset-2"
+    >
+      {children}
+    </a>
+  ),
+  ul: ({ children }: { children?: React.ReactNode }) => (
+    <ul className="my-1 list-disc space-y-0.5 pl-4">{children}</ul>
+  ),
+  ol: ({ children }: { children?: React.ReactNode }) => (
+    <ol className="my-1 list-decimal space-y-0.5 pl-4">{children}</ol>
+  ),
+  p: ({ children }: { children?: React.ReactNode }) => (
+    <p className="[&:not(:first-child)]:mt-2">{children}</p>
+  ),
+}
 
 export default function ChatWidget() {
   const [open, setOpen] = useState(false)
@@ -160,13 +189,17 @@ export default function ChatWidget() {
               <div key={i} className={m.role === 'user' ? 'flex justify-end' : 'flex justify-start'}>
                 <div
                   className={
-                    'max-w-[85%] whitespace-pre-wrap rounded-2xl px-3 py-2 text-sm leading-relaxed ' +
+                    'max-w-[85%] rounded-2xl px-3 py-2 text-sm leading-relaxed ' +
                     (m.role === 'user'
-                      ? 'bg-accent text-accent-contrast'
+                      ? 'whitespace-pre-wrap bg-accent text-accent-contrast'
                       : 'bg-surface text-ink border border-hairline')
                   }
                 >
-                  {m.text}
+                  {m.role === 'user' ? (
+                    m.text
+                  ) : (
+                    <ReactMarkdown components={MARKDOWN_COMPONENTS}>{m.text}</ReactMarkdown>
+                  )}
                 </div>
               </div>
             ))}

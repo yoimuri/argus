@@ -572,6 +572,27 @@ export default function UploadPanel() {
     // would blink the button back to enabled for a frame first.
   }
 
+  // Concern 4 (Clint, 2026-07-13): turn the answer we JUST got into a report
+  // without re-processing the collection. The completed session already holds
+  // the synthesized answer; the backend reuses it (one reduce call), which
+  // saves both time and a chunk of the report's generation cost.
+  async function handleGenerateFromAnswer() {
+    if (!sessionId || generatingReport) return
+    setError(null)
+    setGeneratingReport(true)
+    try {
+      const data = await apiJson<{ report_id: string }>('/reports', {
+        method: 'POST',
+        body: JSON.stringify({ session_id: sessionId }),
+      })
+      void refreshCounts()
+      router.push(`/dashboard/reports/${data.report_id}`)
+    } catch (err) {
+      setError(describeError(err, 'Could not start the report'))
+      setGeneratingReport(false)
+    }
+  }
+
   const parsed = report ? splitReport(report) : null
   // "ready" is the only status the retriever can actually search; processing/
   // failed docs don't count toward being able to ask.
@@ -876,6 +897,16 @@ export default function UploadPanel() {
                   <Link href={`/dashboard/sessions/${sessionId}`} className="text-xs text-accent hover:underline">
                     View execution trace →
                   </Link>
+                )}
+                {sessionId && (
+                  <button
+                    type="button"
+                    onClick={handleGenerateFromAnswer}
+                    disabled={generatingReport}
+                    className={ghostBtn}
+                  >
+                    {generatingReport ? 'Starting…' : 'Generate report from this answer'}
+                  </button>
                 )}
               </div>
               {showDetails && (

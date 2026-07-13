@@ -914,8 +914,11 @@ Full design reasoning in `docs/ADR-022.md`; the short version:
 
 - **Engine:** domain classification → template (built-in cybersec/data-sci; Tavily-looked-up
   structure for other recognized domains, every snippet injection-scanned like Web Scout's;
-  general fallback) → whole-collection **map-reduce over ALL chunks** (not top-5 RAG — the
-  plan's caution #2 confronted, `retriever.py` deliberately bypassed) → one large-model write.
+  general fallback) → whole-collection generation (not top-5 RAG — the plan's caution #2
+  confronted, `retriever.py` deliberately bypassed). Two engines by size (revised 2026-07-13):
+  **single-pass** for collections that fit the large model's context (≤120k chars → ONE reduce
+  call, the common case), **concurrent map-reduce** for larger ones. A completed research session
+  can also be the source (reuse its answer → one reduce call, no re-processing).
 - **Models:** map/classify on `openai/gpt-oss-20b`, the final reduce on **`openai/gpt-oss-120b`**
   — Groq's largest production model, the one flow that justifies it (caution #1 confronted).
   IDs verified against Groq's live model list 2026-07-13; env-overridable.
@@ -952,6 +955,41 @@ tight defaults (including his own account) and report generation 502s cleanly on
 table; (2) `git push` (Render installs python-docx from requirements.txt, Vercel rebuilds);
 (3) run GATE-28 (below) and re-run GATE-27(a) to confirm the chatbot's new dashboard placement +
 contact answers.
+
+##### Sprint 4.6a live-test fix batch (2026-07-13)
+
+Clint live-tested 4.6a and reported five issues; all addressed same day (no new migration — his
+manual steps are unchanged: paste 017, push, re-test):
+
+1. **Report generation too slow / "took forever then failed" with a 200 in the logs.** The 200
+   was just the initial `POST /reports` returning; the real failure was in the background task.
+   Root cause: the first cut always ran the full map-reduce — ~25 *sequential* Groq calls even for
+   a small collection — which exhausted the free-tier rate limit mid-run (and the 8192/medium
+   reduce budget could truncate-fail on a long report). Fix (ADR-022 §1, revised): a **single-pass
+   engine** for collections that fit the large model's context (≤120k chars → ONE reduce call, the
+   common case), map-reduce reserved for genuinely large collections with its batches now running
+   **concurrently** and fewer of them; reduce budget raised to 16384 at low effort so it stops
+   truncating. Normal reports now finish in seconds, not minutes.
+2. **Reuse a completed answer instead of re-processing (concern 4).** `POST /reports` now accepts a
+   `session_id` as an alternative to `collection_id`: it builds the report from a completed research
+   session's already-synthesized answer (classify + one reduce call), so a user who already asked a
+   question turns that answer into a formatted report cheaply. Buttons added on the Workspace Ask
+   result and on a completed Session detail page. Still metered as one report.
+3. **Chatbot showed raw Markdown symbols** (`*`, `**`, un-clickable links). The widget rendered bot
+   replies as plain text; it now renders Markdown (`react-markdown`, links open safely in a new
+   tab; user messages stay plain text). The system prompt also gained a voice guide: warm,
+   conversational, plain English, prose over bullet lists, no em dashes or buzzwords, contact links
+   woven into a sentence — and an explicit "never output raw JSON or escaped characters."
+4. **Google sign-in should show the consent screen every time.** Changed `prompt=select_account`
+   (account picker only) → `prompt=consent` (the "Google will allow… Continue/Cancel" screen, with
+   an account switcher on it, shown on every sign-in — matching the screenshot Clint sent).
+5. **Slow "Ask" + low-confidence-then-fine on summaries.** A `meta` (summarize/overview) query
+   almost always makes the Critic grade "low" and retry, but the retry retrieves similarly broad
+   chunks and grades "low" again — doubling latency without changing the outcome (visible in his
+   trace: low → retry → low, with an 18s Critic call). `graph.py`'s `route_after_critic` now skips
+   the retry for `meta` intent only; specific/broad questions keep the loop (a targeted retry can
+   still find real missing info there). The confidence badge still reports the honest first-pass
+   grade. This is a latency fix on the documented ADR-015 non-determinism, not a claim it's gone.
 
 #### Sprint 4.6b / 4.6c — still to build
 
