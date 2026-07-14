@@ -6,6 +6,62 @@ Newest batch on top.
 
 ---
 
+## 2026-07-14 — Sprint 4.7 presentability (Opus)
+
+The visual overhaul + motion + How-to guide + interactive tour + charts-in-Ask +
+"Generate another version". All 🟡 code-complete, not yet live-verified. No
+migration. Push first, then work through these.
+
+**T9 — The app feels alive (motion).**
+- Steps: click between Dashboard, Workspace, Sessions, Reports, SOC.
+- Expected: page content gently rises/fades in on each load (fast, ~0.3s). The
+  dashboard count cards and their icons animate in one after another (a slight
+  stagger), and hovering a card lifts it a touch. Nothing janky, nothing slow.
+- Reduced-motion check: turn on your OS "reduce motion" setting and reload. The
+  content should just appear instantly with no animation, still fully readable.
+
+**T10 — The How-to page (#6).**
+- Steps: there's a new "How to" item in the top nav. Open it.
+- Expected: a step-by-step guide, one card per feature (ask a question, generate a
+  report, sessions, SOC, settings), each with numbered steps in plain language. A
+  green highlighted card at the top invites you to take the tour. Near the bottom,
+  three copy-paste prompts for the assistant with Copy buttons.
+
+**T11 — The interactive tour (#6).**
+- Steps: on the How-to page, click "Take the interactive tour".
+- Expected: the screen dims and a spotlight ring highlights ONE real nav item at a
+  time (Workspace, then Sessions, Reports, SOC, then the chat button), with a
+  tooltip explaining each. Next / Back work, the arrow keys work, clicking the dim
+  advances, and the X or Esc closes it. It points at the ACTUAL app, not a picture.
+
+**T12 — Charts inside an Ask answer (#2 / #3).**
+- Steps: ask a question whose answer involves a few numbers from your docs, e.g.
+  "What share of breaches does each cause represent?" on the DBIR.
+- Expected: the answer can now include a REAL bar/line chart (same clean style as
+  reports), not ASCII art and not "I can't display it". Ask something with no
+  numbers and you should get plain text, no chart. The charted numbers must match
+  the source (invented numbers = a problem to tell me about).
+
+**T13 — Generate another version (#5, the safe half).**
+- Steps: open a completed report that was made from a collection. Click "Generate
+  another version".
+- Expected: it starts a NEW report from the same collection (a fresh take) and
+  takes you to it. The original report is still there, untouched. (A report made
+  from a session answer won't show this button, that's expected.)
+- Note: the fuller "revise this draft with a note, using the old one as
+  reference" is deliberately NOT built yet, it's an injection-sensitive feature
+  getting its own careful pass.
+
+**T14 — The assistant knows the new stuff (#2).**
+- Steps: open the chat, ask "how do I start?" or "how do I generate a report?".
+- Expected: it gives clear numbered steps and points you to the How-to page /
+  tour. Ask "can reports have charts?" and it should say yes, from your numbers.
+
+**T15 — Login polish + everything still works.**
+- Steps: sign out, open the login page.
+- Expected: a small ARGUS brand mark (eye icon) above the title, the card eases in,
+  and Google + email login still work exactly as before.
+
 ## 2026-07-14 — cleanup batch (Opus)
 
 ### Before you start (do these once)

@@ -201,6 +201,62 @@ body {
   }
 }
 
+/* ── Sprint 4.7 presentability: shared motion + craft layer ───────────────────
+   One rhythm for the whole app (ui-ux-pro-max craft rules): transform/opacity
+   only, 150–320ms, ease-out on enter, and EVERY motion guarded by
+   prefers-reduced-motion. These are utility classes so the polish propagates
+   without hand-editing every element. */
+
+/* Entrance: content rises + fades in on mount. Because opacity:0 lives ONLY
+   inside the keyframe (not as a base rule), an element with .rise but no
+   animation — reduced-motion, or JS/paint quirk — stays fully visible. So it
+   can never hide content, matching the landing page's "visible by default" rule. */
+@keyframes rise {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .rise   { animation: rise 0.34s cubic-bezier(0.22, 1, 0.36, 1) both; }
+  /* Stagger children of a .rise-group so a row/grid resolves in sequence
+     (~50ms/step, ui-ux-pro-max stagger-sequence), not all at once. */
+  .rise-group > *          { animation: rise 0.34s cubic-bezier(0.22, 1, 0.36, 1) both; }
+  .rise-group > *:nth-child(1) { animation-delay: 0.03s; }
+  .rise-group > *:nth-child(2) { animation-delay: 0.08s; }
+  .rise-group > *:nth-child(3) { animation-delay: 0.13s; }
+  .rise-group > *:nth-child(4) { animation-delay: 0.18s; }
+  .rise-group > *:nth-child(5) { animation-delay: 0.23s; }
+  .rise-group > *:nth-child(6) { animation-delay: 0.28s; }
+
+  /* Card hover lift: a 2px raise + soft shadow, transform/box-shadow only so it
+     never reflows neighbours. Pair with .lift on a card that is itself a link. */
+  .lift { transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease; }
+  .lift:hover { transform: translateY(-2px); box-shadow: 0 8px 24px -12px rgba(11, 11, 11, 0.28); }
+}
+[data-theme="dark"] .lift:hover { box-shadow: 0 8px 24px -10px rgba(0, 0, 0, 0.6); }
+@media (prefers-reduced-motion: reduce) {
+  .rise, .rise-group > * { animation: none; }
+}
+
+/* Skeleton shimmer: a light sweep across a token-coloured block, calmer than a
+   hard pulse for >300ms loads (ui-ux-pro-max progressive-loading). */
+@keyframes shimmer { 100% { transform: translateX(100%); } }
+.skeleton { position: relative; overflow: hidden; background: var(--color-hairline); }
+@media (prefers-reduced-motion: no-preference) {
+  .skeleton::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    transform: translateX(-100%);
+    background: linear-gradient(
+      90deg,
+      transparent,
+      color-mix(in srgb, var(--color-surface-raised) 65%, transparent),
+      transparent
+    );
+    animation: shimmer 1.5s ease-in-out infinite;
+  }
+}
+
 /* Generated-report typography (Sprint 4.6a). ReactMarkdown outputs bare
    h1/h2/h3/ul/ol/p tags; Tailwind's preflight strips their default styling,
    so the report preview styles them here, scoped under .report-body, on the

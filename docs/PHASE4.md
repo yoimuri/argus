@@ -1104,6 +1104,52 @@ when the PDF export was removed); (4) run GATE-28 (Quick <30s warm / Full paced 
 GATE-29 (upload security), GATE-30 (figures + `.docx` download + dyno memory); (5) delete the
 duplicate PDF copies left in the test collection.
 
+### Sprint 4.7 — Presentability pass (2026-07-14, 🟡 code-complete, not live-verified)
+
+The committed "big boom" from the 2026-07-11 owner note. Built in one pass (Clint: "start the
+whole sprint, phases 1-4, one shot"), referencing the **ui-ux-pro-max** skill for craft/motion
+rules (NOT its palette — the light-default token system is locked; the skill's dark-only OLED
+recommendation was deliberately rejected). No migration.
+
+**Phase 1+2 — shared craft + motion layer (broad leverage, not a per-pixel repaint).**
+`globals.css` gained a motion vocabulary used app-wide: `.rise` (entrance fade+translate, opacity:0
+only INSIDE the keyframe so it can never hide content), `.rise-group` (50ms child stagger), `.lift`
+(2px hover raise, transform/box-shadow only), and a `.skeleton` shimmer — every one guarded by
+`prefers-reduced-motion`. New primitives: `components/ui/Card.tsx` (one surface panel, ends the
+p-3/p-4/p-6 + rounded-lg/-xl drift), `PageHeader.tsx` (consistent title/subtitle rhythm),
+`Skeleton.tsx`. Applied across **dashboard** (icon+hero-number count cards with lift + stagger,
+sectioned usage card), **workspace / sessions / SOC / settings / reports** (PageHeader + rise), and
+the **login** page (brand eye-mark, entrance) — auth logic untouched. All on the existing tokens,
+so light/dark parity holds.
+
+**Phase 3 — How-to + interactive tour + chatbot prompt.** New **How to** nav item →
+`/dashboard/how-to`: a plain, step-by-step guide (one card per feature, SOC explained in full) with
+three ways in — read it, take the tour, or copy a ready-made prompt into the assistant
+(`CopyablePrompt`). **`GuidedTour.tsx`** is a real spotlight walkthrough: it dims the app and cuts a
+box-shadow "hole" over ACTUAL nav items (targeted by `data-tour` attributes) + the chat launcher,
+one step at a time, keyboard-driven (←/→/Esc), portal-rendered, reduced-motion aware. The chatbot
+system prompt (`project_chat.py`, #2) now describes report figures and gained a rule: if asked how
+to do something or for a walkthrough, give numbered steps and point to the How-to page.
+
+**Phase 4a — charts in Ask answers (#2/#3).** The synthesizer may now emit ONE ` ```chart ` fenced
+spec (bar/line, numbers from the context only, never ASCII art). `AnswerBody.tsx` hard-validates it
+client-side (bar/line, 2-12 finite points, capped labels, rebuilt from scratch; invalid/injected
+blocks dropped silently, never leaked as raw JSON) and renders it with the SAME `ChartFigure` the
+reports use, in both the Workspace answer and the saved session view. Zero extra Groq call, just a
+few prompt tokens; a chart is only numbers drawn as SVG, so it carries no execution surface.
+
+**Phase 4b — retain-and-revise (partial, by design).** Shipped the **safe half**: a "Generate
+another version" button on a completed report makes a fresh NEW report from the same collection
+(the original is kept). The **injection-sensitive half** — revising a draft with a note while
+feeding the prior output back in as reference — is deliberately NOT built here: it is a
+feedback-loop jailbreak surface Clint himself asked to make bulletproof, so it gets its own
+threat-modelled ADR rather than a rushed tail-of-marathon build.
+
+**Verification:** `npm run build` clean (16 routes); `pyflakes` clean on touched backend files.
+**Manual tests:** `docs/MANUAL-TESTS.md` T9–T15. **Clint's manual step:** `git push` (no migration).
+**Still open in 4.7 for a later pass:** the revise-with-note loop (above), and security testing of
+the new surfaces (Clint deferred it: "frontend UI shouldn't affect the design much").
+
 #### Sprint 4.6c — still to build
 
 **Owner clarifications (Clint, 2026-07-11 — this is the product's headline capability):** the

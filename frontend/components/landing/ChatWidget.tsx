@@ -145,6 +145,7 @@ export default function ChatWidget() {
           type="button"
           onClick={() => setOpen(true)}
           aria-label="Ask about ARGUS"
+          data-tour="chat"
           className="fixed bottom-5 right-5 z-40 flex cursor-pointer items-center gap-2 rounded-full bg-accent px-4 py-3 text-sm font-medium text-accent-contrast shadow-lg transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface print:hidden"
         >
           <MessageCircle size={18} strokeWidth={2} aria-hidden />

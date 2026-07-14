@@ -1,5 +1,8 @@
 import Link from 'next/link'
+import { FolderKanban, FileText, History, ArrowRight, type LucideIcon } from 'lucide-react'
 import { createClient } from '@/utils/supabase/server'
+import PageHeader from '@/components/ui/PageHeader'
+import { Card } from '@/components/ui/Card'
 
 // The overview Clint asked for (2026-07-10): a real dashboard landing --
 // what you have, what to do next -- instead of dropping users straight into
@@ -57,10 +60,10 @@ export default async function DashboardPage() {
     { label: 'Research today', used: researchToday.count ?? 0, max: limits.max_research_per_day },
   ]
 
-  const counts = [
-    { label: 'Collections', value: collections.count ?? 0, href: '/dashboard/workspace' },
-    { label: 'Documents', value: documents.count ?? 0, href: '/dashboard/workspace' },
-    { label: 'Research sessions', value: sessions.count ?? 0, href: '/dashboard/sessions' },
+  const counts: { label: string; value: number; href: string; icon: LucideIcon }[] = [
+    { label: 'Collections', value: collections.count ?? 0, href: '/dashboard/workspace', icon: FolderKanban },
+    { label: 'Documents', value: documents.count ?? 0, href: '/dashboard/workspace', icon: FileText },
+    { label: 'Research sessions', value: sessions.count ?? 0, href: '/dashboard/sessions', icon: History },
   ]
   const latestSession = latest.data?.[0] ?? null
   const isNew = (collections.count ?? 0) === 0
@@ -74,34 +77,39 @@ export default async function DashboardPage() {
   ]
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-lg font-semibold text-ink">Welcome, {displayName}</h1>
-        <p className="mt-1 text-sm text-ink-muted">
-          Upload a document, ask it questions, get cited answers, and see exactly how the
-          system produced them.
-        </p>
+    <div className="rise space-y-6">
+      <PageHeader
+        title={`Welcome, ${displayName}`}
+        subtitle="Upload a document, ask it questions, get cited answers, and see exactly how the system produced them."
+      />
+
+      <div className="rise-group grid grid-cols-1 gap-3 sm:grid-cols-3">
+        {counts.map((c) => {
+          const Icon = c.icon
+          return (
+            <Link key={c.label} href={c.href} className="group">
+              <Card interactive className="flex items-center gap-4">
+                <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-accent-wash text-accent transition-colors group-hover:bg-accent-wash-strong">
+                  <Icon size={20} strokeWidth={1.75} aria-hidden />
+                </span>
+                <span className="min-w-0">
+                  <span className="block text-2xl font-semibold tabular-nums leading-none text-ink">
+                    {c.value}
+                  </span>
+                  <span className="mt-1 block truncate text-xs text-ink-muted">{c.label}</span>
+                </span>
+              </Card>
+            </Link>
+          )
+        })}
       </div>
 
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-        {counts.map((c) => (
-          <Link
-            key={c.label}
-            href={c.href}
-            className="rounded-lg border border-hairline bg-surface p-4 transition-colors hover:bg-accent-wash"
-          >
-            <p className="text-2xl font-semibold text-ink">{c.value}</p>
-            <p className="mt-1 text-xs text-ink-muted">{c.label}</p>
-          </Link>
-        ))}
-      </div>
-
-      <section className="rounded-lg border border-hairline bg-surface p-4">
-        <div className="flex items-center justify-between">
+      <Card padded={false}>
+        <div className="flex items-center justify-between px-5 pt-5">
           <h2 className="text-sm font-semibold text-ink">Free-tier usage</h2>
-          <span className="text-xs text-ink-muted">resets rolling, per 24h for research</span>
+          <span className="text-xs text-ink-muted">rolling, per 24h for research</span>
         </div>
-        <div className="mt-3 space-y-3">
+        <div className="mt-4 space-y-3 px-5 pb-4">
           {meters.map((m) => {
             const pct = m.max > 0 ? Math.min(100, Math.round((m.used / m.max) * 100)) : 0
             const atLimit = m.used >= m.max
@@ -115,13 +123,13 @@ export default async function DashboardPage() {
               <div key={m.label}>
                 <div className="flex items-center justify-between text-xs">
                   <span className="text-ink-secondary">{m.label}</span>
-                  <span className={atLimit ? 'font-medium text-critical' : 'text-ink-muted'}>
+                  <span className={'tabular-nums ' + (atLimit ? 'font-medium text-critical' : 'text-ink-muted')}>
                     {m.used} / {m.max}
                   </span>
                 </div>
-                <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-hairline">
+                <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-hairline">
                   <div
-                    className="h-full rounded-full transition-all"
+                    className="h-full rounded-full transition-[width] duration-500 ease-out"
                     style={{ width: `${pct}%`, backgroundColor: barColor }}
                   />
                 </div>
@@ -129,16 +137,16 @@ export default async function DashboardPage() {
             )
           })}
         </div>
-        <p className="mt-3 text-xs text-ink-muted">
+        <p className="border-t border-hairline px-5 py-3 text-xs text-ink-muted">
           These are free-tier limits. Reach out if you need them raised.
         </p>
-      </section>
+      </Card>
 
-      <section className="rounded-lg border border-hairline bg-surface p-4">
+      <Card>
         <h2 className="text-sm font-semibold text-ink">
           {isNew ? 'Get started' : 'How it works'}
         </h2>
-        <ol className="mt-3 space-y-2">
+        <ol className="mt-4 space-y-2.5">
           {steps.map((s, i) => (
             <li key={i} className="flex items-start gap-3 text-sm">
               <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent-wash text-xs font-semibold text-accent">
@@ -153,30 +161,30 @@ export default async function DashboardPage() {
         {isNew && (
           <Link
             href="/dashboard/workspace"
-            className="mt-4 inline-block rounded-md bg-accent px-4 py-2 text-sm font-medium text-accent-contrast transition-colors hover:bg-accent-hover"
+            className="mt-5 inline-flex items-center gap-1.5 rounded-md bg-accent px-4 py-2 text-sm font-medium text-accent-contrast transition-colors hover:bg-accent-hover"
           >
-            Get started →
+            Get started <ArrowRight size={15} strokeWidth={2} aria-hidden />
           </Link>
         )}
-        <p className="mt-3 text-xs text-ink-muted">
+        <p className="mt-4 text-xs text-ink-muted">
           Note: the backend sleeps when idle (free tier), so the first action after a quiet
           period can take 30 to 60 seconds to wake it up.
         </p>
-      </section>
+      </Card>
 
       {latestSession && (
-        <section className="rounded-lg border border-hairline bg-surface p-4">
+        <Card>
           <h2 className="text-sm font-semibold text-ink">Latest research</h2>
           <Link
             href={`/dashboard/sessions/${latestSession.id}`}
-            className="mt-2 flex items-center gap-3 text-sm text-ink-secondary transition-colors hover:text-ink"
+            className="mt-3 flex items-center gap-3 text-sm text-ink-secondary transition-colors hover:text-ink"
           >
             <span className="min-w-0 flex-1 truncate">{latestSession.query}</span>
             <span className="shrink-0 text-xs text-ink-muted">
               {new Date(latestSession.created_at).toLocaleString()}
             </span>
           </Link>
-        </section>
+        </Card>
       )}
     </div>
   )

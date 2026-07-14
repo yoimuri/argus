@@ -9,6 +9,7 @@ import { apiJson, ApiError } from '@/utils/api'
 import { splitReport } from '@/utils/report'
 import StatusPill from '@/components/StatusPill'
 import ConfidenceBadge from '@/components/ConfidenceBadge'
+import AnswerBody from '@/components/reports/AnswerBody'
 import { buttonClasses } from '@/components/ui/Button'
 import ExecutionTimeline from './ExecutionTimeline'
 
@@ -147,7 +148,7 @@ export default function SessionDetail({ sessionId }: { sessionId: string }) {
         <section>
           <h2 className="mb-2 text-sm font-semibold text-ink-secondary">Report</h2>
           <div className="rounded-lg border border-hairline bg-surface p-4 text-sm text-ink">
-            <ReactMarkdown>{parsed.answer}</ReactMarkdown>
+            <AnswerBody markdown={parsed.answer} />
             {parsed.banner && (
               <p className="mt-2 text-xs italic text-ink-muted">{parsed.banner.replace(/\*/g, '')}</p>
             )}

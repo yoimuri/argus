@@ -1,5 +1,6 @@
 import BreakerPanel from './BreakerPanel'
 import SecurityEventsFeed from './SecurityEventsFeed'
+import PageHeader from '@/components/ui/PageHeader'
 
 // Auth already guarded by dashboard/layout.tsx. Read-only, per-user dashboard
 // only (no admin role, no cross-user data) -- see docs/ADR-018.md Part 3 for
@@ -7,13 +8,11 @@ import SecurityEventsFeed from './SecurityEventsFeed'
 // is Phase 4b, not here.
 export default function SocPage() {
   return (
-    <div className="soc-dense space-y-6">
-      <div>
-        <h1 className="text-base font-semibold text-ink">SOC</h1>
-        <p className="mt-1 text-sm text-ink-muted">
-          Live breaker health and your own security events. Per-account view only.
-        </p>
-      </div>
+    <div className="soc-dense rise space-y-6">
+      <PageHeader
+        title="SOC"
+        subtitle="Live breaker health and your own security events. Per-account view only."
+      />
 
       {/* Plain-words explainer (Clint's feedback, 2026-07-10): normal users
           shouldn't need to know what a "SOC" is to understand this page. */}

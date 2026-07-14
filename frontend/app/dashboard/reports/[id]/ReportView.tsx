@@ -8,6 +8,7 @@ import {
   ArrowLeft,
   Download,
   FileText,
+  RefreshCw,
   TriangleAlert,
 } from 'lucide-react'
 import { apiFetch, apiJson, ApiError } from '@/utils/api'
@@ -85,6 +86,7 @@ export default function ReportView({ reportId }: { reportId: string }) {
   const [error, setError] = useState<string | null>(null)
   const [downloading, setDownloading] = useState(false)
   const [cancelling, setCancelling] = useState(false)
+  const [regenerating, setRegenerating] = useState(false)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const fetchReport = useCallback(async () => {
@@ -164,6 +166,31 @@ export default function ReportView({ reportId }: { reportId: string }) {
       setError(err instanceof ApiError ? `Download failed (${err.status}).` : 'Download failed.')
     } finally {
       setDownloading(false)
+    }
+  }
+
+  // "Generate another version" (Sprint 4.7, #5): a fresh take on the same
+  // collection, as a NEW report (the original is kept, not overwritten). This is
+  // the injection-free half of retain-and-revise; feeding a prior draft back in
+  // as reference is a separate, threat-modelled build. Only collection-sourced
+  // reports can regenerate (a session-sourced one has no collection to re-read).
+  async function handleRegenerate() {
+    if (!report?.collection_id || regenerating) return
+    setRegenerating(true)
+    setError(null)
+    try {
+      const data = await apiJson<{ report_id: string }>('/reports', {
+        method: 'POST',
+        body: JSON.stringify({ collection_id: report.collection_id, mode: 'quick' }),
+      })
+      router.push(`/dashboard/reports/${data.report_id}`)
+    } catch (err) {
+      setError(
+        err instanceof ApiError
+          ? `Could not start a new version (${err.status}).`
+          : 'Could not start a new version.',
+      )
+      setRegenerating(false)
     }
   }
 
@@ -283,6 +310,18 @@ export default function ReportView({ reportId }: { reportId: string }) {
             >
               <Download size={14} aria-hidden /> {downloading ? 'Preparing…' : 'Download .docx'}
             </button>
+            {report.collection_id && (
+              <button
+                type="button"
+                onClick={handleRegenerate}
+                disabled={regenerating}
+                className={buttonClasses('secondary', 'sm')}
+                title="Keeps this report and generates a fresh new version from the same collection"
+              >
+                <RefreshCw size={14} aria-hidden className={regenerating ? 'animate-spin' : undefined} />{' '}
+                {regenerating ? 'Starting…' : 'Generate another version'}
+              </button>
+            )}
             <button
               type="button"
               onClick={handleDelete}

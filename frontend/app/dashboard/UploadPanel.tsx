@@ -8,6 +8,7 @@ import { apiFetch, apiJson, ApiError } from '@/utils/api'
 import { splitReport } from '@/utils/report'
 import ConfidenceBadge from '@/components/ConfidenceBadge'
 import ReportGenerateModal from '@/components/reports/ReportGenerateModal'
+import AnswerBody from '@/components/reports/AnswerBody'
 import ReactMarkdown from 'react-markdown'
 
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024 // matches backend; Render free tier is 512 MB RAM
@@ -877,9 +878,7 @@ export default function UploadPanel() {
 
           {parsed && (
             <div className="rounded-lg border border-hairline bg-surface p-4 text-sm text-ink">
-              <div className="space-y-2 leading-relaxed">
-                <ReactMarkdown>{parsed.answer}</ReactMarkdown>
-              </div>
+              <AnswerBody markdown={parsed.answer} />
               {parsed.banner && (
                 <p className="mt-2 text-xs italic text-ink-muted">{parsed.banner.replace(/\*/g, '')}</p>
               )}

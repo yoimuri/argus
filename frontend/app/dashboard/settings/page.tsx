@@ -3,6 +3,7 @@ import { createClient } from '@/utils/supabase/server'
 import ThemeToggle from '@/components/theme/ThemeToggle'
 import DangerZone from '@/components/settings/DangerZone'
 import { buttonClasses } from '@/components/ui/Button'
+import PageHeader from '@/components/ui/PageHeader'
 import { User, Palette, Gauge, ShieldCheck, LogOut } from 'lucide-react'
 
 // Real Settings page (presentability pass, 2026-07-11) -- replaces the disabled
@@ -67,13 +68,9 @@ export default async function SettingsPage() {
     : '—'
 
   return (
-    <div className="mx-auto max-w-2xl space-y-6">
-      <div>
-        <h1 className="text-lg font-semibold text-ink">Settings</h1>
-        <p className="mt-1 text-sm text-ink-muted">
-          Your account, appearance, and free-tier limits.
-        </p>
-      </div>
+    <div className="rise mx-auto max-w-2xl space-y-6">
+      <PageHeader title="Settings" subtitle="Your account, appearance, and free-tier limits." />
+
 
       {/* Account */}
       <section className="rounded-lg border border-hairline bg-surface">

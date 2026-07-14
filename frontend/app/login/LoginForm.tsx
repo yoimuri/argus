@@ -3,7 +3,7 @@
 import { useState, type FormEvent } from 'react'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { ArrowLeft, Mail, Lock, Loader2 } from 'lucide-react'
+import { ArrowLeft, Mail, Lock, Loader2, Eye } from 'lucide-react'
 import { createClient } from '@/utils/supabase/client'
 
 export default function LoginForm() {
@@ -119,10 +119,13 @@ export default function LoginForm() {
         Back to ARGUS
       </Link>
 
-      <div className="rounded-2xl border border-hairline bg-surface-raised p-6 shadow-sm">
-        <div className="mb-5 text-center">
-          <p className="text-sm font-semibold tracking-[0.25em] text-ink">ARGUS</p>
-          <h1 className="mt-2 text-lg font-semibold text-ink">Sign in</h1>
+      <div className="rise rounded-2xl border border-hairline bg-surface-raised p-6 shadow-sm">
+        <div className="mb-5 flex flex-col items-center text-center">
+          <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-accent-wash text-accent">
+            <Eye size={22} strokeWidth={1.75} aria-hidden />
+          </span>
+          <p className="mt-3 text-sm font-semibold tracking-[0.25em] text-ink">ARGUS</p>
+          <h1 className="mt-1 text-lg font-semibold text-ink">Sign in</h1>
           <p className="mt-1 text-xs text-ink-muted">Continue to your workspace.</p>
         </div>
 
