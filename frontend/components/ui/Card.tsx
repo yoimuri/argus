@@ -18,7 +18,7 @@ export function Card({
   return (
     <div
       className={
-        'rounded-xl border border-hairline bg-surface ' +
+        'rounded-xl border border-hairline bg-surface shadow-[var(--shadow-card)] ' +
         (padded ? 'p-5 ' : '') +
         (interactive ? 'lift cursor-pointer ' : '') +
         className

@@ -39,6 +39,13 @@
   --color-critical: #d03b3b;
   --color-critical-wash: rgba(208, 59, 59, 0.10);
 
+  /* Card/header elevation (Sprint 4.7 shell pass). A themed token, not a
+     hardcoded shadow color -- this project has no Tailwind dark: variant
+     anywhere (confirmed by grep), everything swaps via [data-theme="dark"], so
+     a fixed rgba(black) shadow would just vanish on the dark surface. */
+  --shadow-card: 0 1px 2px rgba(11, 11, 11, 0.05), 0 1px 8px rgba(11, 11, 11, 0.03);
+  --shadow-header: 0 1px 12px rgba(11, 11, 11, 0.05);
+
   /* Back-compat with the two variables the pre-4.2 body rule referenced --
      kept as aliases so nothing outside this file needs to change. */
   --background: var(--color-surface-page);
@@ -70,6 +77,12 @@
   --color-serious-wash: rgba(236, 131, 90, 0.16);
   --color-critical: #d03b3b;
   --color-critical-wash: rgba(208, 59, 59, 0.18);
+
+  /* Dark surfaces need a stronger, lighter-leaning shadow -- a black shadow at
+     light-mode opacity is invisible against an already-near-black background.
+     rgba(0,0,0) at higher alpha still reads (deeper black against dark gray). */
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.35), 0 1px 10px rgba(0, 0, 0, 0.25);
+  --shadow-header: 0 1px 14px rgba(0, 0, 0, 0.35);
 }
 
 /* prefers-color-scheme is only the fallback for "system" before the inline
@@ -94,6 +107,8 @@
     --color-warning-wash: rgba(250, 178, 25, 0.16);
     --color-serious-wash: rgba(236, 131, 90, 0.16);
     --color-critical-wash: rgba(208, 59, 59, 0.18);
+    --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.35), 0 1px 10px rgba(0, 0, 0, 0.25);
+    --shadow-header: 0 1px 14px rgba(0, 0, 0, 0.35);
   }
 }
 

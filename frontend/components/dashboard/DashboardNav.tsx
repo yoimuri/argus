@@ -35,9 +35,9 @@ export default function DashboardNav() {
             data-tour={href}
             aria-current={active ? 'page' : undefined}
             className={
-              'flex items-center gap-1.5 rounded-md px-3 py-1.5 transition-colors ' +
+              'flex items-center gap-1.5 rounded-full px-3 py-1.5 transition-colors ' +
               (active
-                ? 'bg-accent-wash font-medium text-ink'
+                ? 'bg-accent font-medium text-accent-contrast'
                 : 'text-ink-secondary hover:bg-accent-wash hover:text-ink')
             }
           >

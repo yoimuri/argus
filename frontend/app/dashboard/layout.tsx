@@ -1,6 +1,7 @@
 import { createClient } from '@/utils/supabase/server'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
+import { Eye } from 'lucide-react'
 import ProfileMenu from '@/components/ProfileMenu'
 import DashboardNav from '@/components/dashboard/DashboardNav'
 import DeletionNotice from '@/components/settings/DeletionNotice'
@@ -49,13 +50,24 @@ export default async function DashboardLayout({
       )}
       {/* print:hidden: there's no in-app PDF export (the .docx is the
           deliverable), but a user can still browser-print (Ctrl+P) a report --
-          keep the nav chrome out of that printout. */}
-      <header className="border-b border-hairline bg-surface print:hidden">
-        <div className="mx-auto flex max-w-5xl flex-wrap items-center gap-4 px-4 py-3">
+          keep the nav chrome out of that printout.
+          Sprint 4.7 shell fix: this header used to be a plain flat bar with no
+          depth or blur, while the landing page (the supposed "design language
+          source") had sticky+blur+a real wordmark lockup. Since this header is
+          the one element present on EVERY dashboard page, that mismatch is why
+          the whole app kept reading as "still basic" no matter what individual
+          page bodies got -- the frame around the content never changed. Now
+          mirrors the landing header's treatment exactly (sticky, blur, themed
+          shadow token, icon+tracking wordmark). */}
+      <header className="sticky top-0 z-20 border-b border-hairline bg-surface/90 shadow-[var(--shadow-header)] backdrop-blur print:hidden">
+        <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-4 px-5 py-3">
           <Link
             href="/dashboard"
-            className="text-sm font-semibold tracking-wide text-ink transition-colors hover:text-accent"
+            className="flex items-center gap-2 text-sm font-semibold tracking-[0.2em] text-ink transition-colors hover:text-accent"
           >
+            <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-accent-wash text-accent">
+              <Eye size={15} strokeWidth={2} aria-hidden />
+            </span>
             ARGUS
           </Link>
           <DashboardNav />
@@ -64,7 +76,7 @@ export default async function DashboardLayout({
           </div>
         </div>
       </header>
-      <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-6">{children}</main>
+      <main className="mx-auto w-full max-w-6xl flex-1 px-5 py-8">{children}</main>
       {/* The project chatbot lives inside the dashboard too (Clint,
           2026-07-13): signed-in users can ask it how to navigate the app,
           not just what ARGUS is. Same public /chat backend, same rate
