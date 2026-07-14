@@ -1218,6 +1218,27 @@ async def create_report(req: ReportCreateRequest, request: Request):
             detail="This collection has no ready documents yet. Upload a PDF first, then generate.",
         )
 
+    # Bug fix, 2026-07-15: the "ask questions first, or there's no output yet"
+    # gate has always meant TWO conditions -- Clint found the frontend only
+    # ever enforced the ready-docs half (above), so a collection with zero
+    # completed Asks (or one just cancelled) could still generate a report.
+    # This is the server-side half of that gate: enforced here so a stale
+    # client or a direct API call can't bypass the UI's disabled button.
+    # completed_with_fallback counts too -- same bar the session-reuse path
+    # above uses -- a degraded-but-real answer is still genuine engagement, a
+    # cancelled or errored run is not.
+    completed_asks = await _count_rows(
+        f"research_sessions?collection_id=eq.{req.collection_id}"
+        "&status=in.(completed,completed_with_fallback)&select=id",
+        token,
+    )
+    if completed_asks == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Ask at least one question in this collection first, so ARGUS has something "
+                   "to work from before generating a report.",
+        )
+
     await _check_report_cap(user_id, token)
     report_id = await _create_report_row_and_meter(user_id, token, req.collection_id, collection_name)
 

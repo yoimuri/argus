@@ -126,6 +126,18 @@ export default function UploadPanel() {
   // backend generates in a background task) and we navigate to the report
   // page, which polls the row -- so this flag only guards the double-click.
   const [generatingReport, setGeneratingReport] = useState(false)
+  // Gate #2 for "Generate report" (2026-07-15 bug fix): Clint's original ask
+  // ("prompt the user to ask questions first OR there's no output yet") always
+  // meant TWO separate conditions -- ready docs AND at least one completed Ask
+  // -- but only the ready-docs half ever got built. That gap is exactly why he
+  // could open a fresh collection and generate a report with zero questions
+  // asked, or right after cancelling one (a cancelled/failed Ask never sets
+  // sessionId, so it was never the source of the bug -- the report button was
+  // simply never gated on Ask activity at all). null = "haven't checked this
+  // collection yet" (server truth, not just this page-load's memory), so a
+  // user who asked something 10 minutes ago and came back still sees it
+  // unlocked without needing to ask again.
+  const [hasCompletedAsk, setHasCompletedAsk] = useState<boolean | null>(null)
 
   const [collections, setCollections] = useState<Collection[]>([])
   // Starts true so the first render shows "Loading..." without an effect having
@@ -259,6 +271,41 @@ export default function UploadPanel() {
       ignore = true
     }
   }, [collectionId, fetchDocuments])
+
+  // Server-truth check for the report-generation gate above: has this
+  // collection had at least one Ask that actually completed (not cancelled,
+  // not failed)? Reuses GET /research (already built for the Sessions page) --
+  // no new endpoint needed. limit=50 is a practical cap, not a guarantee: a
+  // collection with 50+ uncompleted attempts and one old completed one buried
+  // past that would misreport as locked -- an acceptable, stated edge case
+  // for a gate whose worst failure mode is "ask once more," not a security
+  // control.
+  const fetchHasCompletedAsk = useCallback(async (id: string): Promise<boolean> => {
+    try {
+      const rows = await apiJson<{ status: string }[]>(`/research?collection_id=${id}&limit=50`)
+      // Same bar the backend gate uses (main.py create_report): a degraded-but
+      // -real "completed_with_fallback" answer counts as genuine engagement;
+      // cancelled/errored runs do not.
+      return rows.some((r) => r.status === 'completed' || r.status === 'completed_with_fallback')
+    } catch {
+      return false
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!collectionId) {
+      setHasCompletedAsk(null)
+      return
+    }
+    let ignore = false
+    setHasCompletedAsk(null) // "checking" while switching collections
+    fetchHasCompletedAsk(collectionId).then((v) => {
+      if (!ignore) setHasCompletedAsk(v)
+    })
+    return () => {
+      ignore = true
+    }
+  }, [collectionId, fetchHasCompletedAsk])
 
   // previewUrl mirrored into a ref so the unmount-only effect below always
   // revokes the CURRENT object URL, not the one captured at first render --
@@ -540,6 +587,10 @@ export default function UploadPanel() {
       }
       setReport(data.report)
       setSessionId(data.session_id)
+      // Optimistic unlock: this branch only runs on a genuine completed answer
+      // (cancelled/errored paths never reach here), so the report gate can open
+      // immediately without waiting on a refetch.
+      setHasCompletedAsk(true)
     } catch (err) {
       if (isAbortError(err)) setStatus('Research cancelled.')
       else setError(describeError(err, 'Research query failed'))
@@ -602,6 +653,16 @@ export default function UploadPanel() {
   // "ready" is the only status the retriever can actually search; processing/
   // failed docs don't count toward being able to ask.
   const hasReadyDocs = (documents ?? []).some((d) => d.status === 'ready')
+
+  // The report gate, named specifically (bug fix 2026-07-15): two independent
+  // reasons can block it, checked in the order a user actually hits them.
+  const reportBlockedReason = !hasReadyDocs
+    ? 'Upload a PDF into this collection and wait for it to finish processing before generating a report.'
+    : hasCompletedAsk === null
+      ? 'Checking this collection…'
+      : !hasCompletedAsk
+        ? 'Ask at least one question in this collection first, so ARGUS has something to work from before generating a report.'
+        : null
 
   const inputClass =
     'w-full rounded-md border border-hairline bg-surface px-3 py-2 text-sm text-ink placeholder:text-ink-muted focus:border-accent focus:outline-none'
@@ -862,17 +923,19 @@ export default function UploadPanel() {
             </div>
           </form>
 
-          {/* Report generation (Sprint 4.6a, D17; popup #4 2026-07-14) -- the
-              product's headline, a separate flow from Ask. ARGUS reads EVERY
-              document in the collection (not just the top search hits), picks a
-              domain-fitting structure, and writes a formatted .docx draft. The
-              Quick/Full choice + the explainer live inside the popup so the
-              Workspace shows one button, not a wall of buttons + copy. Same
-              double-guard as Ask: trigger disabled without ready docs, and the
-              backend independently 400s. */}
+          {/* Report generation (Sprint 4.6a, D17; popup #4 2026-07-14; gate
+              fixed 2026-07-15) -- the product's headline, a separate flow from
+              Ask. ARGUS reads EVERY document in the collection (not just the
+              top search hits), picks a domain-fitting structure, and writes a
+              formatted .docx draft. The Quick/Full choice + the explainer live
+              inside the popup so the Workspace shows one button, not a wall of
+              buttons + copy. Double-guarded on BOTH conditions -- ready docs
+              AND at least one completed Ask -- client-side (reportBlockedReason,
+              a real disabled button) and server-side (main.py's create_report
+              400s independently), so a stale client can't bypass it. */}
           <ReportGenerateModal
             onGenerate={handleGenerateReport}
-            disabled={!hasReadyDocs}
+            blockedReason={reportBlockedReason}
             busy={generatingReport}
           />
 

@@ -4,20 +4,27 @@ import { useEffect, useRef, useState } from 'react'
 import { FileText, Zap } from 'lucide-react'
 import { buttonClasses } from '@/components/ui/Button'
 
-// Report-generation popup (#4, 2026-07-14). The Workspace used to show a
-// "Generate a report" heading + explainer + two always-visible buttons, which
-// Clint found redundant next to the Quick/Full choice. This collapses it to a
-// single "Generate report" button that opens a small dialog explaining the two
-// modes so the user picks knowingly. Dismissal conventions match ContactModal
-// (Escape + outside click). The trigger stays disabled (with a hint) until the
-// collection has ready documents -- same guard the buttons had.
+// Report-generation popup (#4, 2026-07-14; gate fixed 2026-07-15). The
+// Workspace used to show a "Generate a report" heading + explainer + two
+// always-visible buttons, which Clint found redundant next to the Quick/Full
+// choice. This collapses it to a single "Generate report" button that opens a
+// small dialog explaining the two modes so the user picks knowingly.
+// Dismissal conventions match ContactModal (Escape + outside click).
+//
+// The trigger is a real HTML `disabled` button, not a CSS-only look: when
+// `blockedReason` is set, `onClick` structurally cannot fire (the browser
+// guarantees a disabled button's handler never runs), so the dialog can never
+// open and `onGenerate` can never be reached through this component while
+// blocked -- not just visually greyed out. `blockedReason` names the SPECIFIC
+// reason (no ready documents yet, vs. no completed Ask yet) so the hint always
+// matches what's actually missing, instead of one generic disabled message.
 export default function ReportGenerateModal({
   onGenerate,
-  disabled,
+  blockedReason,
   busy,
 }: {
   onGenerate: (mode: 'quick' | 'full') => void
-  disabled: boolean
+  blockedReason: string | null
   busy: boolean
 }) {
   const [open, setOpen] = useState(false)
@@ -49,17 +56,13 @@ export default function ReportGenerateModal({
       <button
         type="button"
         onClick={() => setOpen(true)}
-        disabled={disabled || busy}
+        disabled={Boolean(blockedReason) || busy}
         className={buttonClasses('primary', 'md')}
       >
         <FileText size={16} strokeWidth={1.75} aria-hidden />
         {busy ? 'Starting…' : 'Generate report'}
       </button>
-      {disabled && (
-        <p className="mt-2 text-xs text-ink-muted">
-          Upload a PDF into this collection first, then you can generate a report from it.
-        </p>
-      )}
+      {blockedReason && <p className="mt-2 text-xs text-ink-muted">{blockedReason}</p>}
 
       {open && (
         <div

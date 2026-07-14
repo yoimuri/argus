@@ -5,6 +5,7 @@ import Reveal from '@/components/landing/Reveal'
 import AuthLink from '@/components/landing/AuthLink'
 import ContactModal from '@/components/landing/ContactModal'
 import ChatWidget from '@/components/landing/ChatWidget'
+import EyeNetworkBackground from '@/components/effects/EyeNetworkBackground'
 
 // The public landing page (Sprint 4.4, D12). Until now `/` force-redirected to
 // `/dashboard`, so anyone without an account -- a recruiter following the repo
@@ -109,8 +110,15 @@ export default async function Landing() {
       </header>
 
       <main className="flex-1">
-        {/* Hero */}
+        {/* Hero -- the heaviest instance of the site's signature animated
+            background (Clint, 2026-07-15: "home page should have the
+            heaviest, most beautiful animation"). Layer order matters here:
+            canvas (-z-20) draws the node network + radar sweep, the existing
+            radial scrim (-z-10) sits on top of it fading to the page surface
+            so the headline text keeps full AA contrast -- motion never gets
+            to compete with the words for legibility. */}
         <section className="relative overflow-hidden">
+          <EyeNetworkBackground intensity="hero" className="absolute inset-0 -z-20 h-full w-full" />
           <div
             aria-hidden
             className="pointer-events-none absolute inset-0 -z-10"

@@ -6,6 +6,39 @@ Newest batch on top.
 
 ---
 
+## 2026-07-15 — Report-gate bug fix + shell/animated-background pass (Sonnet)
+
+**T16 — "Generate report" is truly blocked with no output (bug fix).**
+- Steps: (a) create a brand new collection, upload a PDF, wait for it to say
+  ready, but do NOT ask any question. Try Generate report.
+  (b) In a collection, click Ask, then immediately click Cancel before it
+  finishes. Try Generate report right after.
+- Expected in BOTH cases: the "Generate report" button is disabled (greyed
+  out) with a specific hint text explaining why ("Ask at least one question in
+  this collection first…"). It should NOT be clickable, and clicking it
+  should NOT be possible. (c) Now actually ask a question and let it finish.
+  The button should unlock immediately, no page refresh needed.
+- If it fails: if a report generates without ever completing a question in
+  that collection, or right after a cancel, tell me exactly which collection
+  and what you clicked, in order.
+
+**T17 — The animated background.**
+- Steps: open the landing page (signed out). Then sign in and look at any
+  dashboard page. Then sign out and look at the login page.
+- Expected: a slow, subtle network of glowing connected dots drifts in the
+  background on every page. The landing page's version is the richest (denser,
+  plus a slow rotating radar-style sweep in one corner); the dashboard/login
+  version is calmer and sparser. Text stays fully readable everywhere (the
+  animation sits behind cards and content, never on top of it). It should
+  never feel distracting or slow down scrolling/typing.
+- Reduced-motion check: turn on your OS "reduce motion" setting and reload.
+  The background should freeze as a single still frame (nodes visible, no
+  drifting or sweeping), not disappear and not keep moving.
+- If it fails: if it looks choppy, doesn't appear at all, or the page feels
+  slower/janky with it on, tell me which page and what device/browser.
+
+---
+
 ## 2026-07-14 — Sprint 4.7 presentability (Opus)
 
 The visual overhaul + motion + How-to guide + interactive tour + charts-in-Ask +

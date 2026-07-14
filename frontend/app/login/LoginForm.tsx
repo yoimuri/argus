@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { ArrowLeft, Mail, Lock, Loader2, Eye } from 'lucide-react'
 import { createClient } from '@/utils/supabase/client'
+import EyeNetworkBackground from '@/components/effects/EyeNetworkBackground'
 
 export default function LoginForm() {
   const [email, setEmail] = useState('')
@@ -108,7 +109,8 @@ export default function LoginForm() {
     'w-full rounded-md border border-hairline bg-surface py-2 pl-9 pr-3 text-sm text-ink placeholder:text-ink-muted transition-colors focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-1 focus:ring-offset-surface'
 
   return (
-    <main className="mx-auto flex min-h-full w-full max-w-sm flex-col justify-center px-4 py-16">
+    <main className="relative mx-auto flex min-h-full w-full max-w-sm flex-col justify-center px-4 py-16">
+      <EyeNetworkBackground intensity="ambient" className="fixed inset-0 -z-10 h-full w-full" />
       {/* Back to the public landing page (live review 2026-07-11: the login
           page was a dead end). */}
       <Link

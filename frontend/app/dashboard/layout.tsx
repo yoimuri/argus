@@ -7,6 +7,7 @@ import DashboardNav from '@/components/dashboard/DashboardNav'
 import DeletionNotice from '@/components/settings/DeletionNotice'
 import ChatWidget from '@/components/landing/ChatWidget'
 import SessionKeepAlive from '@/components/auth/SessionKeepAlive'
+import EyeNetworkBackground from '@/components/effects/EyeNetworkBackground'
 
 // D1: shared nav for every /dashboard/* route, hosts the auth check (dual-
 // guard alongside proxy.ts -- see proxy.ts's own comment) so individual
@@ -38,6 +39,15 @@ export default async function DashboardLayout({
 
   return (
     <div className="min-h-full flex flex-col">
+      {/* The site's signature animated background, ambient tier (2026-07-15):
+          "throughout the pages, not just the landing page" -- mounted ONCE
+          here in the shared shell so it's a single instance for the whole
+          authenticated app (Next.js keeps a shared layout mounted across
+          client-side navigation between /dashboard/* routes, no remount per
+          page). Fixed behind everything; page content sits on solid Card
+          surfaces (shadow token added in the shell pass), so this never has
+          to compete with text for contrast -- it only shows in the gaps. */}
+      <EyeNetworkBackground intensity="ambient" className="fixed inset-0 -z-10 h-full w-full" />
       {/* Keeps the session alive while the user is genuinely interacting, so a
           long read/scroll without a navigation no longer trips the 30-min idle
           logout (proxy.ts). Renders nothing. */}
