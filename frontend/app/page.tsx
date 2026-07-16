@@ -6,6 +6,7 @@ import AuthLink from '@/components/landing/AuthLink'
 import ContactModal from '@/components/landing/ContactModal'
 import ChatWidget from '@/components/landing/ChatWidget'
 import EyeNetworkBackground from '@/components/effects/EyeNetworkBackground'
+import AuroraGlow from '@/components/effects/AuroraGlow'
 
 // The public landing page (Sprint 4.4, D12). Until now `/` force-redirected to
 // `/dashboard`, so anyone without an account -- a recruiter following the repo
@@ -110,14 +111,17 @@ export default async function Landing() {
       </header>
 
       <main className="flex-1">
-        {/* Hero -- the heaviest instance of the site's signature animated
-            background (Clint, 2026-07-15: "home page should have the
-            heaviest, most beautiful animation"). Layer order matters here:
-            canvas (-z-20) draws the node network + radar sweep, the existing
-            radial scrim (-z-10) sits on top of it fading to the page surface
-            so the headline text keeps full AA contrast -- motion never gets
-            to compete with the words for legibility. */}
-        <section className="relative overflow-hidden">
+        {/* Hero -- the heaviest instance of the signature animated background
+            (Clint: "home page should have the heaviest, most beautiful
+            animation... like Valorant's landing but animated, not video").
+            Three stacked layers, back to front: aurora (-z-30, huge blurred
+            accent fields drifting on 28s/34s cycles -- the "video" texture),
+            the node network + radar canvas (-z-20, with cursor-linking so the
+            field reaches toward the visitor), and the radial scrim (-z-10)
+            fading toward the page surface so the headline keeps AA contrast
+            -- motion never competes with the words. */}
+        <section className="relative flex min-h-[92vh] items-center overflow-hidden">
+          <AuroraGlow className="absolute inset-0 -z-30" />
           <EyeNetworkBackground intensity="hero" className="absolute inset-0 -z-20 h-full w-full" />
           <div
             aria-hidden
@@ -127,7 +131,7 @@ export default async function Landing() {
                 'radial-gradient(60% 60% at 50% 0%, var(--color-accent-wash) 0%, transparent 70%)',
             }}
           />
-          <div className="mx-auto max-w-4xl px-5 py-24 text-center sm:py-32">
+          <div className="mx-auto w-full max-w-4xl px-5 py-24 text-center sm:py-28">
             <Reveal>
               <span className="inline-flex items-center gap-2 rounded-full border border-hairline bg-surface px-3 py-1 text-xs font-medium text-ink-secondary">
                 <span className="h-1.5 w-1.5 rounded-full bg-accent" />
@@ -135,8 +139,15 @@ export default async function Landing() {
               </span>
             </Reveal>
             <Reveal delayMs={80}>
-              <h1 className="mt-6 text-balance text-4xl font-semibold leading-tight tracking-tight text-ink sm:text-6xl">
-                Messy documents in. Clear answers out.
+              {/* The second line wears an accent-to-ink gradient -- the one
+                  place the brand color touches type; everything else keeps
+                  ink tokens (dataviz rule: text never wears the series color
+                  -- a headline wordmark moment is the deliberate exception). */}
+              <h1 className="mt-6 text-balance text-5xl font-semibold leading-[1.08] tracking-tight text-ink sm:text-7xl">
+                <span className="block">Messy documents in.</span>
+                <span className="block bg-gradient-to-r from-[var(--color-accent)] to-[var(--color-ink)] bg-clip-text text-transparent">
+                  Clear answers out.
+                </span>
               </h1>
             </Reveal>
             <Reveal delayMs={160}>
@@ -152,7 +163,7 @@ export default async function Landing() {
                   initialAuthed={authed}
                   authedLabel="Go to dashboard"
                   anonLabel="Try ARGUS"
-                  className="rounded-full bg-accent px-6 py-3 text-sm font-semibold text-accent-contrast transition-colors hover:bg-accent-hover"
+                  className="rounded-full bg-accent px-6 py-3 text-sm font-semibold text-accent-contrast shadow-[var(--glow-accent)] transition-colors hover:bg-accent-hover"
                 />
                 <a
                   href={REPO_URL}

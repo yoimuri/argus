@@ -3,26 +3,25 @@
 import { useEffect, useRef } from 'react'
 import { useTheme } from '@/components/theme/ThemeProvider'
 
-// The signature animated background (Sprint 4.7 visual pass, 2026-07-15).
-// Clint's brief: an animated presence like a game landing page's video
-// background, but drawn instead of filmed, and present through the app, not
-// just the landing page. The concept isn't decoration bolted onto the brand --
-// it's the brand: ARGUS is the hundred-eyed watchman, and this product turns
-// scattered documents into connected findings while a security layer keeps
-// watch. So the canvas draws exactly that: a field of nodes (documents/facts)
-// that slowly drift and link when close enough (synthesis, the Retriever/
-// Synthesizer's actual job), and on the hero tier only, a slow rotating
-// radar sweep (the SOC/monitoring half of the product). Same idea, two
-// honest intensities -- not two different concepts for "landing" vs "app".
+// The signature animated background, v2 (dark-cinematic rebuild, 2026-07-15).
+// v1 was tuned so politely for a light default that Clint's verdict was "I
+// don't see any changes" -- accurate, the ambient tier was ~26 dots at 10%
+// link alpha on off-white. With dark now the brand default (owner decision),
+// this version is designed FOR darkness and dampened for the light opt-out,
+// instead of the reverse.
+//
+// The concept is still the product, not decoration: ARGUS is the hundred-eyed
+// watchman -- a field of glowing nodes (documents/facts) drifts and links
+// when close (what the Retriever/Synthesizer actually do), a slow radar sweep
+// crosses the hero tier (the SOC/monitoring half), and on the hero the
+// network reaches toward the visitor's cursor (the system noticing you --
+// the watchman looking back).
 //
 // Colors are hardcoded to match globals.css's accent tokens, not read via
-// getComputedStyle: canvas draws in its own pixel buffer with no live
-// cascade, so a CSS var can't reach it without a per-frame DOM read. This is
-// the SAME tradeoff figures.py already made for matplotlib chart exports --
-// precedent in this codebase, not a new pattern. `useTheme()` (already
-// wraps the whole app in the root layout) picks which constant applies, and
-// updates reactively the instant the toggle flips.
-const ACCENT = { light: '14, 116, 144', dark: '34, 184, 212' } // r, g, b of --color-accent
+// getComputedStyle: canvas draws into its own pixel buffer with no live
+// cascade (same tradeoff figures.py made for matplotlib). `useTheme()` picks
+// the constant and re-runs the effect the instant the toggle flips.
+const ACCENT = { light: '14, 116, 144', dark: '34, 184, 212' } // r,g,b of --color-accent
 
 export type BackgroundIntensity = 'hero' | 'ambient'
 
@@ -43,9 +42,23 @@ const TUNING: Record<BackgroundIntensity, {
   nodeAlpha: number
   linkAlpha: number
   radar: boolean
+  cursor: boolean
+  glow: boolean
+  fps: number
 }> = {
-  hero: { density: 9000, maxNodes: 90, linkDist: 150, speed: 0.10, nodeAlpha: 0.85, linkAlpha: 0.22, radar: true },
-  ambient: { density: 22000, maxNodes: 26, linkDist: 130, speed: 0.045, nodeAlpha: 0.5, linkAlpha: 0.1, radar: false },
+  // Hero: the showpiece. Dense field, bright links, radar, cursor response,
+  // soft glow on every node. Full frame budget.
+  hero: {
+    density: 7000, maxNodes: 130, linkDist: 170, speed: 0.12,
+    nodeAlpha: 0.95, linkAlpha: 0.4, radar: true, cursor: true, glow: true, fps: 60,
+  },
+  // Ambient: every app page. Clearly present now (v1's core failure), but
+  // calmer -- no radar, no cursor chase, throttled framerate since it runs
+  // alongside real work.
+  ambient: {
+    density: 12000, maxNodes: 70, linkDist: 150, speed: 0.06,
+    nodeAlpha: 0.8, linkAlpha: 0.26, radar: false, cursor: false, glow: false, fps: 30,
+  },
 }
 
 export default function EyeNetworkBackground({
@@ -69,9 +82,12 @@ export default function EyeNetworkBackground({
     const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
     const tuning = TUNING[intensity]
     const rgb = ACCENT[resolvedTheme]
+    // Glow-on-white has a physical ceiling: the same alphas that sing on the
+    // dark base turn to mud on paper. The light opt-out gets a dampened field
+    // rather than pretending one tuning fits both.
+    const damp = resolvedTheme === 'dark' ? 1 : 0.65
     // createConicGradient isn't universal (older Safari); an unguarded call
-    // throws on first frame and would silently kill the whole animation loop
-    // (nothing catches it inside rAF). Checked once, not per-frame.
+    // throws on first frame and would silently kill the whole rAF loop.
     const supportsRadar = tuning.radar && typeof ctx.createConicGradient === 'function'
 
     let nodes: Node[] = []
@@ -80,32 +96,30 @@ export default function EyeNetworkBackground({
     let dpr = 1
     let raf = 0
     let radarAngle = 0
-    let visible = true
+    let inView = true
+    let tabVisible = document.visibilityState === 'visible'
     let lastFrame = 0
-    // Ambient tier throttles to ~24fps (still smooth for a slow drift, a
-    // third of the main-thread cost of 60fps) since it runs on every
-    // dashboard page concurrently with real app work; hero gets the full
-    // 60fps budget since it's the one showpiece instance on the landing page.
-    const frameBudgetMs = intensity === 'ambient' ? 1000 / 24 : 0
+    const frameBudgetMs = tuning.fps >= 60 ? 0 : 1000 / tuning.fps
+    // Cursor position in canvas coordinates; null when the pointer is away.
+    let mouse: { x: number; y: number } | null = null
 
     function seed() {
       const area = width * height
-      const count = Math.min(tuning.maxNodes, Math.max(8, Math.round(area / tuning.density)))
+      const count = Math.min(tuning.maxNodes, Math.max(10, Math.round(area / tuning.density)))
       nodes = Array.from({ length: count }, () => ({
         x: Math.random() * width,
         y: Math.random() * height,
         vx: (Math.random() - 0.5) * tuning.speed,
         vy: (Math.random() - 0.5) * tuning.speed,
-        r: 1 + Math.random() * 1.6,
+        r: 1.1 + Math.random() * 1.8,
         pulse: Math.random() * Math.PI * 2,
       }))
     }
 
     function resize() {
       const rect = container!.getBoundingClientRect()
-      // Capped at 1.75x: this is an ambient decoration, not photo output --
-      // a full 3x/4x backing store on a large monitor would multiply the
-      // per-frame fill cost for a difference nobody will consciously see.
+      // Capped: ambient decoration, not photo output -- a 3x backing store on
+      // a big monitor multiplies fill cost for an invisible difference.
       dpr = Math.min(window.devicePixelRatio || 1, 1.75)
       width = Math.max(1, Math.round(rect.width))
       height = Math.max(1, Math.round(rect.height))
@@ -120,14 +134,14 @@ export default function EyeNetworkBackground({
     function drawFrame(t: number) {
       ctx!.clearRect(0, 0, width, height)
 
-      // Radar sweep first (hero only), so the node network draws on top of it.
+      // Radar sweep first so the network draws over it.
       if (supportsRadar) {
         const cx = width * 0.82
         const cy = height * 0.22
-        const radius = Math.max(width, height) * 0.75
+        const radius = Math.max(width, height) * 0.8
         const sweep = ctx!.createConicGradient(radarAngle, cx, cy)
-        sweep.addColorStop(0, `rgba(${rgb}, 0.16)`)
-        sweep.addColorStop(0.06, `rgba(${rgb}, 0.05)`)
+        sweep.addColorStop(0, `rgba(${rgb}, ${(0.22 * damp).toFixed(3)})`)
+        sweep.addColorStop(0.06, `rgba(${rgb}, ${(0.07 * damp).toFixed(3)})`)
         sweep.addColorStop(0.16, 'rgba(0,0,0,0)')
         sweep.addColorStop(1, 'rgba(0,0,0,0)')
         ctx!.save()
@@ -149,10 +163,10 @@ export default function EyeNetworkBackground({
         if (n.y > height + 20) n.y = -20
       }
 
-      // Links: O(n^2) is fine at these node counts (<=90); this is the same
-      // "constellation network" technique used across countless hero
-      // backgrounds, not a novel performance risk.
+      // Node-to-node links. O(n^2) is fine at <=130 nodes -- the standard
+      // constellation technique, not a novel perf risk.
       ctx!.lineWidth = 1
+      const linkAlpha = tuning.linkAlpha * damp
       for (let i = 0; i < nodes.length; i++) {
         for (let j = i + 1; j < nodes.length; j++) {
           const a = nodes[i]
@@ -161,7 +175,7 @@ export default function EyeNetworkBackground({
           const dy = a.y - b.y
           const dist = Math.sqrt(dx * dx + dy * dy)
           if (dist < tuning.linkDist) {
-            const alpha = (1 - dist / tuning.linkDist) * tuning.linkAlpha
+            const alpha = (1 - dist / tuning.linkDist) * linkAlpha
             ctx!.strokeStyle = `rgba(${rgb}, ${alpha.toFixed(3)})`
             ctx!.beginPath()
             ctx!.moveTo(a.x, a.y)
@@ -171,23 +185,47 @@ export default function EyeNetworkBackground({
         }
       }
 
-      // Nodes, with a slow individual glow pulse (documents "lighting up" as
-      // they're read) so the field never looks static even where links are sparse.
+      // Cursor links (hero): the field notices the visitor -- nodes near the
+      // pointer reach toward it, brighter than node-to-node links.
+      if (tuning.cursor && mouse) {
+        const reach = tuning.linkDist * 1.35
+        ctx!.lineWidth = 1.2
+        for (const n of nodes) {
+          const dx = n.x - mouse.x
+          const dy = n.y - mouse.y
+          const dist = Math.sqrt(dx * dx + dy * dy)
+          if (dist < reach) {
+            const alpha = (1 - dist / reach) * linkAlpha * 1.8
+            ctx!.strokeStyle = `rgba(${rgb}, ${Math.min(alpha, 0.6).toFixed(3)})`
+            ctx!.beginPath()
+            ctx!.moveTo(n.x, n.y)
+            ctx!.lineTo(mouse.x, mouse.y)
+            ctx!.stroke()
+          }
+        }
+        ctx!.lineWidth = 1
+      }
+
+      // Nodes, with individual glow pulses (documents lighting up as they're
+      // read) so the field never looks static even where links are sparse.
+      if (tuning.glow) {
+        ctx!.save()
+        ctx!.shadowBlur = 10
+        ctx!.shadowColor = `rgba(${rgb}, 0.8)`
+      }
+      const nodeAlpha = tuning.nodeAlpha * damp
       for (const n of nodes) {
         const glow = 0.55 + 0.45 * Math.sin(t / 1400 + n.pulse)
         ctx!.beginPath()
-        ctx!.fillStyle = `rgba(${rgb}, ${(tuning.nodeAlpha * glow).toFixed(3)})`
+        ctx!.fillStyle = `rgba(${rgb}, ${(nodeAlpha * glow).toFixed(3)})`
         ctx!.arc(n.x, n.y, n.r, 0, Math.PI * 2)
         ctx!.fill()
       }
+      if (tuning.glow) ctx!.restore()
     }
 
     function loop(t: number) {
-      if (!visible) {
-        raf = requestAnimationFrame(loop)
-        return
-      }
-      if (t - lastFrame >= frameBudgetMs) {
+      if (inView && tabVisible && (t - lastFrame >= frameBudgetMs)) {
         lastFrame = t
         drawFrame(t)
       }
@@ -197,9 +235,8 @@ export default function EyeNetworkBackground({
     resize()
 
     if (reduceMotion) {
-      // One still frame, no rAF loop at all -- honors reduced-motion exactly
-      // (no oscillation, no sweep), while still giving the page its visual
-      // identity instead of a blank rect.
+      // One still frame, no loop -- honors reduced-motion exactly while still
+      // giving the page its identity instead of a blank rect.
       drawFrame(0)
     } else {
       raf = requestAnimationFrame(loop)
@@ -208,23 +245,37 @@ export default function EyeNetworkBackground({
     const ro = new ResizeObserver(() => resize())
     ro.observe(container)
 
-    // Pause off-screen instances entirely (the ambient tier is mounted on
-    // every dashboard page; only the one actually in view should ever spend a
-    // frame budget) and on a hidden tab.
+    // Pause off-screen instances and hidden tabs. Two independent flags (v1
+    // collapsed them into one, which could wedge false after tab-hide because
+    // the IntersectionObserver never refires without an intersection change).
     const io = new IntersectionObserver(([entry]) => {
-      visible = entry.isIntersecting
+      inView = entry.isIntersecting
     })
     io.observe(canvas)
     const onVisibility = () => {
-      visible = document.visibilityState === 'visible' && visible
+      tabVisible = document.visibilityState === 'visible'
     }
     document.addEventListener('visibilitychange', onVisibility)
+
+    const onMouseMove = (e: MouseEvent) => {
+      const rect = canvas!.getBoundingClientRect()
+      mouse = { x: e.clientX - rect.left, y: e.clientY - rect.top }
+    }
+    const onMouseLeave = () => {
+      mouse = null
+    }
+    if (tuning.cursor && !reduceMotion) {
+      window.addEventListener('mousemove', onMouseMove, { passive: true })
+      document.documentElement.addEventListener('mouseleave', onMouseLeave)
+    }
 
     return () => {
       cancelAnimationFrame(raf)
       ro.disconnect()
       io.disconnect()
       document.removeEventListener('visibilitychange', onVisibility)
+      window.removeEventListener('mousemove', onMouseMove)
+      document.documentElement.removeEventListener('mouseleave', onMouseLeave)
     }
   }, [intensity, resolvedTheme])
 

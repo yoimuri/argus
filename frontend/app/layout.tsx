@@ -27,7 +27,13 @@ export const metadata: Metadata = {
 // render, so the toggle paints correctly-highlighted immediately instead of
 // snapping over a moment later -- see ThemeToggle.tsx's suppressHydrationWarning
 // for why this doesn't reintroduce the 2026-07-09 stuck-toggle hydration bug.
-const THEME_INIT_SCRIPT = `(function(){try{var t=localStorage.getItem("argus-theme");var pref=(t==="light"||t==="dark"||t==="system")?t:"system";var resolved=(pref==="light"||pref==="dark")?pref:(window.matchMedia&&window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light");document.documentElement.setAttribute("data-theme",resolved);document.documentElement.setAttribute("data-theme-pref",pref)}catch(e){}})();`;
+//
+// 2026-07-15 (owner decision, reversing Sprint 4.2's light-first default):
+// DARK is now the brand default -- a visitor with nothing stored gets the
+// dark cinematic identity, not their OS preference. "system" still exists as
+// an explicit choice in the toggle and still resolves via matchMedia; it's
+// just no longer what new visitors start on.
+const THEME_INIT_SCRIPT = `(function(){try{var t=localStorage.getItem("argus-theme");var pref=(t==="light"||t==="dark"||t==="system")?t:"dark";var resolved=(pref==="light"||pref==="dark")?pref:(window.matchMedia&&window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light");document.documentElement.setAttribute("data-theme",resolved);document.documentElement.setAttribute("data-theme-pref",pref)}catch(e){}})();`;
 
 export default async function RootLayout({
   children,
@@ -43,7 +49,7 @@ export default async function RootLayout({
   return (
     <html
       lang="en"
-      data-theme="light"
+      data-theme="dark"
       suppressHydrationWarning
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >

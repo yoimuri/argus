@@ -6,6 +6,31 @@ Newest batch on top.
 
 ---
 
+## 2026-07-15 — Dark-cinematic rebuild (Fable)
+
+**T18 — The app is dark, cinematic, and unmistakably different.**
+- Steps: push, wait for Vercel to finish, then open the landing page in a
+  fresh browser profile or private window (important: a normal window may
+  keep your old saved theme; private = what a new visitor gets).
+- Expected, landing page: the page is DARK by default — a deep blue-black
+  base with soft cyan glows drifting slowly behind the hero (the "video-like"
+  layer), a dense field of glowing connected dots with a slow radar sweep in
+  the upper right, and the network visibly reaching toward your mouse as you
+  move it. The headline is much bigger, its second line carries a cyan
+  gradient, and the "Try ARGUS" button has a soft neon glow.
+- Expected, signed in: every dashboard page is dark with the same living
+  network clearly visible behind the content (not the invisible version from
+  before), cards read as lit panels with a bright top edge, and the active
+  nav item is a filled glowing pill.
+- Theme toggle: switching to Light in Settings/profile menu still works and
+  looks clean (the animation dims to suit the light page). Your choice
+  sticks after reload.
+- Reduced-motion check: with OS "reduce motion" on, everything freezes to a
+  still frame (dots visible, no drift, no sweep, no aurora movement).
+- If it fails: if any page is still light by default in a private window, or
+  the background is still barely visible, screenshot it and tell me which
+  page + browser.
+
 ## 2026-07-15 — Report-gate bug fix + shell/animated-background pass (Sonnet)
 
 **T16 — "Generate report" is truly blocked with no output (bug fix).**

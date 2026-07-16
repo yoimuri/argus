@@ -13,7 +13,58 @@
    both blocks below, repeated rather than inherited so each theme block is a
    complete, readable set on its own. */
 
+/* 2026-07-15 (owner decision, reversing the 4.2 light-first default): DARK
+   CINEMATIC is the brand. :root now carries the dark set so the default is
+   dark even before any attribute logic runs; [data-theme="light"] is the
+   explicit opt-out via the toggle. The dark surfaces are blue-shifted from
+   the old warm-gray dark set (ui-ux-pro-max "Modern Dark Cinema" family) --
+   same lightness band, so the previously validated contrast ratios hold:
+   re-checked accent #22b8d4 on #14161c = 7.67:1, white ink = 18:1, secondary
+   #bfc4ce = 10.3:1, muted #8a8f98 = 5.6:1 (all AA+, computed not eyeballed). */
 :root {
+  --color-surface: #14161c;
+  --color-surface-page: #08090d;
+  --color-surface-raised: #1b1e26;
+  --color-hairline: #262a33;
+  --color-hairline-strong: rgba(255, 255, 255, 0.16);
+
+  --color-ink: #ffffff;
+  --color-ink-secondary: #bfc4ce;
+  --color-ink-muted: #8a8f98;
+
+  --color-accent: #22b8d4;
+  --color-accent-hover: color-mix(in srgb, #22b8d4 85%, white);
+  --color-accent-contrast: #04141a;
+  --color-accent-wash: rgba(34, 184, 212, 0.12);
+  --color-accent-wash-strong: rgba(34, 184, 212, 0.20);
+
+  /* Status colors are FIXED across themes (dataviz rule). */
+  --color-good: #0ca30c;
+  --color-good-wash: rgba(12, 163, 12, 0.16);
+  --color-warning: #fab219;
+  --color-warning-wash: rgba(250, 178, 25, 0.16);
+  --color-serious: #ec835a;
+  --color-serious-wash: rgba(236, 131, 90, 0.16);
+  --color-critical: #d03b3b;
+  --color-critical-wash: rgba(208, 59, 59, 0.18);
+
+  /* Elevation tokens (themed -- this project has no Tailwind dark: variant;
+     everything swaps via these custom properties). Dark cards carry an inset
+     top-edge highlight (the "lit from above" cue every cinematic dark system
+     uses) plus a deep drop. */
+  --shadow-card: inset 0 1px 0 rgba(255, 255, 255, 0.05),
+                 0 1px 2px rgba(0, 0, 0, 0.4), 0 4px 16px rgba(0, 0, 0, 0.3);
+  --shadow-header: 0 1px 18px rgba(0, 0, 0, 0.45);
+  /* Accent glow behind primary CTAs -- the neon cue. Transparent in light. */
+  --glow-accent: 0 0 20px rgba(34, 184, 212, 0.35);
+
+  /* Back-compat with the two variables the pre-4.2 body rule referenced --
+     kept as aliases so nothing outside this file needs to change. */
+  --background: var(--color-surface-page);
+  --foreground: var(--color-ink);
+}
+
+[data-theme="light"] {
   --color-surface: #fcfcfb;
   --color-surface-page: #f9f9f7;
   --color-surface-raised: #ffffff;
@@ -30,86 +81,14 @@
   --color-accent-wash: rgba(14, 116, 144, 0.08);
   --color-accent-wash-strong: rgba(14, 116, 144, 0.16);
 
-  --color-good: #0ca30c;
   --color-good-wash: rgba(12, 163, 12, 0.10);
-  --color-warning: #fab219;
   --color-warning-wash: rgba(250, 178, 25, 0.14);
-  --color-serious: #ec835a;
   --color-serious-wash: rgba(236, 131, 90, 0.12);
-  --color-critical: #d03b3b;
   --color-critical-wash: rgba(208, 59, 59, 0.10);
 
-  /* Card/header elevation (Sprint 4.7 shell pass). A themed token, not a
-     hardcoded shadow color -- this project has no Tailwind dark: variant
-     anywhere (confirmed by grep), everything swaps via [data-theme="dark"], so
-     a fixed rgba(black) shadow would just vanish on the dark surface. */
   --shadow-card: 0 1px 2px rgba(11, 11, 11, 0.05), 0 1px 8px rgba(11, 11, 11, 0.03);
   --shadow-header: 0 1px 12px rgba(11, 11, 11, 0.05);
-
-  /* Back-compat with the two variables the pre-4.2 body rule referenced --
-     kept as aliases so nothing outside this file needs to change. */
-  --background: var(--color-surface-page);
-  --foreground: var(--color-ink);
-}
-
-[data-theme="dark"] {
-  --color-surface: #1a1a19;
-  --color-surface-page: #0d0d0d;
-  --color-surface-raised: #232322;
-  --color-hairline: #2c2c2a;
-  --color-hairline-strong: rgba(255, 255, 255, 0.16);
-
-  --color-ink: #ffffff;
-  --color-ink-secondary: #c3c2b7;
-  --color-ink-muted: #898781;
-
-  --color-accent: #22b8d4;
-  --color-accent-hover: color-mix(in srgb, #22b8d4 85%, white);
-  --color-accent-contrast: #04141a;
-  --color-accent-wash: rgba(34, 184, 212, 0.12);
-  --color-accent-wash-strong: rgba(34, 184, 212, 0.20);
-
-  --color-good: #0ca30c;
-  --color-good-wash: rgba(12, 163, 12, 0.16);
-  --color-warning: #fab219;
-  --color-warning-wash: rgba(250, 178, 25, 0.16);
-  --color-serious: #ec835a;
-  --color-serious-wash: rgba(236, 131, 90, 0.16);
-  --color-critical: #d03b3b;
-  --color-critical-wash: rgba(208, 59, 59, 0.18);
-
-  /* Dark surfaces need a stronger, lighter-leaning shadow -- a black shadow at
-     light-mode opacity is invisible against an already-near-black background.
-     rgba(0,0,0) at higher alpha still reads (deeper black against dark gray). */
-  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.35), 0 1px 10px rgba(0, 0, 0, 0.25);
-  --shadow-header: 0 1px 14px rgba(0, 0, 0, 0.35);
-}
-
-/* prefers-color-scheme is only the fallback for "system" before the inline
-   init script in layout.tsx runs and stamps data-theme -- see D11. Once
-   data-theme is set (light or dark, explicitly), it always wins over this. */
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]):not([data-theme="dark"]) {
-    --color-surface: #1a1a19;
-    --color-surface-page: #0d0d0d;
-    --color-surface-raised: #232322;
-    --color-hairline: #2c2c2a;
-    --color-hairline-strong: rgba(255, 255, 255, 0.16);
-    --color-ink: #ffffff;
-    --color-ink-secondary: #c3c2b7;
-    --color-ink-muted: #898781;
-    --color-accent: #22b8d4;
-    --color-accent-hover: color-mix(in srgb, #22b8d4 85%, white);
-    --color-accent-contrast: #04141a;
-    --color-accent-wash: rgba(34, 184, 212, 0.12);
-    --color-accent-wash-strong: rgba(34, 184, 212, 0.20);
-    --color-good-wash: rgba(12, 163, 12, 0.16);
-    --color-warning-wash: rgba(250, 178, 25, 0.16);
-    --color-serious-wash: rgba(236, 131, 90, 0.16);
-    --color-critical-wash: rgba(208, 59, 59, 0.18);
-    --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.35), 0 1px 10px rgba(0, 0, 0, 0.25);
-    --shadow-header: 0 1px 14px rgba(0, 0, 0, 0.35);
-  }
+  --glow-accent: 0 0 0 rgba(0, 0, 0, 0);
 }
 
 @theme inline {
@@ -148,6 +127,19 @@ body {
   background: var(--color-surface-page);
   color: var(--color-ink);
   font-family: var(--font-sans), system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+/* Cinematic base (dark only): the page isn't a flat near-black rect but a
+   layered field -- a faint accent aurora bleeding in from the top, a second
+   from the bottom corner, over a deep vertical ramp. Pure gradients, zero
+   runtime cost, and the animated canvas layers on top of this. Attached to
+   [data-theme="dark"] (always stamped -- SSR renders it and the init script
+   re-stamps) so the light opt-out keeps its plain paper surface. */
+[data-theme="dark"] body {
+  background:
+    radial-gradient(85% 55% at 75% -12%, rgba(34, 184, 212, 0.09) 0%, transparent 60%),
+    radial-gradient(70% 45% at 8% 108%, rgba(34, 184, 212, 0.05) 0%, transparent 60%),
+    linear-gradient(180deg, #0b0e14 0%, #07080b 55%, #08090d 100%);
 }
 
 /* Smooth scrolling for the landing page's anchor nav (finding #5). Guarded by
@@ -250,6 +242,27 @@ body {
 [data-theme="dark"] .lift:hover { box-shadow: 0 8px 24px -10px rgba(0, 0, 0, 0.6); }
 @media (prefers-reduced-motion: reduce) {
   .rise, .rise-group > * { animation: none; }
+}
+
+/* Aurora blobs (dark cinematic hero, 2026-07-15): large blurred accent fields
+   that drift very slowly -- the "animated background instead of a video"
+   texture under the landing hero. Transform/opacity only, 26-34s cycles (this
+   is atmosphere, not a micro-interaction, so the 300ms rule doesn't apply --
+   ui-ux-pro-max's Modern Dark Cinema spec calls for exactly this slow ambient
+   oscillation). Static when reduced-motion. */
+@keyframes aurora-a {
+  0%   { transform: translate(0, 0) scale(1); }
+  50%  { transform: translate(6%, 10%) scale(1.15); }
+  100% { transform: translate(0, 0) scale(1); }
+}
+@keyframes aurora-b {
+  0%   { transform: translate(0, 0) scale(1.1); }
+  50%  { transform: translate(-8%, -6%) scale(0.95); }
+  100% { transform: translate(0, 0) scale(1.1); }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .aurora-a { animation: aurora-a 28s ease-in-out infinite; }
+  .aurora-b { animation: aurora-b 34s ease-in-out infinite; }
 }
 
 /* Skeleton shimmer: a light sweep across a token-coloured block, calmer than a

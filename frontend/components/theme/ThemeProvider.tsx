@@ -44,15 +44,18 @@ function resolve(pref: ThemePreference): ResolvedTheme {
 // suppressHydrationWarning to the elements whose highlighted state depends
 // on this, the officially sanctioned escape hatch for exactly this
 // client-only-UI case (same pattern next-themes uses).
+// Defaults flipped to dark 2026-07-15 (owner decision -- dark cinematic is
+// the brand now; must stay in lockstep with layout.tsx's THEME_INIT_SCRIPT
+// fallback and the SSR data-theme="dark" attribute).
 function readInitialPreference(): ThemePreference {
-  if (typeof document === 'undefined') return 'system'
+  if (typeof document === 'undefined') return 'dark'
   const attr = document.documentElement.getAttribute('data-theme-pref')
-  return attr === 'light' || attr === 'dark' || attr === 'system' ? attr : 'system'
+  return attr === 'light' || attr === 'dark' || attr === 'system' ? attr : 'dark'
 }
 
 function readInitialResolved(): ResolvedTheme {
-  if (typeof document === 'undefined') return 'light'
-  return document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light'
+  if (typeof document === 'undefined') return 'dark'
+  return document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark'
 }
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {

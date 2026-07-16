@@ -23,7 +23,10 @@ const BASE =
   'disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100'
 
 const VARIANTS: Record<ButtonVariant, string> = {
-  primary: 'bg-accent text-accent-contrast hover:bg-accent-hover',
+  // --glow-accent is the dark-cinematic neon halo behind the primary action
+  // (2026-07-15); the light theme defines it as a transparent shadow, so this
+  // one class is theme-correct with no variant logic here.
+  primary: 'bg-accent text-accent-contrast hover:bg-accent-hover shadow-[var(--glow-accent)]',
   secondary: 'border border-hairline-strong text-ink hover:bg-accent-wash',
   ghost: 'text-ink-secondary hover:bg-accent-wash hover:text-ink',
   danger: 'text-ink-secondary hover:bg-critical-wash hover:text-critical',

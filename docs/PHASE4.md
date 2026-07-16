@@ -126,7 +126,11 @@ functionality-verified).
 
 **What was built:**
 - Design system generated from the locked design direction (light-first minimal, cyan/blue
-  accent, dense-console SOC variant, dark+light+system) using the `dataviz` skill (already
+  accent, dense-console SOC variant, dark+light+system) — **NOTE: the light-FIRST half of this
+  decision was reversed 2026-07-15 by owner decision (dark cinematic is now the default; light
+  stays as the toggle opt-out). The tokens, contrast discipline, and toggle machinery below all
+  survive unchanged — only the default flipped. See the Sprint 4.7 dark-cinematic entry.** —
+  using the `dataviz` skill (already
   available) rather than only `ui-ux-pro-max` (installed this sprint but needs a Claude Code
   restart to load — see Clint's manual steps) — status colors, chrome/ink tokens, and contrast
   checks came from the dataviz skill's validated reference palette and its `validate_palette.js`
@@ -1149,6 +1153,43 @@ threat-modelled ADR rather than a rushed tail-of-marathon build.
 **Manual tests:** `docs/MANUAL-TESTS.md` T9–T15. **Clint's manual step:** `git push` (no migration).
 **Still open in 4.7 for a later pass:** the revise-with-note loop (above), and security testing of
 the new surfaces (Clint deferred it: "frontend UI shouldn't affect the design much").
+
+#### 4.7 dark-cinematic rebuild (2026-07-15, 🟡 code-complete) — the persistent-issue fix
+
+Clint's third "I still don't see changes" prompted a stop-and-diagnose instead of another patch.
+**Verified the delivery chain first**: all prior UI work was committed (his `8977ba6`), pushed, and
+the Vercel production deployment was `READY` at exactly that commit — so nothing was lost in
+transit. The real issue: **the design premise itself.** Every pass polished within the locked
+light-first minimal system, while his stated reference (Valorant's landing) is dark, cinematic,
+full-bleed, and motion-forward — glow physically needs darkness. Direction re-locked with him
+explicitly: **dark cinematic everywhere** (owner decision, reversing 4.2's light-first default;
+light remains as the toggle opt-out).
+
+Built, referencing `ui-ux-pro-max`'s "Modern Dark Cinema" guidance (21st-dev magic-mcp was added
+to his config mid-session but loads only on a Claude Code restart — next session):
+- **Theme foundation flipped:** `:root` now carries a blue-shifted dark set (`#08090d` page,
+  `#14161c` surface — same lightness band as the old warm dark so contrast holds: re-computed
+  accent 7.67:1, secondary 10.3:1, muted 5.6:1, all AA+); `[data-theme="light"]` is the explicit
+  opt-out; the SSR attribute, init-script fallback, and ThemeProvider defaults all flipped to
+  dark in lockstep; the `prefers-color-scheme` CSS fallback block was removed (brand default
+  outranks OS guess; explicit "system" still resolves via matchMedia).
+- **Cinematic base:** layered page gradient (accent auroras bleeding into a deep vertical ramp)
+  on `[data-theme="dark"] body`; cards gained an inset top-edge highlight via the shadow token;
+  primary buttons/CTAs wear a `--glow-accent` neon halo (transparent in light).
+- **`EyeNetworkBackground` v2:** designed FOR dark and dampened (×0.65) for light — the v1
+  mistake inverted. Hero: 130 nodes, bright links, radar sweep, node glow (`shadowBlur`), and
+  **cursor-linking** (the field reaches toward the pointer — the watchman noticing you).
+  Ambient: genuinely visible now (70 nodes, 0.26 link alpha vs v1's imperceptible 0.1), 30fps
+  throttle. Also fixed a v1 pause-logic bug (tab-hide could wedge the loop off).
+- **Landing hero heaviest:** new `AuroraGlow` (two huge blurred accent fields on 28s/34s CSS
+  cycles — the "video background, but animated" texture; zero JS, reduced-motion-free), 92vh
+  full-bleed hero, headline up to 7xl with an accent-gradient second line, glow CTA.
+- All of it reduced-motion-guarded (still frame / static glows), token-driven (zero hardcoded
+  light colors found in the sweep), print CSS still forces light.
+
+Verified: build clean; dev-server smoke — SSR serves `data-theme="dark"`, aurora + canvas render
+on landing and login, zero runtime errors. Tests: `docs/MANUAL-TESTS.md` **T18**. Manual step:
+`git push` only.
 
 #### Sprint 4.6c — still to build
 
