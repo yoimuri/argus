@@ -3,78 +3,109 @@
 import { useEffect, useRef } from 'react'
 import { useTheme } from '@/components/theme/ThemeProvider'
 
-// The signature animated background, v3 (visibility rebuild, 2026-07-17).
+// The signature animated background, v4 (two CHARACTERS, 2026-07-17).
 //
-// WHY v3: v2 deployed correctly and ran on the live site -- but a live-render
-// audit measured the hero canvas at avg alpha 19/255 (~7%). 319k pixels were
-// being painted at a whisper, so Clint's verdict "same old simple color / NO
-// CHANGES" was ACCURATE design feedback, not a bug report: the network was
-// there and technically invisible. The failure was link alpha fading linearly
-// to ~0 with distance (most links rendered near-transparent) plus alphas tuned
-// for politeness. v3 fixes the actual defect: bright links with a visibility
-// FLOOR (a link is either clearly drawn or not drawn), larger glowing nodes,
-// and three intensity tiers so each surface gets the right loudness --
-//   hero    : the public showcase, unmistakable in one second (Clint: "big and
-//             cinematic, like Valorant's landing")
-//   app     : inner app pages -- present and designed, but calm enough not to
-//             fight working content (Clint: "tame but still appealing to
-//             non-tech users, not too flashy everywhere")
-//   ambient : the quietest fallback (kept for any surface that wants a hint)
+// WHY v4: v3 made the network visible and split the themes by PARAMETERS
+// (color, speed, link length). Clint's verdict was exactly right -- "light mode
+// is just a re-colored network, not really serious vs relaxed." Turning knobs
+// on the SAME visual machine can only ever make the same personality louder or
+// quieter. Personality lives in BEHAVIOR -- how things move and connect -- not
+// in color. So v4 gives the two themes genuinely different behavior:
 //
-// The concept is still the product: ARGUS is the hundred-eyed watchman -- a
-// field of glowing nodes (documents/facts) drifts and links when close (what
-// the Retriever/Synthesizer do), a radar sweep crosses the hero (the SOC half),
-// and on the hero the network reaches toward the cursor (the watchman looking
-// back).
+//   DARK = "THE WATCHTOWER" (serious / surveillance). A system actively
+//     watching data. STRAIGHT sharp links (circuit-like); a slow radar sweep
+//     that, as it passes, snaps a faint TARGETING BRACKET onto a sparse subset
+//     of nodes (lock-on -- the system identifying); and the occasional soft
+//     DATA PULSE racing along a link (data being traced). Restrained on
+//     purpose (Clint: "not too trying to steal the spotlight where
+//     functionality should still be king") -- these are hero-only and subtle.
 //
-// TWO PERSONALITIES (Clint, 2026-07-17 -- gives the theme toggle a reason to
-// exist beyond eye comfort):
-//   DARK  = SERIOUS. The SOC/watchman mood: tight, sharp, taut links, a tense
-//           radar sweep, brisk drift. "The system is watching."
-//   LIGHT = RELAXED. Same node-network MOTIF, opposite temperament: softer
-//           warmer nodes, slow loose drift, more breathing room between links,
-//           no radar. Airy and human. "The system is at ease."
-// This is NOT a damped copy of the dark field (v2/v3's mistake) -- the light
-// theme reshapes the tuning through PERSONALITY below, so it has its own feel.
+//   LIGHT = "THE READING ROOM" (relaxed / organic). Ideas gently finding each
+//     other. CURVED soft links (bezier arcs, not rigid wire); every node
+//     FLOATS on its own slow bob (like dust in a sunbeam); and the whole field
+//     BREATHES -- a slow collective swell. No radar, no lock-on, nothing hunted.
+//
+// Same concept root (connected documents/facts), OPPOSITE temperament -- one
+// scans and locks, the other drifts and breathes. That is a real personality
+// fork, not a recolor, and it gives the theme toggle a reason to exist.
 //
 // Colors are hardcoded to match globals.css's accent tokens (canvas draws into
 // its own pixel buffer with no live cascade). useTheme() picks the constants and
 // re-runs the effect the instant the toggle flips; `theme` pins it for the
 // permanently-dark brand surfaces (landing/login).
-//
-// Light network color: a SOFTER, slightly warmer teal than the token accent
-// (#0e7490 is a bit clinical for the "relaxed" mood) -- lines read as calm
-// pencil strokes on paper, not sharp cyan wire. Dark keeps the bright cyan.
 const ACCENT = { light: '45, 130, 150', dark: '34, 184, 212' } // r,g,b network base
-// A second tint on a fraction of nodes so the field reads as living data, not
-// one flat color. Light leans gentle teal-green (relaxed); dark leans bright.
+// A second tint on a fraction of nodes / the lock-on + pulses so the field
+// reads as living data. Light leans gentle teal-green; dark leans bright cyan.
 const ACCENT_HI = { light: '90, 160, 165', dark: '103, 232, 249' }
 
-// Per-theme personality: multipliers/overrides applied on top of the intensity
-// TUNING so each theme feels different, not just lighter/darker.
-//   speedMul  : how briskly nodes drift (light = slower, calmer)
-//   linkMul   : link opacity scale (light lines are quiet on white)
+// Per-theme personality. `character` selects the whole behavior set; the
+// multipliers fine-tune within it.
+//   character : 'watch' (dark surveillance) | 'drift' (light organic)
+//   speedMul  : drift briskness (light slower/calmer)
+//   linkMul   : link opacity scale
 //   nodeMul   : node opacity scale
-//   distMul   : link-distance scale (light > 1 = looser, more open web)
-//   rMul      : node-radius scale (light = a touch larger/rounder/softer)
-//   radar     : whether the radar sweep runs at all (light = never; too tense)
-//   damp      : legacy overall alpha scale kept for fine control
-const PERSONALITY = {
-  dark:  { speedMul: 1,    linkMul: 1,    nodeMul: 1,    distMul: 1,    rMul: 1,   radar: true,  damp: 1 },
-  light: { speedMul: 0.6,  linkMul: 0.85, nodeMul: 0.9,  distMul: 1.18, rMul: 1.2, radar: false, damp: 0.9 },
-} as const
+//   distMul   : link-distance scale (light > 1 = looser web)
+//   rMul      : node-radius scale (light rounder/softer)
+//   damp      : overall alpha scale
+//   curved    : bezier-arc links (drift) vs straight (watch)
+//   radar/lockOn/pulses : the dark WATCH signature behaviors (hero-only)
+//   bob/breathe         : the light DRIFT signature behaviors (all tiers)
+type Character = 'watch' | 'drift'
+interface Persona {
+  character: Character
+  speedMul: number
+  linkMul: number
+  nodeMul: number
+  distMul: number
+  rMul: number
+  damp: number
+  curved: boolean
+  radar: boolean
+  lockOn: boolean
+  pulses: boolean
+  bob: boolean
+  breathe: boolean
+}
+const PERSONALITY: Record<'light' | 'dark', Persona> = {
+  dark: {
+    character: 'watch',
+    speedMul: 1, linkMul: 1, nodeMul: 1, distMul: 1, rMul: 1, damp: 1,
+    curved: false, radar: true, lockOn: true, pulses: true, bob: false, breathe: false,
+  },
+  light: {
+    character: 'drift',
+    speedMul: 0.55, linkMul: 0.9, nodeMul: 0.95, distMul: 1.18, rMul: 1.25, damp: 0.95,
+    curved: true, radar: false, lockOn: false, pulses: false, bob: true, breathe: true,
+  },
+}
 
 export type BackgroundIntensity = 'hero' | 'app' | 'ambient'
 
 interface Node {
-  x: number
+  x: number // drift base position
   y: number
   vx: number
   vy: number
+  rx: number // render position (drift base + float bob); links + nodes use this
+  ry: number
   r: number
-  pulse: number // phase offset so nodes don't glow in lockstep
-  hot: boolean // a fraction glow with the brighter tint
+  pulse: number // glow phase offset so nodes don't pulse in lockstep
+  hot: boolean // a fraction carry the brighter tint
+  bobPhase: number // float-bob phase (drift character)
+  bobAmp: number // float-bob amplitude px
+  lockT: number // lock-on bracket decay timer 0..1 (watch character)
+  trackable: boolean // only a sparse subset ever gets a lock-on bracket
 }
+
+// A data pulse: a bright dot travelling a→b along a currently-linked pair.
+interface Pulse {
+  a: number
+  b: number
+  t: number
+  speed: number
+}
+
+const TAU = Math.PI * 2
 
 const TUNING: Record<BackgroundIntensity, {
   density: number // px^2 of canvas area per node, lower = denser
@@ -91,28 +122,26 @@ const TUNING: Record<BackgroundIntensity, {
   cursor: boolean
   fps: number
 }> = {
-  // Hero: the showpiece, but ATMOSPHERE not spotlight (Clint, 2026-07-17: "the
-  // transparency shouldn't be too high so it's not taking the spotlight too
-  // much, especially on landing"). Dialed back from the earlier loud pass
-  // (nodeAlpha 1 / linkAlpha 0.7) to a rich-but-recessive field the headline
-  // clearly wins over -- paired with a deeper center scrim in page.tsx. Still
-  // well above the old 7% faint failure; the radial scrim carves the calm
-  // pocket where the text sits.
+  // Hero: the showpiece, but ATMOSPHERE not spotlight (Clint: "transparency
+  // shouldn't be too high... not taking the spotlight too much, especially on
+  // landing"). A rich-but-recessive field the headline clearly wins over,
+  // paired with a deeper center scrim in page.tsx. The dark WATCH signature
+  // behaviors (radar/lock-on/pulses) live only here.
   hero: {
     density: 7000, maxNodes: 135, linkDist: 170, speed: 0.14,
     nodeAlpha: 0.82, linkAlpha: 0.42, linkFloor: 0.22, nodeR: [1.2, 2.9],
-    glowBlur: 14, radar: true, radarAlpha: 0.34, cursor: true, fps: 60,
+    glowBlur: 14, radar: true, radarAlpha: 0.32, cursor: true, fps: 60,
   },
-  // App: inner pages. Clearly a designed background, calmer than the hero --
-  // fewer nodes, softer links, a gentle glow, no radar/cursor chase, throttled
-  // framerate since it runs alongside real work.
+  // App: inner pages. Clearly a designed background, calmer than the hero and
+  // WITHOUT the watch signature (no radar/lock-on/pulses) -- functionality is
+  // king where real work happens. Light's drift character (curved/bob/breathe)
+  // still applies here, so the dashboard in light feels genuinely relaxed.
   app: {
     density: 9000, maxNodes: 95, linkDist: 165, speed: 0.075,
     nodeAlpha: 0.85, linkAlpha: 0.45, linkFloor: 0.28, nodeR: [1.1, 2.4],
     glowBlur: 9, radar: false, radarAlpha: 0, cursor: false, fps: 40,
   },
-  // Ambient: the quietest tier -- a hint of the same field. Kept for any
-  // surface that wants presence without drawing the eye at all.
+  // Ambient: the quietest tier -- a hint of the field, no signature behaviors.
   ambient: {
     density: 12000, maxNodes: 70, linkDist: 150, speed: 0.06,
     nodeAlpha: 0.7, linkAlpha: 0.32, linkFloor: 0.3, nodeR: [1, 2],
@@ -129,8 +158,7 @@ export default function EyeNetworkBackground({
   className?: string
   /** Pin the palette regardless of the app toggle. The landing/login are
       permanently cinematic (their subtree carries data-theme="dark"), so
-      their canvases must ignore the html-level theme too -- otherwise a
-      light-pref visitor gets the damped light tuning on a dark stage. */
+      their canvases must ignore the html-level theme too. */
   theme?: 'light' | 'dark'
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -147,45 +175,38 @@ export default function EyeNetworkBackground({
 
     // Motion policy (Clint's decision, 2026-07-17): the animation plays for
     // EVERYONE, the same design regardless of the OS reduced-motion setting.
-    // Rationale he reached: the site should look identical for all users, and a
-    // reduced-motion visitor seeing a different/static version = seeing a
-    // lesser page. So we do NOT gate on prefers-reduced-motion here.
-    //
     // Implemented the SAFE way -- a single scoped flag, NOT the global
-    // `window.matchMedia = ...` mock that some guides suggest (that stub reports
-    // "false" for EVERY query and drops addEventListener, which would break the
-    // theme system's own (prefers-color-scheme) reads and throw where we call
-    // mql.addEventListener). We only stop obeying reduced-motion for THIS
-    // canvas; everything else still respects the user's real preferences.
-    //
-    // The one guardrail kept for forcing motion on people who asked it off: the
-    // field is deliberately GENTLE -- slow drift, shallow slow pulse, no
-    // flashing/strobing -- so "always on" never becomes a seizure/vestibular
-    // hazard, only ambient movement.
+    // `window.matchMedia = ...` mock some guides push (that stub answers "false"
+    // to EVERY query and drops addEventListener, which would break the theme
+    // system's own prefers-color-scheme reads). We only stop obeying
+    // reduced-motion for THIS canvas. Guardrail: the field is deliberately
+    // gentle (slow drift, shallow pulse, no flashing) so "always on" is never a
+    // seizure/vestibular hazard. renderStatic() stays as a fallback.
     const FORCE_MOTION = true
     const reduceMotion = FORCE_MOTION
       ? false
       : window.matchMedia('(prefers-reduced-motion: reduce)').matches
+
     const tuning = TUNING[intensity]
     const persona = PERSONALITY[resolvedTheme]
     const rgb = ACCENT[resolvedTheme]
     const rgbHi = ACCENT_HI[resolvedTheme]
-    // Overall alpha scale. Glow-on-white has a physical ceiling (the same alphas
-    // that sing on the dark base turn to mud on paper), so the relaxed light
-    // personality carries its own damp -- but the whole point of PERSONALITY is
-    // that light is a DIFFERENT field, not just a quieter one.
     const damp = persona.damp
-    // Effective tuning after the theme personality reshapes it.
     const linkDist = tuning.linkDist * persona.distMul
     const speedMul = persona.speedMul
-    // createConicGradient isn't universal (older Safari); an unguarded call
-    // throws on first frame and would silently kill the whole rAF loop. Light
-    // never runs the radar at all (persona.radar=false) -- it's too tense for
-    // the relaxed mood; the dark "serious" field keeps it.
-    const supportsRadar =
-      tuning.radar && persona.radar && typeof ctx.createConicGradient === 'function'
+
+    // The WATCH signature behaviors are hero-only AND dark-only (persona flags).
+    // createConicGradient isn't universal (older Safari) -- an unguarded call
+    // throws on the first frame and would kill the rAF loop.
+    const isHero = intensity === 'hero'
+    const doRadar =
+      isHero && persona.radar && typeof ctx.createConicGradient === 'function'
+    const doLock = isHero && persona.lockOn
+    const doPulse = isHero && persona.pulses
 
     let nodes: Node[] = []
+    let pulses: Pulse[] = []
+    let pulseCooldown = 60 // frames until the first pulse may spawn
     let width = 0
     let height = 0
     let dpr = 1
@@ -195,7 +216,6 @@ export default function EyeNetworkBackground({
     let tabVisible = document.visibilityState === 'visible'
     let lastFrame = 0
     const frameBudgetMs = tuning.fps >= 60 ? 0 : 1000 / tuning.fps
-    // Cursor position in canvas coordinates; null when the pointer is away.
     let mouse: { x: number; y: number } | null = null
 
     function seed() {
@@ -205,20 +225,23 @@ export default function EyeNetworkBackground({
       nodes = Array.from({ length: count }, () => ({
         x: Math.random() * width,
         y: Math.random() * height,
-        // speedMul: light drifts slower (relaxed), dark brisker (serious).
         vx: (Math.random() - 0.5) * tuning.speed * speedMul,
         vy: (Math.random() - 0.5) * tuning.speed * speedMul,
-        // rMul: light nodes a touch larger/rounder/softer.
+        rx: 0,
+        ry: 0,
         r: (rMin + Math.random() * (rMax - rMin)) * persona.rMul,
-        pulse: Math.random() * Math.PI * 2,
-        hot: Math.random() < 0.28, // ~a quarter carry the brighter tint
+        pulse: Math.random() * TAU,
+        hot: Math.random() < 0.28,
+        bobPhase: Math.random() * TAU,
+        bobAmp: 3 + Math.random() * 6, // 3-9px gentle float
+        lockT: 0,
+        trackable: Math.random() < 0.3, // only ~30% ever lock-on (restraint)
       }))
+      pulses = []
     }
 
     function resize() {
       const rect = container!.getBoundingClientRect()
-      // Capped: ambient decoration, not photo output -- a 3x backing store on
-      // a big monitor multiplies fill cost for an invisible difference.
       dpr = Math.min(window.devicePixelRatio || 1, 1.75)
       width = Math.max(1, Math.round(rect.width))
       height = Math.max(1, Math.round(rect.height))
@@ -230,30 +253,105 @@ export default function EyeNetworkBackground({
       seed()
     }
 
+    // Radar sweep (dark watch). Also ARMS lock-on: as the bright edge passes a
+    // trackable node's angle, that node's bracket timer is set to 1.
+    function drawRadar(cx: number, cy: number) {
+      const radius = Math.max(width, height) * 0.9
+      const sweep = ctx!.createConicGradient(radarAngle, cx, cy)
+      sweep.addColorStop(0, `rgba(${rgb}, ${(tuning.radarAlpha * damp).toFixed(3)})`)
+      sweep.addColorStop(0.05, `rgba(${rgb}, ${(tuning.radarAlpha * 0.35 * damp).toFixed(3)})`)
+      sweep.addColorStop(0.14, 'rgba(0,0,0,0)')
+      sweep.addColorStop(1, 'rgba(0,0,0,0)')
+      ctx!.save()
+      ctx!.beginPath()
+      ctx!.arc(cx, cy, radius, 0, TAU)
+      ctx!.fillStyle = sweep
+      ctx!.fill()
+      ctx!.restore()
+      radarAngle = (radarAngle + 0.004) % TAU
+    }
+
+    // A small targeting bracket around a node, alpha driven by its lock timer.
+    // Corners only (a reticle, not a filled box) so it reads as "identified,"
+    // subtle. rgbHi so it's a highlight; capped low so it never shouts.
+    function drawLockBracket(n: Node) {
+      const a = n.lockT * 0.5 * damp // subtle ceiling
+      if (a <= 0.01) return
+      const s = n.r + 6 + (1 - n.lockT) * 4 // contracts slightly as it locks
+      const arm = s * 0.5
+      const x = n.rx
+      const y = n.ry
+      ctx!.strokeStyle = `rgba(${rgbHi}, ${a.toFixed(3)})`
+      ctx!.lineWidth = 1
+      ctx!.beginPath()
+      // top-left
+      ctx!.moveTo(x - s, y - s + arm); ctx!.lineTo(x - s, y - s); ctx!.lineTo(x - s + arm, y - s)
+      // top-right
+      ctx!.moveTo(x + s - arm, y - s); ctx!.lineTo(x + s, y - s); ctx!.lineTo(x + s, y - s + arm)
+      // bottom-right
+      ctx!.moveTo(x + s, y + s - arm); ctx!.lineTo(x + s, y + s); ctx!.lineTo(x + s - arm, y + s)
+      // bottom-left
+      ctx!.moveTo(x - s + arm, y + s); ctx!.lineTo(x - s, y + s); ctx!.lineTo(x - s, y + s - arm)
+      ctx!.stroke()
+    }
+
+    function spawnPulse() {
+      // Pick a random node that has at least one neighbour within linkDist, then
+      // send a pulse to that neighbour. Data being traced through the network.
+      const start = Math.floor(Math.random() * nodes.length)
+      const a = nodes[start]
+      if (!a) return
+      const candidates: number[] = []
+      for (let k = 0; k < nodes.length; k++) {
+        if (k === start) continue
+        const b = nodes[k]
+        const dx = a.rx - b.rx
+        const dy = a.ry - b.ry
+        if (dx * dx + dy * dy < linkDist * linkDist) candidates.push(k)
+      }
+      if (!candidates.length) return
+      const b = candidates[Math.floor(Math.random() * candidates.length)]
+      pulses.push({ a: start, b, t: 0, speed: 0.012 + Math.random() * 0.01 })
+    }
+
+    function drawPulses() {
+      if (pulseCooldown > 0) pulseCooldown--
+      // Spawn sparingly and cap concurrency -- atmosphere, not a light show.
+      if (pulseCooldown === 0 && pulses.length < 4) {
+        spawnPulse()
+        pulseCooldown = 70 + Math.floor(Math.random() * 60)
+      }
+      ctx!.save()
+      ctx!.shadowBlur = 8
+      ctx!.shadowColor = `rgba(${rgbHi}, 0.8)`
+      for (let i = pulses.length - 1; i >= 0; i--) {
+        const p = pulses[i]
+        p.t += p.speed
+        const a = nodes[p.a]
+        const b = nodes[p.b]
+        if (!a || !b || p.t >= 1) { pulses.splice(i, 1); continue }
+        const x = a.rx + (b.rx - a.rx) * p.t
+        const y = a.ry + (b.ry - a.ry) * p.t
+        // fade in and out over the trip so it never pops
+        const edge = Math.sin(p.t * Math.PI)
+        ctx!.beginPath()
+        ctx!.fillStyle = `rgba(${rgbHi}, ${(0.85 * edge * damp).toFixed(3)})`
+        ctx!.arc(x, y, 1.8, 0, TAU)
+        ctx!.fill()
+      }
+      ctx!.restore()
+    }
+
     function drawFrame(t: number) {
       ctx!.clearRect(0, 0, width, height)
 
-      // Radar sweep first so the network draws over it. Brighter in v3 --
-      // meant to be seen glinting across the hero, not guessed at.
-      if (supportsRadar) {
-        const cx = width * 0.82
-        const cy = height * 0.2
-        const radius = Math.max(width, height) * 0.9
-        const sweep = ctx!.createConicGradient(radarAngle, cx, cy)
-        sweep.addColorStop(0, `rgba(${rgb}, ${(tuning.radarAlpha * damp).toFixed(3)})`)
-        sweep.addColorStop(0.05, `rgba(${rgb}, ${(tuning.radarAlpha * 0.35 * damp).toFixed(3)})`)
-        sweep.addColorStop(0.14, 'rgba(0,0,0,0)')
-        sweep.addColorStop(1, 'rgba(0,0,0,0)')
-        ctx!.save()
-        ctx!.beginPath()
-        ctx!.arc(cx, cy, radius, 0, Math.PI * 2)
-        ctx!.fillStyle = sweep
-        ctx!.fill()
-        ctx!.restore()
-        radarAngle += 0.004
-      }
+      const cx = width * 0.82
+      const cy = height * 0.2
+      if (doRadar) drawRadar(cx, cy)
 
-      // Drift + wrap.
+      // Update drift + compute render positions (rx/ry). In the DRIFT character
+      // each node floats on its own slow bob; in WATCH rx/ry == x/y.
+      const bob = persona.bob && !reduceMotion
       for (const n of nodes) {
         n.x += n.vx
         n.y += n.vy
@@ -261,94 +359,122 @@ export default function EyeNetworkBackground({
         if (n.x > width + 20) n.x = -20
         if (n.y < -20) n.y = height + 20
         if (n.y > height + 20) n.y = -20
+        if (bob) {
+          n.rx = n.x + Math.sin(t * 0.0006 + n.bobPhase) * n.bobAmp
+          n.ry = n.y + Math.cos(t * 0.00052 + n.bobPhase) * n.bobAmp
+        } else {
+          n.rx = n.x
+          n.ry = n.y
+        }
       }
 
-      // Node-to-node links. O(n^2) is fine at <=150 nodes -- the standard
-      // constellation technique. THE v3 FIX: proximity scales the alpha
-      // between linkFloor and 1, never to 0. A link that's drawn at all stays
-      // visible; that single change is what lifts the field out of the 7%
-      // whisper that read as "no animation".
-      // Light links are a hair thicker so they read as soft pencil strokes on
-      // paper rather than thin sharp wire (part of the "relaxed" feel).
-      ctx!.lineWidth = resolvedTheme === 'light' ? 1.25 : 1.1
+      // Lock-on arming (watch): when the sweep's bright edge (radarAngle) passes
+      // a trackable node's angle, arm its bracket. The lockT<0.05 guard makes it
+      // fire once per pass, then decay.
+      if (doLock) {
+        for (const n of nodes) {
+          if (!n.trackable) continue
+          const ang = Math.atan2(n.ry - cy, n.rx - cx)
+          let da = radarAngle - ang
+          da -= Math.floor(da / TAU) * TAU // normalize [0, TAU)
+          if (da < 0.08 && n.lockT < 0.05) n.lockT = 1
+          if (n.lockT > 0) n.lockT *= 0.97 // slow decay
+        }
+      }
+
+      // Links. WATCH = straight sharp wire; DRIFT = curved bezier arcs. Both
+      // keep the v3 visibility floor (a drawn link never fades to 0).
+      ctx!.lineWidth = persona.curved ? 1.25 : 1.1
       const linkAlpha = tuning.linkAlpha * damp * persona.linkMul
       for (let i = 0; i < nodes.length; i++) {
         for (let j = i + 1; j < nodes.length; j++) {
           const a = nodes[i]
           const b = nodes[j]
-          const dx = a.x - b.x
-          const dy = a.y - b.y
+          const dx = a.rx - b.rx
+          const dy = a.ry - b.ry
           const dist = Math.sqrt(dx * dx + dy * dy)
           if (dist < linkDist) {
-            const prox = 1 - dist / linkDist // 1 = touching, 0 = at max range
+            const prox = 1 - dist / linkDist
             const scale = tuning.linkFloor + (1 - tuning.linkFloor) * prox
-            const alpha = scale * linkAlpha
-            ctx!.strokeStyle = `rgba(${rgb}, ${alpha.toFixed(3)})`
+            ctx!.strokeStyle = `rgba(${rgb}, ${(scale * linkAlpha).toFixed(3)})`
             ctx!.beginPath()
-            ctx!.moveTo(a.x, a.y)
-            ctx!.lineTo(b.x, b.y)
+            ctx!.moveTo(a.rx, a.ry)
+            if (persona.curved) {
+              // Bow the link out perpendicular to its midpoint -- a soft arc, not
+              // rigid wire. Alternate the bow direction so the web looks woven.
+              const mx = (a.rx + b.rx) / 2
+              const my = (a.ry + b.ry) / 2
+              const px = -dy
+              const py = dx
+              const plen = Math.hypot(px, py) || 1
+              const bow = dist * 0.14 * (((i + j) & 1) ? 1 : -1)
+              ctx!.quadraticCurveTo(mx + (px / plen) * bow, my + (py / plen) * bow, b.rx, b.ry)
+            } else {
+              ctx!.lineTo(b.rx, b.ry)
+            }
             ctx!.stroke()
           }
         }
       }
 
-      // Cursor links (hero): the field notices the visitor -- nodes near the
-      // pointer reach toward it, brighter than node-to-node links.
+      // Cursor links (hero/dark): the field reaches toward the visitor.
       if (tuning.cursor && mouse) {
         const reach = linkDist * 1.4
         ctx!.lineWidth = 1.4
         for (const n of nodes) {
-          const dx = n.x - mouse.x
-          const dy = n.y - mouse.y
+          const dx = n.rx - mouse.x
+          const dy = n.ry - mouse.y
           const dist = Math.sqrt(dx * dx + dy * dy)
           if (dist < reach) {
             const alpha = (1 - dist / reach) * linkAlpha * 2
             ctx!.strokeStyle = `rgba(${rgbHi}, ${Math.min(alpha, 0.75).toFixed(3)})`
             ctx!.beginPath()
-            ctx!.moveTo(n.x, n.y)
+            ctx!.moveTo(n.rx, n.ry)
             ctx!.lineTo(mouse.x, mouse.y)
             ctx!.stroke()
           }
         }
-        ctx!.lineWidth = 1.1
+        ctx!.lineWidth = persona.curved ? 1.25 : 1.1
       }
 
-      // Nodes, with individual glow pulses (documents lighting up as they're
-      // read) so the field never looks static even where links are sparse. A
-      // fraction wear the brighter tint. Glow via shadowBlur when the tier
-      // asks for it -- this is most of the hero's "cinematic" read.
+      // Data pulses (watch) draw over the links they trace.
+      if (doPulse && !reduceMotion) drawPulses()
+
+      // Nodes. DRIFT adds a slow collective BREATHE (whole field swells softly);
+      // WATCH keeps a sharper individual pulse.
+      const breath = persona.breathe ? 1 + Math.sin(t * 0.0004) * 0.06 : 1
       const glowOn = tuning.glowBlur > 0
       if (glowOn) {
         ctx!.save()
         ctx!.shadowBlur = tuning.glowBlur
       }
-      const nodeAlpha = tuning.nodeAlpha * damp * persona.nodeMul
+      const nodeAlpha = tuning.nodeAlpha * damp * persona.nodeMul * breath
       for (const n of nodes) {
-        // Light pulses more gently (shallower swing) -- the relaxed field
-        // breathes rather than blinks; dark keeps the sharper serious pulse.
         const pulse =
-          resolvedTheme === 'light'
-            ? 0.72 + 0.28 * Math.sin(t / 1700 + n.pulse)
-            : 0.6 + 0.4 * Math.sin(t / 1300 + n.pulse)
+          persona.character === 'drift'
+            ? 0.72 + 0.28 * Math.sin(t / 1700 + n.pulse) // gentle breathing glow
+            : 0.6 + 0.4 * Math.sin(t / 1300 + n.pulse) // sharper sensor pulse
         const col = n.hot ? rgbHi : rgb
         const a = Math.min(nodeAlpha * pulse, 1)
         if (glowOn) ctx!.shadowColor = `rgba(${col}, ${(a * 0.9).toFixed(3)})`
         ctx!.beginPath()
         ctx!.fillStyle = `rgba(${col}, ${a.toFixed(3)})`
-        ctx!.arc(n.x, n.y, n.r, 0, Math.PI * 2)
+        ctx!.arc(n.rx, n.ry, n.r * breath, 0, TAU)
         ctx!.fill()
       }
       if (glowOn) ctx!.restore()
+
+      // Lock-on brackets last, over everything, but subtle (watch).
+      if (doLock) {
+        for (const n of nodes) if (n.trackable && n.lockT > 0) drawLockBracket(n)
+      }
     }
 
-    // Static render for reduced-motion: draw the network once at a flattering
-    // fixed phase (t chosen so the sine pulse sits near its bright peak, not a
-    // dim trough). Re-seeds defensively if the canvas had no area when first
-    // seeded, so a late layout (0-height-then-real-height hero) still fills.
+    // Static render for reduced-motion (fallback while FORCE_MOTION is on): draw
+    // once at a flattering phase; re-seed defensively if the canvas had no area.
     function renderStatic() {
       if (width < 2 || height < 2) return
       if (nodes.length === 0) seed()
-      // t = 700 -> sin(700/1300 + phase) lands most nodes near full brightness.
       drawFrame(700)
     }
 
@@ -363,19 +489,6 @@ export default function EyeNetworkBackground({
     resize()
 
     if (reduceMotion) {
-      // Reduced motion: draw the full network as a STATIC frame (no rAF loop) --
-      // "no motion" must not mean "no design"; a visitor with the OS
-      // reduced-motion setting on still gets the constellation, just still.
-      //
-      // THE 2026-07-17 BUG (found live): this used to call drawFrame(0) exactly
-      // once, right after resize(). On the hero, the flex/min-h-[92vh] container
-      // often has ZERO height at that first tick, so seed() made nodes into a
-      // 0-area canvas and the one static frame painted nothing -- a permanently
-      // blank canvas for EVERYONE whose OS reports reduced motion (every browser
-      // on that machine, which is why it read as "no changes anywhere"). The fix
-      // is to redraw the static frame whenever layout settles, via the same
-      // ResizeObserver the animated path uses -- so once the hero has real
-      // height, the network appears.
       renderStatic()
     } else {
       raf = requestAnimationFrame(loop)
@@ -383,16 +496,10 @@ export default function EyeNetworkBackground({
 
     const ro = new ResizeObserver(() => {
       resize()
-      // In the static (reduced-motion) case there is no loop to repaint after a
-      // re-seed, so the observer must do it. Without this the canvas stays blank
-      // until an animation frame that never comes.
       if (reduceMotion) renderStatic()
     })
     ro.observe(container)
 
-    // Pause off-screen instances and hidden tabs. Two independent flags (v1
-    // collapsed them into one, which could wedge false after tab-hide because
-    // the IntersectionObserver never refires without an intersection change).
     const io = new IntersectionObserver(([entry]) => {
       inView = entry.isIntersecting
     })

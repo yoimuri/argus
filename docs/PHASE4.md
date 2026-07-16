@@ -1268,6 +1268,30 @@ the edges but recedes behind the headline. Hero avg alpha ~38 → ~23-25, still 
 Tests: **T21** (present but not overpowering), **T22** (forced motion), **T23** (two personalities).
 Manual step: `git push`.
 
+#### 4.7 two CHARACTERS — v4 (2026-07-17, 🟡 code-complete)
+
+The parametric "two personalities" above didn't land — Clint: "light mode is just a re-colored
+network, not really serious vs relaxed." Right: turning color/speed/length knobs on the SAME visual
+system only changes loudness, not personality. Personality is BEHAVIOR. v4 (invoked the `/design`
+skill for the discipline — a character expressed consistently across form/motion/color) gives each
+theme its own draw behavior:
+
+- **DARK = "The Watchtower"** (serious/surveillance): STRAIGHT sharp links; the radar sweep ARMS a
+  lock-on — as its edge passes a sparse ~30% subset of nodes, a faint targeting bracket snaps on and
+  decays; occasional soft DATA PULSES race along links. Restrained (Clint: "not stealing the
+  spotlight"): hero-ONLY, low alpha, ≤4 pulses.
+- **LIGHT = "The Reading Room"** (relaxed/organic): CURVED bezier-arc links (woven, not rigid); nodes
+  FLOAT on a per-node bob; the field BREATHES (slow collective swell). No radar/lock-on/pulses. All
+  tiers, so the dashboard in light feels relaxed.
+
+Implementation: `PERSONALITY` gained `character: 'watch' | 'drift'` + behavior flags; `drawFrame`
+branches on them. Node gained `rx/ry` render positions (drift base + bob) so links + nodes agree;
+`Pulse[]` state for pulses; `lockT`/`trackable` for brackets. Watch signatures gated
+`intensity==='hero'` (dashboard app tier never shows them). Verified via a temp `/lighttest` route
+through real React context (deleted after; proxy reverted): dark = straight wire + radar + visible
+lock-on bracket; light app-tier = flowing curved arcs — a genuinely different creature side by side.
+Tests: **T23** (rewritten). Manual step: `git push`.
+
 #### Sprint 4.6c — still to build
 
 **Owner clarifications (Clint, 2026-07-11 — this is the product's headline capability):** the

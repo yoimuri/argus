@@ -20,17 +20,25 @@ Also per your rule: the LANDING and LOGIN are now permanently cinematic dark
 (the toggle is gone from the landing header entirely; theme choice lives in
 the app for reading comfort). No migration.
 
-**T23 — Two theme personalities (2026-07-17).**
-- Steps: on the deployed dashboard (the one page that follows your theme
-  choice), switch between LIGHT and DARK in settings.
-- Expected DARK ("serious"): tight, bright cyan network; on the landing hero a
-  radar sweep; brisk, sharp motion. Feels focused/watchful.
-- Expected LIGHT ("relaxed"): the SAME network motif but a different mood —
-  softer warmer teal lines, rounder nodes, a looser more open web, slower gentle
-  drift, NO radar. Feels calm/airy. (Landing + login are pinned dark, so you
-  only see the light personality inside the dashboard.)
-- The point: the two themes should feel like two moods of one system, not the
-  same thing lighter/darker.
+**T23 — Two theme CHARACTERS, not just recolors (2026-07-17).**
+- The two themes now behave differently, not just look different in color:
+- **DARK = "The Watchtower" (surveillance).** Look at the landing hero:
+  - links are STRAIGHT (sharp, circuit-like)
+  - a radar sweep crosses, and as it passes it briefly snaps a small TARGETING
+    BRACKET (corner marks) around occasional nodes — the system "locking on"
+  - every so often a bright dot RACES ALONG a link — a data pulse
+  - Feels: precise, watchful, technical.
+- **LIGHT = "The Reading Room" (organic).** Switch the dashboard to light:
+  - links are CURVED (soft woven arcs, not straight wire)
+  - nodes gently FLOAT/bob, and the whole field slowly BREATHES (swells)
+  - no radar, no brackets, no pulses — nothing is being hunted
+  - Feels: calm, flowing, human.
+- The test: put them side by side. They should read as two different creatures
+  (one scans and locks, one drifts and weaves), NOT the same network recolored.
+  (Landing + login are pinned dark, so the light character shows in the dashboard.)
+- Note: the dark watch behaviors (radar/brackets/pulses) are deliberately on the
+  landing hero ONLY and kept subtle — inside the dashboard the network is calm so
+  it never competes with your work.
 
 **T22 — [FORCED MOTION] The animation moves for everyone, including on your PC (2026-07-17).**
 - Context: THE reason your PC showed a blank page while your phone worked was
