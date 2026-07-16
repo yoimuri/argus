@@ -64,6 +64,38 @@
   --foreground: var(--color-ink);
 }
 
+/* Mirror of :root's dark set (2026-07-16). Exists so a SUBTREE can be pinned
+   permanently cinematic regardless of the app-level toggle: custom properties
+   resolve from the nearest ancestor that sets them, so an element carrying
+   data-theme="dark" re-applies these for everything inside it even when
+   <html> says light. Used by the landing page and login (brand surfaces --
+   Clint's rule: "the main theme should always be the one I mentioned"; the
+   toggle is a reading-comfort control for the workspace, not the brand).
+   MUST stay value-identical to :root above. */
+[data-theme="dark"] {
+  --color-surface: #14161c;
+  --color-surface-page: #08090d;
+  --color-surface-raised: #1b1e26;
+  --color-hairline: #262a33;
+  --color-hairline-strong: rgba(255, 255, 255, 0.16);
+  --color-ink: #ffffff;
+  --color-ink-secondary: #bfc4ce;
+  --color-ink-muted: #8a8f98;
+  --color-accent: #22b8d4;
+  --color-accent-hover: color-mix(in srgb, #22b8d4 85%, white);
+  --color-accent-contrast: #04141a;
+  --color-accent-wash: rgba(34, 184, 212, 0.12);
+  --color-accent-wash-strong: rgba(34, 184, 212, 0.20);
+  --color-good-wash: rgba(12, 163, 12, 0.16);
+  --color-warning-wash: rgba(250, 178, 25, 0.16);
+  --color-serious-wash: rgba(236, 131, 90, 0.16);
+  --color-critical-wash: rgba(208, 59, 59, 0.18);
+  --shadow-card: inset 0 1px 0 rgba(255, 255, 255, 0.05),
+                 0 1px 2px rgba(0, 0, 0, 0.4), 0 4px 16px rgba(0, 0, 0, 0.3);
+  --shadow-header: 0 1px 18px rgba(0, 0, 0, 0.45);
+  --glow-accent: 0 0 20px rgba(34, 184, 212, 0.35);
+}
+
 [data-theme="light"] {
   --color-surface: #fcfcfb;
   --color-surface-page: #f9f9f7;
@@ -135,7 +167,8 @@ body {
    runtime cost, and the animated canvas layers on top of this. Attached to
    [data-theme="dark"] (always stamped -- SSR renders it and the init script
    re-stamps) so the light opt-out keeps its plain paper surface. */
-[data-theme="dark"] body {
+[data-theme="dark"] body,
+.stage-cinematic {
   background:
     radial-gradient(85% 55% at 75% -12%, rgba(34, 184, 212, 0.09) 0%, transparent 60%),
     radial-gradient(70% 45% at 8% 108%, rgba(34, 184, 212, 0.05) 0%, transparent 60%),

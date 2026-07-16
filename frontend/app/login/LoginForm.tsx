@@ -109,8 +109,17 @@ export default function LoginForm() {
     'w-full rounded-md border border-hairline bg-surface py-2 pl-9 pr-3 text-sm text-ink placeholder:text-ink-muted transition-colors focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-1 focus:ring-offset-surface'
 
   return (
-    <main className="relative mx-auto flex min-h-full w-full max-w-sm flex-col justify-center px-4 py-16">
-      <EyeNetworkBackground intensity="ambient" className="fixed inset-0 -z-10 h-full w-full" />
+    // Pinned permanently cinematic like the landing (2026-07-16): login is a
+    // brand surface, not a reading surface -- the toggle never applies here.
+    // The stage class lives on this full-bleed wrapper (NOT the max-w-sm
+    // column) so the gradient covers the whole viewport; the fixed canvas
+    // pins its palette with theme="dark" for the same reason.
+    // `isolate`: same load-bearing stacking fix as the landing root -- the
+    // fixed canvas is -z-10, and without a stacking context here the stage
+    // gradient background paints over it (negative-z burial).
+    <div data-theme="dark" className="stage-cinematic isolate flex min-h-full w-full flex-col">
+      <EyeNetworkBackground intensity="ambient" theme="dark" className="fixed inset-0 -z-10 h-full w-full" />
+      <main className="relative mx-auto flex w-full max-w-sm flex-1 flex-col justify-center px-4 py-16">
       {/* Back to the public landing page (live review 2026-07-11: the login
           page was a dead end). */}
       <Link
@@ -207,7 +216,8 @@ export default function LoginForm() {
         New here? Use <span className="font-medium text-ink-secondary">Continue with Google</span>.
         It creates your account on first sign-in. Email/password signup is coming later.
       </p>
-    </main>
+      </main>
+    </div>
   )
 }
 

@@ -64,12 +64,19 @@ const TUNING: Record<BackgroundIntensity, {
 export default function EyeNetworkBackground({
   intensity = 'ambient',
   className = '',
+  theme,
 }: {
   intensity?: BackgroundIntensity
   className?: string
+  /** Pin the palette regardless of the app toggle. The landing/login are
+      permanently cinematic (their subtree carries data-theme="dark"), so
+      their canvases must ignore the html-level theme too -- otherwise a
+      light-pref visitor gets the damped light tuning on a dark stage. */
+  theme?: 'light' | 'dark'
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  const { resolvedTheme } = useTheme()
+  const { resolvedTheme: appTheme } = useTheme()
+  const resolvedTheme = theme ?? appTheme
 
   useEffect(() => {
     const canvas = canvasRef.current

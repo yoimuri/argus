@@ -1,6 +1,5 @@
 import Link from 'next/link'
 import { createClient } from '@/utils/supabase/server'
-import ThemeToggle from '@/components/theme/ThemeToggle'
 import Reveal from '@/components/landing/Reveal'
 import AuthLink from '@/components/landing/AuthLink'
 import ContactModal from '@/components/landing/ContactModal'
@@ -71,7 +70,20 @@ export default async function Landing() {
   const authed = Boolean(user)
 
   return (
-    <div className="flex min-h-full flex-col">
+    // data-theme="dark" + .stage-cinematic (2026-07-16, Clint's rule): the
+    // landing is a BRAND surface -- permanently cinematic dark no matter what
+    // the app-level toggle says (custom props re-resolve from this node via
+    // the [data-theme="dark"] mirror block in globals.css). The toggle itself
+    // was removed from this header: theme choice is a reading-comfort control
+    // that lives in the app, not on the showcase.
+    // `isolate` is load-bearing, not decoration: the background layers inside
+    // use negative z-index, and CSS paints an ancestor's own background OVER
+    // negative-z descendants UNLESS that ancestor is a stacking context. A
+    // stacking context's own background is guaranteed to paint below its
+    // negative-z children -- without this, the stage gradient completely
+    // covered the canvas (found via the light-pref acid test, 2026-07-16:
+    // page rendered as a dark void with 254k painted-but-buried pixels).
+    <div data-theme="dark" className="stage-cinematic isolate flex min-h-full flex-col">
       {/* noscript safety net: if JS is off, force every reveal wrapper visible
           so no content is ever hidden behind a script that never ran. */}
       <noscript>
@@ -99,7 +111,6 @@ export default async function Landing() {
             </a>
           </nav>
           <div className="ml-auto flex items-center gap-3">
-            <ThemeToggle />
             <AuthLink
               initialAuthed={authed}
               authedLabel="Go to dashboard →"
@@ -122,7 +133,7 @@ export default async function Landing() {
             -- motion never competes with the words. */}
         <section className="relative flex min-h-[92vh] items-center overflow-hidden">
           <AuroraGlow className="absolute inset-0 -z-30" />
-          <EyeNetworkBackground intensity="hero" className="absolute inset-0 -z-20 h-full w-full" />
+          <EyeNetworkBackground intensity="hero" theme="dark" className="absolute inset-0 -z-20 h-full w-full" />
           <div
             aria-hidden
             className="pointer-events-none absolute inset-0 -z-10"

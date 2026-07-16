@@ -38,7 +38,10 @@ export default async function DashboardLayout({
     .maybeSingle()
 
   return (
-    <div className="min-h-full flex flex-col">
+    // `isolate`: guarantees the -z-10 canvas below paints above this shell's
+    // backdrop but below all content, independent of body-background
+    // propagation quirks (same stacking fix as the landing/login roots).
+    <div className="isolate min-h-full flex flex-col">
       {/* The site's signature animated background, ambient tier (2026-07-15):
           "throughout the pages, not just the landing page" -- mounted ONCE
           here in the shared shell so it's a single instance for the whole

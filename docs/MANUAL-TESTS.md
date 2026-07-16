@@ -6,6 +6,38 @@ Newest batch on top.
 
 ---
 
+## 2026-07-16 — Void diagnosed + stacking fix + brand surfaces pinned (Fable)
+
+The "black void instead of the animation" got root-caused WITH real-browser
+screenshots this time. Two separate things were true: (a) the live deployed
+site actually renders the full network (verified against the real production
+URL with painted-pixel counts — your void screenshot most likely caught a
+mid-deploy CDN moment minutes after your push, serving mixed old/new files;
+it self-heals), and (b) there WAS a real latent bug: with a stored LIGHT
+theme preference, the new stage background painted OVER the animation
+(negative z-index burial — fixed with CSS `isolate` stacking contexts).
+Also per your rule: the LANDING and LOGIN are now permanently cinematic dark
+(the toggle is gone from the landing header entirely; theme choice lives in
+the app for reading comfort). No migration.
+
+**T19 — The landing/login can never be un-cinematic again.**
+- Steps: on the deployed site, sign in, switch the theme to LIGHT in the
+  dashboard, sign out, and open the landing page and login page.
+- Expected: BOTH are still the full dark cinematic experience (network, radar
+  on the landing hero, aurora, glow CTA) even though your app preference is
+  light. The dashboard respects your light choice; the brand surfaces don't.
+- Also: the landing header no longer shows the Light/Dark/System toggle at
+  all. It's in the dashboard (profile menu / settings) only.
+
+**T20 — If you EVER see the void again, do these in order:**
+1. Wait 2-3 minutes after any push (Vercel mid-deploy can serve mixed files),
+   then hard-refresh (Ctrl+Shift+R).
+2. If it persists on every page: open chrome://gpu and look for "Canvas:
+   Software only" or driver warnings, and try toggling "Use graphics
+   acceleration when available" OFF in chrome://settings/system, restart the
+   browser, and look again. Tell me what chrome://gpu said either way — that
+   distinguishes a driver problem (your machine) from a code problem (mine).
+
 ## 2026-07-15 — Dark-cinematic rebuild (Fable)
 
 **T18 — The app is dark, cinematic, and unmistakably different.**

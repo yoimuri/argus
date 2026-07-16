@@ -7,20 +7,24 @@
 // a no-preference media query, so these become static glows automatically.
 // Stays in the validated accent family (cyan at two alphas), no new hues.
 export default function AuroraGlow({ className = '' }: { className?: string }) {
+  // No filter: blur() here on purpose (2026-07-16): a radial-gradient is
+  // already inherently soft, and large blur() filters are GPU-rasterized --
+  // one of the first things to silently vanish on a broken/blocklisted
+  // graphics driver (the exact environment where Clint saw a black void
+  // while the same build painted fine in software rendering). Pure gradients
+  // survive every rendering path.
   return (
     <div aria-hidden className={`pointer-events-none overflow-hidden ${className}`}>
       <div
-        className="aurora-a absolute -top-[30%] left-[10%] h-[70%] w-[55%] rounded-full opacity-60"
+        className="aurora-a absolute -top-[35%] left-[5%] h-[85%] w-[65%] rounded-full opacity-70"
         style={{
-          background: 'radial-gradient(closest-side, rgba(34,184,212,0.16), transparent)',
-          filter: 'blur(60px)',
+          background: 'radial-gradient(closest-side, rgba(34,184,212,0.15), rgba(34,184,212,0.05) 55%, transparent 75%)',
         }}
       />
       <div
-        className="aurora-b absolute -bottom-[25%] right-[5%] h-[65%] w-[50%] rounded-full opacity-50"
+        className="aurora-b absolute -bottom-[30%] right-[0%] h-[80%] w-[60%] rounded-full opacity-60"
         style={{
-          background: 'radial-gradient(closest-side, rgba(34,184,212,0.11), transparent)',
-          filter: 'blur(70px)',
+          background: 'radial-gradient(closest-side, rgba(34,184,212,0.10), rgba(34,184,212,0.04) 55%, transparent 75%)',
         }}
       />
     </div>
