@@ -1191,6 +1191,83 @@ Verified: build clean; dev-server smoke — SSR serves `data-theme="dark"`, auro
 on landing and login, zero runtime errors. Tests: `docs/MANUAL-TESTS.md` **T18**. Manual step:
 `git push` only.
 
+#### 4.7 visibility rebuild — v3 (2026-07-17, 🟡 code-complete) — the ACTUAL persistent-issue fix
+
+The dark-cinematic v2 above deployed and ran correctly, and Clint STILL reported "same old simple
+color / NO CHANGES" (a fourth time). A live-render audit finally found the real defect — and it was
+none of the things earlier sessions blamed (not CDN skew, not a GPU driver, not the `isolate`
+stacking bug, though that fix was real and is retained). **The animation was tuned so faint it was
+effectively invisible: the live hero canvas measured ~7% average opacity (avg alpha 19/255).** The
+"how many pixels are painted" metric used all session was worthless — it counts an alpha-1 pixel
+the same as alpha-255 — and masked this completely. Clint's "NO CHANGES" was accurate visual
+feedback the whole time; it kept being mis-read as a technical fault.
+
+Root defect: link alpha faded linearly to ~0 with distance, so the majority of links rendered as
+near-transparent ghosts. The v3 fix:
+- **`EyeNetworkBackground` v3:** a per-link **visibility floor** (`linkFloor`) — a drawn link keeps
+  a minimum opacity instead of fading to nothing; brighter base alphas; larger nodes with stronger
+  `shadowBlur` glow (18 on hero); a brighter secondary tint on ~28% of nodes; a brighter, wider
+  radar. **Three intensity tiers** now: `hero` (public showcase), `app` (inner pages — designed but
+  calm), `ambient` (quietest fallback).
+- **`AuroraGlow` v2 + stage gradient:** blob opacities 0.10–0.15 → 0.16–0.30, plus a central bloom
+  the headline sits in front of; the `.stage-cinematic` gradient made richer. Real depth behind the
+  network instead of flat near-black.
+- **`--glow-accent`** is now a two-layer glow (tight core + wider halo) so CTAs read as lit neon.
+- **Scope (Clint's decision):** landing = `hero` (big/cinematic); login + dashboard = `app` (tame
+  but present — "appealing to non-tech users, not too flashy everywhere").
+
+Verified the right way this time — local prod build, real screenshots looked at with eyes, and
+**avg alpha as the metric, not pixel count**: hero avg alpha **19 → 43**, and the screenshot is a
+genuinely designed hero (dense visible network, glinting radar, central bloom, neon CTA, text still
+AA-readable over the scrim). Login `app` tier verified the same way; dashboard shares that exact
+tier + pinned stage so login is a faithful proxy (the dashboard needs a real session to screenshot,
+which is not fabricated). Tests: `docs/MANUAL-TESTS.md` **T21** (new). Manual step: `git push` only.
+
+**CORRECTION (2026-07-17, same day): the v3 tuning above was necessary but was NOT why Clint saw a
+blank page.** He confirmed the network is fully ABSENT on his PC yet renders on his phone — a device
+split that means a code path, not faintness. Real root cause: his Windows has **reduced-motion ON**
+(SPI_GETCLIENTAREAANIMATION=False), so every browser on his PC reports
+`prefers-reduced-motion: reduce`. `EyeNetworkBackground`'s reduced-motion branch called
+`drawFrame(0)` exactly once after `resize()`; on the hero the `min-h-[92vh]` flex container often has
+zero height on that first tick, so the network was seeded into a 0-area canvas and drawn into
+nothing — and with no rAF loop and no ResizeObserver redraw on the static path, it stayed blank
+forever. Every prior headless test missed it because headless defaults to motion ENABLED.
+**Fix:** a `renderStatic()` helper (full network at a fixed bright phase, defensive re-seed) wired
+to the ResizeObserver in the reduced-motion case, so the still network paints once layout settles.
+Verified with Playwright `reducedMotion:'reduce'`: hero 0 → 266k painted, login 0 → 84k. Lesson:
+always test the `reducedMotion:'reduce'` path; headless-default motion-on hid a total-blank bug for
+sessions.
+
+#### 4.7 two personalities + forced motion + hero toned down (2026-07-17, 🟡 code-complete)
+
+Three follow-ons after the reduced-motion fix, all owner-driven:
+
+**Two theme personalities.** `EyeNetworkBackground` gained a `PERSONALITY` map so the two themes
+feel like two moods, not one field lighter/darker. **Dark = serious** (tight bright cyan, radar,
+brisk/sharp). **Light = relaxed** (softer warmer teal `45,130,150`, drift ×0.6, link distance ×1.18,
+node radius ×1.2, shallower/slower pulse, no radar). Added a light "relaxed" stage gradient
+(`[data-theme="light"] body`, soft warm wash, no glow) so light mode owns its atmosphere rather than
+inheriting the dark cinematic base. Since landing/login are pinned dark, the light personality shows
+only in the dashboard. Verified the real light path via a throwaway `/lighttest` route through React
+context (screenshot = calm pencil-teal constellation), then deleted the route + its proxy allowlist.
+
+**Forced motion (owner decision, documented tradeoff).** `FORCE_MOTION = true` makes the animation
+play for everyone regardless of `prefers-reduced-motion` — Clint's call: same design for all users,
+no per-user toggle. Implemented safely (a scoped flag setting `reduceMotion=false`, NOT a global
+`window.matchMedia` mock, which would break the theme system's own prefers-color-scheme reads); the
+aurora CSS was un-gated to match. **This overrides an accessibility preference some set for medical
+reasons** — mitigated by keeping the motion gentle (slow drift, shallow pulse, no flashing; 28-34s
+aurora) so it isn't a hazard. Flagged to Clint; he chose it knowingly. `renderStatic()` remains as a
+fallback. Verified motion runs under `reducedMotion:'reduce'` (frame hashes differ).
+
+**Hero toned down.** Clint: "transparency shouldn't be too high... not taking the spotlight too much,
+especially on landing." The bold pass over-corrected the faint bug. Hero tuning pulled back
+(nodeAlpha 1→0.82, linkAlpha 0.7→0.42, glow 18→14, radarAlpha 0.5→0.34) and the top accent-wash
+replaced with a real darkening text scrim (radial deep-navy at 50%/46%) so the network is dense at
+the edges but recedes behind the headline. Hero avg alpha ~38 → ~23-25, still clearly visible.
+Tests: **T21** (present but not overpowering), **T22** (forced motion), **T23** (two personalities).
+Manual step: `git push`.
+
 #### Sprint 4.6c — still to build
 
 **Owner clarifications (Clint, 2026-07-11 — this is the product's headline capability):** the

@@ -55,8 +55,10 @@
   --shadow-card: inset 0 1px 0 rgba(255, 255, 255, 0.05),
                  0 1px 2px rgba(0, 0, 0, 0.4), 0 4px 16px rgba(0, 0, 0, 0.3);
   --shadow-header: 0 1px 18px rgba(0, 0, 0, 0.45);
-  /* Accent glow behind primary CTAs -- the neon cue. Transparent in light. */
-  --glow-accent: 0 0 20px rgba(34, 184, 212, 0.35);
+  /* Accent glow behind primary CTAs -- the neon cue (two-layer: tight core +
+     wider halo so the button reads as lit, not just shadowed). Transparent in
+     light. Value-identical to the [data-theme="dark"] mirror below. */
+  --glow-accent: 0 0 12px rgba(34, 184, 212, 0.5), 0 0 32px rgba(34, 184, 212, 0.28);
 
   /* Back-compat with the two variables the pre-4.2 body rule referenced --
      kept as aliases so nothing outside this file needs to change. */
@@ -93,7 +95,7 @@
   --shadow-card: inset 0 1px 0 rgba(255, 255, 255, 0.05),
                  0 1px 2px rgba(0, 0, 0, 0.4), 0 4px 16px rgba(0, 0, 0, 0.3);
   --shadow-header: 0 1px 18px rgba(0, 0, 0, 0.45);
-  --glow-accent: 0 0 20px rgba(34, 184, 212, 0.35);
+  --glow-accent: 0 0 12px rgba(34, 184, 212, 0.5), 0 0 32px rgba(34, 184, 212, 0.28);
 }
 
 [data-theme="light"] {
@@ -170,9 +172,25 @@ body {
 [data-theme="dark"] body,
 .stage-cinematic {
   background:
-    radial-gradient(85% 55% at 75% -12%, rgba(34, 184, 212, 0.09) 0%, transparent 60%),
-    radial-gradient(70% 45% at 8% 108%, rgba(34, 184, 212, 0.05) 0%, transparent 60%),
-    linear-gradient(180deg, #0b0e14 0%, #07080b 55%, #08090d 100%);
+    radial-gradient(90% 60% at 78% -10%, rgba(34, 184, 212, 0.16) 0%, transparent 58%),
+    radial-gradient(75% 50% at 6% 106%, rgba(103, 232, 249, 0.09) 0%, transparent 60%),
+    linear-gradient(180deg, #0c1017 0%, #080a10 52%, #06070b 100%);
+}
+
+/* Relaxed base (light theme, 2026-07-17): light mode gets its OWN atmosphere,
+   not the dark cinematic look tinted white and not a dead-flat sheet of paper.
+   A soft warm-teal wash bleeding from the top and a faint cool tint at the
+   bottom, over a barely-there vertical ramp -- the calm counterpart to the
+   dark "serious" stage. NO glow (glow needs darkness); these are gentle,
+   low-opacity gradients that read as airy paper with a hint of color, the
+   backdrop the "relaxed" node network sits on. Applied to the light body so
+   the dashboard (which follows the toggle) gets it; the landing/login are
+   pinned dark and never see this. */
+[data-theme="light"] body {
+  background:
+    radial-gradient(85% 55% at 80% -12%, rgba(45, 130, 150, 0.06) 0%, transparent 60%),
+    radial-gradient(70% 48% at 5% 108%, rgba(90, 160, 165, 0.05) 0%, transparent 62%),
+    linear-gradient(180deg, #fbfbf9 0%, #f7f8f6 60%, #f4f6f4 100%);
 }
 
 /* Smooth scrolling for the landing page's anchor nav (finding #5). Guarded by
@@ -282,21 +300,25 @@ body {
    texture under the landing hero. Transform/opacity only, 26-34s cycles (this
    is atmosphere, not a micro-interaction, so the 300ms rule doesn't apply --
    ui-ux-pro-max's Modern Dark Cinema spec calls for exactly this slow ambient
-   oscillation). Static when reduced-motion. */
+   oscillation).
+   Motion policy (Clint, 2026-07-17): the aurora drifts for EVERYONE, matching
+   the canvas network's "same design regardless of OS reduced-motion" decision
+   (see EyeNetworkBackground's FORCE_MOTION). Deliberately NOT wrapped in
+   `@media (prefers-reduced-motion: no-preference)` anymore. Safe to force: it's
+   a 28-34s transform/opacity drift -- ambient, no flashing/strobing, no
+   vestibular-hazard fast motion. */
 @keyframes aurora-a {
   0%   { transform: translate(0, 0) scale(1); }
-  50%  { transform: translate(6%, 10%) scale(1.15); }
+  50%  { transform: translate(9%, 13%) scale(1.2); }
   100% { transform: translate(0, 0) scale(1); }
 }
 @keyframes aurora-b {
-  0%   { transform: translate(0, 0) scale(1.1); }
-  50%  { transform: translate(-8%, -6%) scale(0.95); }
-  100% { transform: translate(0, 0) scale(1.1); }
+  0%   { transform: translate(0, 0) scale(1.12); }
+  50%  { transform: translate(-11%, -8%) scale(0.92); }
+  100% { transform: translate(0, 0) scale(1.12); }
 }
-@media (prefers-reduced-motion: no-preference) {
-  .aurora-a { animation: aurora-a 28s ease-in-out infinite; }
-  .aurora-b { animation: aurora-b 34s ease-in-out infinite; }
-}
+.aurora-a { animation: aurora-a 28s ease-in-out infinite; }
+.aurora-b { animation: aurora-b 34s ease-in-out infinite; }
 
 /* Skeleton shimmer: a light sweep across a token-coloured block, calmer than a
    hard pulse for >300ms loads (ui-ux-pro-max progressive-loading). */

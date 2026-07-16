@@ -118,7 +118,7 @@ export default function LoginForm() {
     // fixed canvas is -z-10, and without a stacking context here the stage
     // gradient background paints over it (negative-z burial).
     <div data-theme="dark" className="stage-cinematic isolate flex min-h-full w-full flex-col">
-      <EyeNetworkBackground intensity="ambient" theme="dark" className="fixed inset-0 -z-10 h-full w-full" />
+      <EyeNetworkBackground intensity="app" theme="dark" className="fixed inset-0 -z-10 h-full w-full" />
       <main className="relative mx-auto flex w-full max-w-sm flex-1 flex-col justify-center px-4 py-16">
       {/* Back to the public landing page (live review 2026-07-11: the login
           page was a dead end). */}

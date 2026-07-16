@@ -134,12 +134,18 @@ export default async function Landing() {
         <section className="relative flex min-h-[92vh] items-center overflow-hidden">
           <AuroraGlow className="absolute inset-0 -z-30" />
           <EyeNetworkBackground intensity="hero" theme="dark" className="absolute inset-0 -z-20 h-full w-full" />
+          {/* Text scrim: a soft DARKENING pocket centered where the headline
+              sits, so the network recedes behind the words and reads as
+              atmosphere, not competition (Clint: "shouldn't take the spotlight
+              too much"). Deep near the center text, fading to transparent at
+              the edges where the network is free to be dense. This is why the
+              canvas can stay rich while the headline still clearly wins. */}
           <div
             aria-hidden
             className="pointer-events-none absolute inset-0 -z-10"
             style={{
               background:
-                'radial-gradient(60% 60% at 50% 0%, var(--color-accent-wash) 0%, transparent 70%)',
+                'radial-gradient(58% 52% at 50% 46%, rgba(6, 8, 13, 0.78) 0%, rgba(6, 8, 13, 0.5) 38%, transparent 72%)',
             }}
           />
           <div className="mx-auto w-full max-w-4xl px-5 py-24 text-center sm:py-28">

@@ -20,6 +20,44 @@ Also per your rule: the LANDING and LOGIN are now permanently cinematic dark
 (the toggle is gone from the landing header entirely; theme choice lives in
 the app for reading comfort). No migration.
 
+**T23 — Two theme personalities (2026-07-17).**
+- Steps: on the deployed dashboard (the one page that follows your theme
+  choice), switch between LIGHT and DARK in settings.
+- Expected DARK ("serious"): tight, bright cyan network; on the landing hero a
+  radar sweep; brisk, sharp motion. Feels focused/watchful.
+- Expected LIGHT ("relaxed"): the SAME network motif but a different mood —
+  softer warmer teal lines, rounder nodes, a looser more open web, slower gentle
+  drift, NO radar. Feels calm/airy. (Landing + login are pinned dark, so you
+  only see the light personality inside the dashboard.)
+- The point: the two themes should feel like two moods of one system, not the
+  same thing lighter/darker.
+
+**T22 — [FORCED MOTION] The animation moves for everyone, including on your PC (2026-07-17).**
+- Context: THE reason your PC showed a blank page while your phone worked was
+  your Windows reduced-motion setting (Settings → Accessibility → Visual effects
+  → Animation effects OFF), which the old code turned into a blank canvas.
+  DECISION (yours): the animation now plays for EVERYONE regardless of that
+  setting — same design for all users, no motion toggle.
+- Steps: open the deployed landing page on your PC WITHOUT changing any Windows
+  setting (leave animations however they are).
+- Expected: the network drifts and pulses, the aurora glows drift, the radar
+  sweeps — full motion, even though your Windows has animations off. It should
+  never be a blank or frozen page.
+- Note (honest): this deliberately overrides the OS reduced-motion preference.
+  The motion is kept gentle (slow drift, soft pulse, no flashing) so it's not a
+  hazard, but be aware some visitors set that preference for medical reasons —
+  this is a deliberate design choice, documented in CONTINUITY/PHASE4.
+
+**T21 — The animation is actually BOLD, not a faint whisper (2026-07-17).**
+- Steps: with Windows animations ON, open the landing page on the deployed site.
+- Expected on the HERO: a dense, clearly visible cyan node network edge to
+  edge; a radar sweep you can watch cross the upper-right; a soft central glow
+  behind the headline; the "Try ARGUS" button visibly glowing. It should read
+  as a designed, animated background within one second — not a plain dark page.
+- Expected on LOGIN + DASHBOARD: the same network, calmer (fewer nodes, softer,
+  no radar) — clearly present in the space around the cards, but never fighting
+  the content. A non-technical visitor should feel "this is a real product."
+
 **T19 — The landing/login can never be un-cinematic again.**
 - Steps: on the deployed site, sign in, switch the theme to LIGHT in the
   dashboard, sign out, and open the landing page and login page.
@@ -29,14 +67,17 @@ the app for reading comfort). No migration.
 - Also: the landing header no longer shows the Light/Dark/System toggle at
   all. It's in the dashboard (profile menu / settings) only.
 
-**T20 — If you EVER see the void again, do these in order:**
+**T20 — [RESOLVED 2026-07-17] The "void" was faintness, not a driver issue.**
+Your chrome://gpu dump confirmed canvas is hardware-accelerated on your machine,
+so this was never a GPU problem. The animation was rendering fine — it was just
+tuned to ~7% opacity, i.e. technically visible but effectively invisible. Fixed
+in the v3 visibility rebuild (see T21). Kept here for the record; the
+chrome://gpu step below is only relevant if a FUTURE change ever regresses to a
+truly blank canvas.
 1. Wait 2-3 minutes after any push (Vercel mid-deploy can serve mixed files),
    then hard-refresh (Ctrl+Shift+R).
-2. If it persists on every page: open chrome://gpu and look for "Canvas:
-   Software only" or driver warnings, and try toggling "Use graphics
-   acceleration when available" OFF in chrome://settings/system, restart the
-   browser, and look again. Tell me what chrome://gpu said either way — that
-   distinguishes a driver problem (your machine) from a code problem (mine).
+2. If it's a genuine blank canvas (not just faint): open chrome://gpu and look
+   for "Canvas: Software only" or driver warnings. Tell me what it said.
 
 ## 2026-07-15 — Dark-cinematic rebuild (Fable)
 

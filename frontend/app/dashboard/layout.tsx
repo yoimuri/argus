@@ -50,7 +50,7 @@ export default async function DashboardLayout({
           page). Fixed behind everything; page content sits on solid Card
           surfaces (shadow token added in the shell pass), so this never has
           to compete with text for contrast -- it only shows in the gaps. */}
-      <EyeNetworkBackground intensity="ambient" className="fixed inset-0 -z-10 h-full w-full" />
+      <EyeNetworkBackground intensity="app" className="fixed inset-0 -z-10 h-full w-full" />
       {/* Keeps the session alive while the user is genuinely interacting, so a
           long read/scroll without a navigation no longer trips the 30-min idle
           logout (proxy.ts). Renders nothing. */}
