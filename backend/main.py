@@ -606,6 +606,39 @@ async def upload_document(collection_id: str, req: DocumentUploadRequest, reques
             print(f"[ARGUS] upload cancelled by client at finalization (document {document['id']}).")
             return {"status": "cancelled", "document_id": document["id"]}
 
+        # A document with ZERO indexed chunks must never be marked "ready"
+        # (live-found 2026-08-01: the DB held documents with status='ready' and
+        # 0 chunks). "Ready" is a promise that the document is searchable; with
+        # no chunks it is invisible to retrieval, so every question about it
+        # comes back "not found in the documents" while the UI insists the file
+        # is fine. That reads as "the AI is broken" when the real cause is an
+        # unreadable upload.
+        #
+        # Usual cause: a scanned / image-only PDF. PyMuPDF's get_text() returns
+        # nothing for pages that contain only images, so there is no text to
+        # chunk. (Reading text inside images needs OCR/vision -- that is Sprint
+        # 4.6c, not built yet, so the honest move today is to say so.)
+        # The other possible cause is that every chunk was injection-quarantined,
+        # which the message distinguishes so a security event isn't mistaken for
+        # a scanning problem.
+        if chunks_created == 0:
+            if quarantined > 0:
+                reason = (
+                    "Every section of this document was flagged as potentially malicious "
+                    "and quarantined, so nothing could be indexed."
+                )
+            else:
+                reason = (
+                    "No readable text could be extracted from this PDF. It is most likely a "
+                    "scanned or image-only document. ARGUS reads text, not pictures of text, "
+                    "so please upload a text-based PDF."
+                )
+            # Raising here routes into the `except HTTPException` handler below,
+            # which marks the row 'failed' (processing_started is True by now) --
+            # no explicit PATCH needed, and the user gets `reason` verbatim.
+            print(f"[ARGUS] document {document['id']} produced 0 chunks -> failed ({reason})")
+            raise HTTPException(status_code=400, detail=reason)
+
         await supabase_request(
             "PATCH", f"documents?id=eq.{document['id']}", request.state.access_token,
             json_body={"status": "ready"},

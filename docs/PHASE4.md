@@ -1292,6 +1292,51 @@ through real React context (deleted after; proxy reverted): dark = straight wire
 lock-on bracket; light app-tier = flowing curved arcs — a genuinely different creature side by side.
 Tests: **T23** (rewritten). Manual step: `git push`.
 
+### Sprint 4.8 — Retrieval rebuild (2026-08-01, 🟡 code-complete, not live-verified)
+
+**Trigger:** Clint's live findings after ~2 weeks of real use — non-report documents (a resume, a
+1000+ row student list) answered poorly even when reworded while summaries worked; agents sometimes
+returned low confidence or no answer; multiple documents in a collection made it worse.
+
+**Full design + reasoning: `docs/ADR-025-hybrid-retrieval.md`.** Four causes, confirmed against the
+live database with read-only queries:
+1. Retrieval saw **~1% of the data** (`FINAL_TOP_N=8`, fixed regardless of size; the largest live
+   collection holds **781 chunks**, one single document holds **709**).
+2. **No per-document fairness** — a flat top-N let one document win every slot (the multi-doc bug).
+3. **Semantic-only search cannot retrieve exact terms** (names/IDs/dates) — fatal for rosters and
+   resumes, invisible on thematic reports.
+4. **800-char chunks exceeded all-MiniLM-L6-v2's 256-token limit on dense text**, which truncates
+   silently, leaving the tail of every table/list chunk unsearchable.
+
+**Also found in the live data:** documents with `status='ready'` and **0 chunks** (scanned/image-only
+PDFs). `upload_document` marked 'ready' unconditionally, so an unreadable file looked fine while
+being invisible to retrieval — every question about it answered "not found in the documents."
+
+**Built:** migration **021** (`content_tsv` generated tsvector + GIN index + `hybrid_match_chunks()`
+fusing pgvector and Postgres full-text search via **Reciprocal Rank Fusion**, k=60); `retriever.py`
+rewritten (hybrid RPC **with automatic fallback** to the semantic-only RPC when 021 isn't pasted,
+tracing `mode=hybrid|semantic`; 8→**22** chunks / meta 14→**26**; per-document fairness cap at 0.6
+with reserve backfill); `synthesizer.py` gained an explicit **20,000-char context ceiling** (was
+unbounded — a genuine silent-failure risk at the new width) and **partial-view honesty rules**;
+`orchestrator.py` gained **structured/list document intent rules**; chunking retuned **800→600**
+chars with **overlap 100→150**; zero-chunk uploads now fail with a specific, actionable reason.
+
+**Owner decisions:** balanced context (~20-24 chunks) over aggressive 32-40 — the aggressive option
+would consume the Groq free-tier 8k tokens/minute meter and fail mid-demo; and yes to the migration
+for keyword search.
+
+**Verified:** pyflakes/compile clean on every touched file; migration 021's RRF query **parse-checked
+read-only against the live Postgres 17** (full outer join, `websearch_to_tsquery`, `ts_rank_cd` all
+execute) so it will paste without error. No writes were made to the live database.
+
+**Manual steps (Clint):** paste migration 021, `git push`, **re-upload test documents** (the chunk
+size change applies at ingest only — existing documents keep their 800-char chunks), then run
+**Stage R (R1–R6)** in `docs/GO-LIVE-CHECKLIST.md`.
+
+**Explicitly not fixed here:** reading text inside images (OCR/vision) — that is Sprint 4.6c, and it
+is exactly what those zero-chunk scanned PDFs would require. They now say so honestly instead of
+pretending to be ready.
+
 #### Sprint 4.6c — still to build
 
 **Owner clarifications (Clint, 2026-07-11 — this is the product's headline capability):** the

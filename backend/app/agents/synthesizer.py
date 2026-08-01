@@ -58,6 +58,24 @@ SYSTEM_PROMPT = (
     "context chunks provided below. Do not use any outside knowledge. If the "
     "context does not contain enough information to answer, say so plainly "
     "instead of guessing.\n\n"
+    "PARTIAL VIEW — read this before answering any counting or completeness "
+    "question. The chunks below are a SEARCH RESULT, not the whole document. "
+    "They are the most relevant excerpts retrieved from what may be a much "
+    "larger file. Therefore:\n"
+    "- Never state a total, a count, or a complete list as fact unless the "
+    "context itself states that number (e.g. the document says 'Total: 1,043 "
+    "students'). Counting the rows you can see and reporting that as the answer "
+    "is WRONG when the document is larger than the excerpt.\n"
+    "- For a question like 'how many X are there' with no stated total, answer "
+    "honestly: say what you can see (e.g. 'the excerpts include N entries, such "
+    "as ...') and state plainly that this is a partial view of the document, so "
+    "the full total cannot be confirmed from it.\n"
+    "- Never claim something is ABSENT from a document ('there is no mention of "
+    "X') on the basis of these excerpts alone. Say it does not appear in the "
+    "retrieved sections instead.\n"
+    "- When the question asks about ONE named entity and you can see it, answer "
+    "directly and confidently — a lookup that IS present in the excerpts is a "
+    "complete answer, and the partial-view caveat does not apply to it.\n\n"
     "If your answer presents a small set of numbers taken from the context that "
     "naturally compare (a few labeled categories with values, or a short "
     "trend), you MAY include ONE chart to show them. Emit it as a fenced code "
@@ -108,14 +126,53 @@ async def synthesizer_node(state: ResearchState) -> dict:
             "trace_status": "fallback",
         }
 
-    context_parts = [
-        f"[Chunk {c['chunk_index']} | trust_level={c.get('trust_level', 'retrieved')}] {c['content']}"
-        for c in chunks
-    ]
-    context_parts += [
-        f"[Web result | trust_level=web_scraped | source={s.get('url') or 'unknown'}] {s['content']}"
-        for s in web_snippets
-    ]
+    # Context budget (Sprint 4.8, 2026-08-01). Until now this concatenated
+    # whatever the retriever returned with no ceiling -- safe only by accident,
+    # because the retriever's cap was 8 chunks. With retrieval widened to 22-26
+    # chunks (ADR-025) an unbounded join can push one call past Groq's free-tier
+    # 8,000 tokens/minute meter, and THAT failure is silent: the SDK backs off and
+    # the question returns nothing. Clint reported exactly that symptom
+    # ("sometimes it doesn't answer at all"), so the ceiling is now explicit.
+    #
+    # 20,000 chars ≈ 5,000 tokens of context. Plus the system prompt (~500),
+    # the question, and max_tokens=1024 of output+reasoning, one call stays
+    # comfortably inside the per-minute meter with headroom for the critic pass.
+    # Chunks are dropped from the TAIL (the retriever hands them over in
+    # relevance order, lead chunks first), so a trim always sheds the least
+    # relevant material -- never the top hits, never a lead chunk.
+    MAX_CONTEXT_CHARS = 20_000
+
+    context_parts = []
+    used = 0
+    dropped = 0
+    for c in chunks:
+        part = (
+            f"[Chunk {c['chunk_index']} | trust_level={c.get('trust_level', 'retrieved')}] "
+            f"{c['content']}"
+        )
+        if used + len(part) > MAX_CONTEXT_CHARS and context_parts:
+            dropped += 1
+            continue
+        context_parts.append(part)
+        used += len(part)
+
+    # Web snippets are appended after document chunks and share the same ceiling:
+    # the user's own documents are the primary source, so they get first claim on
+    # the budget and web material fills what's left.
+    for s in web_snippets:
+        part = (
+            f"[Web result | trust_level=web_scraped | source={s.get('url') or 'unknown'}] "
+            f"{s['content']}"
+        )
+        if used + len(part) > MAX_CONTEXT_CHARS and context_parts:
+            dropped += 1
+            continue
+        context_parts.append(part)
+        used += len(part)
+
+    if dropped:
+        print(f"[ARGUS] synthesizer context budget: kept {len(context_parts)}, dropped {dropped}, {used} chars")
+
     context = "\n\n".join(context_parts)
 
     # Sprint 2.4: run the synthesis call through the same Groq breaker as the

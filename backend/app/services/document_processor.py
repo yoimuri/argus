@@ -8,8 +8,29 @@ from app.services.circuit_breaker import hf_embedding_breaker
 HF_TOKEN = os.environ["HF_TOKEN"]
 HF_EMBEDDING_URL = "https://router.huggingface.co/hf-inference/models/sentence-transformers/all-MiniLM-L6-v2/pipeline/feature-extraction"
 
-CHUNK_SIZE = 800
-CHUNK_OVERLAP = 100
+# Chunking (retuned Sprint 4.8, 2026-08-01 -- ADR-025).
+#
+# WHY 600, not the previous 800: all-MiniLM-L6-v2 has a hard input limit of 256
+# word-pieces and TRUNCATES silently beyond it. 800 characters of ordinary prose
+# is ~200 tokens (fits), but 800 characters of DENSE text -- table rows, a list
+# of names, an ID column, a resume's skills block -- tokenizes far higher,
+# because names/numbers/codes fragment into several word-pieces each. Those
+# chunks were being embedded from their first ~256 tokens only, so the tail of
+# every dense chunk was invisible to semantic search while still occupying a
+# chunk slot. That is a direct cause of the reported "good on the report,
+# bad on the student list" behaviour. 600 chars keeps dense content inside the
+# window with margin, at the cost of slightly more chunks per document.
+#
+# WHY overlap 150, not 100: a fact that straddles a chunk boundary (a table row
+# split mid-record, "Maria Santos | BSCS | 2024" cut after the name) is
+# retrievable only if some chunk contains it whole. A larger overlap makes a
+# boundary-straddling record appear intact in at least one chunk. 25% overlap is
+# the usual recommendation for record-like content.
+#
+# NOTE: chunk size applies at INGEST time. Documents already uploaded keep their
+# old 800-char chunks until they are re-uploaded.
+CHUNK_SIZE = 600
+CHUNK_OVERLAP = 150
 EMBED_BATCH_SIZE = 8
 EMBED_DIM = 384  # all-MiniLM-L6-v2 output dimension; the pgvector column is vector(384)
 
