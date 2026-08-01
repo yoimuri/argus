@@ -37,6 +37,22 @@ REFUSAL_PATTERNS = [
     r"no\s+relevant\s+information\s+was\s+found",
     r"not\s+(mentioned|stated|specified|found)\s+in\s+(the|this|any)\s+(provided\s+)?context",
     r"(unable|cannot)\s+to\s+determine",
+    # 2026-08-01 (live-found on the seating-list bug): the model answered
+    # "The provided excerpts do not contain any entry for 'X'. Therefore, I
+    # cannot provide a seat number..." and the badge still read HIGH
+    # confidence, because every pattern above requires the literal word
+    # "information". A denial about an ENTRY / RECORD / NAME / LISTING is the
+    # same refusal class and is far more damaging: it asserts absence, which on
+    # a partial retrieval view is exactly the claim that must never be
+    # confident. These generalize the object of the denial.
+    r"(do|does)\s+not\s+(include|contain|list|mention|show)\s+(any\s+|an\s+|a\s+|the\s+)?"
+    r"(entry|entries|record|records|name|names|listing|listings|row|rows|mention)",
+    r"(don.?t|doesn.?t)\s+(include|contain|list|mention|show)\s+(any\s+|an\s+|a\s+|the\s+)?"
+    r"(entry|entries|record|records|name|names|listing|listings|row|rows|mention)",
+    r"(cannot|can.?t|unable\s+to)\s+(provide|find|locate|identify)\s+",
+    r"(no|not\s+any)\s+(entry|entries|record|records|listing|listings|match|matches)\s+"
+    r"(for|found|of|matching)",
+    r"is\s+not\s+(listed|included|present|found)\s+in\s+(the|this|these|any)",
 ]
 _COMPILED_REFUSAL_PATTERNS = [re.compile(p, re.IGNORECASE) for p in REFUSAL_PATTERNS]
 

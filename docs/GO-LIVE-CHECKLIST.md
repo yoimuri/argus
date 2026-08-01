@@ -110,19 +110,38 @@ student lists), low confidence / no answer, and multi-document collections behav
 ### R.0 — Extra setup for this stage
 - [ ] Paste **`supabase/migrations/021_hybrid_search.sql`** (SQL Editor → New query → Run).
       *(Already syntax-checked against your live database — it will not error.)*
+- [ ] Paste **`supabase/migrations/022_keyword_search_fix.sql`** ← **REQUIRED.** 021 alone had a
+      real bug: it required a chunk to contain EVERY word of your question, so natural questions
+      matched nothing. 022 fixes the search to match any term and rank by rarity. Without this,
+      name lookups still fail.
 - [ ] **RE-UPLOAD your test documents.** This matters: the chunk-size fix only applies to documents
       uploaded *after* the change. Your existing documents keep their old chunks and will still
       answer poorly. Re-upload at least: one **list-type** file (the student list), one **resume**,
       and the **DBIR** (to confirm nothing regressed).
 
-### TEST R1 — Exact-name lookup now works (the resume / list bug)
-**Do this:** On the re-uploaded student list or resume, ask for something *exact* — a specific
-person's name, an ID, a specific skill. Example: "Is [an actual name from the list] on this list?"
-or "What certifications are listed?"
-**You should see:** it finds and answers about that specific entry. Before, semantic search could
-not isolate one row among a thousand similar ones.
+### TEST R1 — Exact-name lookup now works (THE seat-list bug)
+**This is the headline test.** Your own record is confirmed present in the document:
+`1500 POYAOAN, Clint Branwel Dayap ** CICS - BSCS LBA Row 2 White`
 
-> **📋 Report back:** "R1: PASS — found the entry" or "R1: FAIL — [what you asked, what it said]".
+**Do this:** On the re-uploaded seating list, ask: **"What is my seat number? Clint Branwel Poyaoan"**
+**You should see:** seat number **1500**, and ideally the extras on that line — CICS - BSCS, LBA,
+Row 2, White. Then try another student's name from the list to be sure it isn't a fluke.
+
+**Why it failed before:** the keyword search required a chunk to contain *every* word of your
+question ("what", "seat", "number", "poyaoan"...). The chunk with your name doesn't contain the word
+"seat", so it matched **nothing** — verified on your live data. Migration 022 changes it to match
+any term and rank by rarity, which puts your chunk first by a 4.8x margin.
+
+> **📋 Report back:** "R1: PASS — found seat 1500" or "R1: FAIL — [exactly what you asked and what
+> it answered]".
+
+### TEST R1b — A "not found" answer can never say High confidence
+**Do this:** Ask about a name that is genuinely NOT in the list (make one up).
+**You should see:** it says it couldn't find that entry in the retrieved sections — and the badge
+shows **Low confidence**, not High. It should also avoid flatly claiming the person is absent from
+the whole document (only from the sections it looked at).
+
+> **📋 Report back:** "R1b: PASS — low confidence on a not-found" or "R1b: FAIL — still High".
 
 ### TEST R2 — Counting questions are HONEST (do not skip this one)
 **Do this:** Ask "how many students are in this list?"

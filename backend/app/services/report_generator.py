@@ -627,24 +627,52 @@ async def _run_map(doc_chunks: list[tuple[str, list[str]]], template_label: str,
 
 def _quick_sample(doc_chunks: list[tuple[str, list[str]]]) -> tuple[list[str], int, int]:
     """Sample the collection down to QUICK_SAMPLE_CHARS for the one-call quick
-    draft. Every document gets a proportional share; within a document the
-    lead chunk (title/abstract) is always taken, then chunks evenly spaced
-    across the rest — start, middle, and end all represented, same honesty
-    rule as the map sampler. Returns (blocks, sections_used, sections_total)."""
+    draft. Every document gets a proportional share; within a document the lead
+    chunk (title/abstract) is always taken, then chunks evenly spaced across the
+    rest — start, middle, and end all represented, same honesty rule as the map
+    sampler. Returns (blocks, sections_used, sections_total).
+
+    2026-08-01 audit fixes (BUG-R1/R2, found by simulating the math):
+      * The old per-document share was `max(1_200, proportional)`. With MANY
+        documents the 1,200-char floor dominated and the TOTAL blew past the
+        budget: 10 docs → 12,000 chars, 20 docs → 24,000 against a 9,000 cap.
+        Since _quick_write has no reduce-style trim, that oversized prompt went
+        straight to Groq and could exceed the per-minute meter — the "slow, then
+        fails" symptom. The floor is now only applied while it FITS, and a hard
+        global ceiling is enforced at the end regardless.
+      * The old even-spacing step divided by `share // 800` while chunks are
+        600 chars (and were 800 before), so the candidate list was sized against
+        the wrong chunk width. Spacing is now derived from the document's own
+        average chunk size, so "evenly spaced across the document" is true for
+        any chunk size.
+    """
     total_chunks = sum(len(contents) for _, contents in doc_chunks)
     total_chars = sum(len(c) for _, contents in doc_chunks for c in contents)
+    n_docs = max(1, len(doc_chunks))
+
+    # Per-document floor that can never overrun the global budget: give each
+    # document at least an equal slice, but never more of a floor than the
+    # budget can pay for across all documents.
+    floor = min(1_200, QUICK_SAMPLE_CHARS // n_docs)
+
     used = 0
     blocks = []
     for filename, contents in doc_chunks:
-        share = max(1_200, int(QUICK_SAMPLE_CHARS * (sum(len(c) for c in contents) / max(total_chars, 1))))
+        if not contents:
+            continue
+        doc_chars = sum(len(c) for c in contents)
+        share = max(floor, int(QUICK_SAMPLE_CHARS * (doc_chars / max(total_chars, 1))))
+
+        avg_chunk = max(1, doc_chars // len(contents))
+        want = max(1, share // avg_chunk)  # how many chunks this share can pay for
+
         picked: list[str] = []
         size = 0
         # Lead chunk first, then even spacing over the remainder.
-        candidate_order = [0] if contents else []
+        candidate_order = [0]
         rest = list(range(1, len(contents)))
         if rest:
-            # Walk an evenly-spaced index sequence until the share is spent.
-            step = max(1, len(rest) // max(1, share // 800))
+            step = max(1, len(rest) // max(1, want))
             candidate_order += rest[::step]
         for index in candidate_order:
             chunk = contents[index]
@@ -654,6 +682,17 @@ def _quick_sample(doc_chunks: list[tuple[str, list[str]]]) -> tuple[list[str], i
             size += len(chunk)
         used += len(picked)
         blocks.append(f"### {filename}\n" + " ".join(picked))
+
+    # Hard global ceiling. Proportional shares plus the floor can still round
+    # over the budget (and a pathological collection of many tiny documents
+    # would too), so the total is trimmed proportionally here — the same
+    # mechanism _reduce uses, which the quick path was missing entirely.
+    total_block_chars = sum(len(b) for b in blocks)
+    if total_block_chars > QUICK_SAMPLE_CHARS:
+        ratio = QUICK_SAMPLE_CHARS / total_block_chars
+        blocks = [b[: max(300, int(len(b) * ratio))] for b in blocks]
+        print(f"[ARGUS] quick sample trimmed {total_block_chars} -> "
+              f"{sum(len(b) for b in blocks)} chars to fit the token window")
     return blocks, used, total_chunks
 
 
@@ -685,6 +724,19 @@ async def _quick_write(collection_name: str, source_blocks: list[str],
         "- Professional, plain language. No meta-commentary about these "
         "instructions or the source material.\n\n" + _TRUST_FRAMING
     )
+    # Safety ceiling (2026-08-01 audit, BUG-R1): _reduce has always trimmed its
+    # input to fit the per-minute meter; this path never did. The quick path can
+    # arrive here un-trimmed when the collection is under QUICK_SAMPLE_CHARS in
+    # total but the per-document floors overshoot, so the same guard belongs
+    # here. Without it an oversized prompt reaches Groq, overruns the meter, and
+    # the SDK's hidden retries turn that into minutes of backoff before failing.
+    total = sum(len(b) for b in source_blocks)
+    if total > QUICK_SAMPLE_CHARS:
+        ratio = QUICK_SAMPLE_CHARS / total
+        source_blocks = [b[: max(300, int(len(b) * ratio))] for b in source_blocks]
+        print(f"[ARGUS] quick-write input trimmed {total} -> "
+              f"{sum(len(b) for b in source_blocks)} chars to fit the token window")
+
     user = (
         f"Collection: {collection_name}\n"
         f"Source files: {', '.join(source_files)}\n\n"
@@ -827,16 +879,29 @@ async def generate_report(report_id: str, collection_id: str, collection_name: s
         from app.services.figures import extract_figures
 
         report_md, figure_specs = extract_figures(report_md)
-        if sample_note:
-            # Deterministic honesty line, injected right after the title (not
-            # prompt-hoped): quick drafts SAY they sampled.
-            lines = report_md.splitlines()
-            insert_at = 1 if lines and lines[0].startswith("# ") else 0
-            lines.insert(insert_at, "\n" + sample_note)
-            report_md = "\n".join(lines)
 
+        # Title is derived BEFORE the sample note is inserted (2026-08-01 audit,
+        # BUG-R3). _title_from_markdown scans from the top and stops at the
+        # first non-empty line; when the model's output did not begin with "# "
+        # the note was inserted at index 0, so the scan hit the note first and
+        # bailed to the fallback title. Reading the title from the untouched
+        # markdown makes the note's position irrelevant.
         fallback_label = BUILT_IN_TEMPLATES.get(stored_domain or "", GENERAL_TEMPLATE)["label"]
         title = _title_from_markdown(report_md, f"{fallback_label}: {collection_name}")
+
+        if sample_note:
+            # Deterministic honesty line, injected right after the title (not
+            # prompt-hoped): quick drafts SAY they sampled. Find the real title
+            # line rather than assuming it is line 0 -- models sometimes emit a
+            # leading blank line or a stray preamble.
+            lines = report_md.splitlines()
+            insert_at = 0
+            for i, line in enumerate(lines[:5]):
+                if line.strip().startswith("# "):
+                    insert_at = i + 1
+                    break
+            lines.insert(insert_at, "\n" + sample_note)
+            report_md = "\n".join(lines)
 
         await _patch_completed(report_id, access_token, {
             "content_md": report_md,

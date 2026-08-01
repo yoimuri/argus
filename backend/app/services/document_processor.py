@@ -21,16 +21,21 @@ HF_EMBEDDING_URL = "https://router.huggingface.co/hf-inference/models/sentence-t
 # bad on the student list" behaviour. 600 chars keeps dense content inside the
 # window with margin, at the cost of slightly more chunks per document.
 #
-# WHY overlap 150, not 100: a fact that straddles a chunk boundary (a table row
-# split mid-record, "Maria Santos | BSCS | 2024" cut after the name) is
-# retrievable only if some chunk contains it whole. A larger overlap makes a
-# boundary-straddling record appear intact in at least one chunk. 25% overlap is
-# the usual recommendation for record-like content.
+# WHY overlap 200, not 100: a fact that straddles a chunk boundary (a table row
+# split mid-record, "POYAOAN, Clint Branwel Dayap ** CICS - BSCS LBA Row 2
+# White" cut after the name) is retrievable only if some chunk contains it
+# whole. Live-confirmed on the 2,000-row seating list: records genuinely sit at
+# boundaries (chunk 232 ended mid-record at "...1503"), and a record split
+# across two chunks can lose the association between a name and its seat
+# number even when both chunks are retrieved. 200/600 = 33% overlap, above the
+# usual 25% recommendation because record-like rows here are ~55 chars and a
+# generous overlap guarantees several whole rows of context on both sides of
+# every cut.
 #
 # NOTE: chunk size applies at INGEST time. Documents already uploaded keep their
 # old 800-char chunks until they are re-uploaded.
 CHUNK_SIZE = 600
-CHUNK_OVERLAP = 150
+CHUNK_OVERLAP = 200
 EMBED_BATCH_SIZE = 8
 EMBED_DIM = 384  # all-MiniLM-L6-v2 output dimension; the pgvector column is vector(384)
 
