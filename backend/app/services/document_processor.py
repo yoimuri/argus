@@ -58,17 +58,86 @@ def chunk_text(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVE
     return [c for c in chunks if c]
 
 
+# Table-header detection (2026-08-01, live-found on a 2,000-row seating list).
+#
+# THE PROBLEM: PDF text extraction flattens a table into one continuous run of
+# words. A seating list becomes
+#     "... 1499 POLIARCO, Lyrine Manahan CICS - BSCS LBA Row 2 White
+#          1500 POYAOAN, Clint Branwel Dayap ** CICS - BSCS LBA Row 2 White ..."
+# with no separators. The leading number IS the seat number, but nothing in the
+# text says so, and the number sits between two names — so a model reading only
+# this excerpt cannot tell whether 1500 belongs to the name before it or after
+# it. Live result: ARGUS found the right row and still answered "no seat number
+# is shown", which is the CORRECT refusal given ambiguous input.
+#
+# The header line ("SEAT NO. NAME COLLEGE ROW NO. COLUMN NO. SEAT COLOR")
+# exists — but only at each PDF page break, so a chunk from the middle of a
+# page carries no column context at all.
+#
+# THE FIX: detect the header on each page and prepend it to every chunk made
+# from that page. Costs ~60 chars per chunk and turns an ambiguous number
+# sequence into a labelled record the model can read confidently.
+_HEADER_HINTS = (
+    "seat no", "name", "college", "row no", "column no", "seat color",
+    "student", "id no", "employee", "department", "date", "amount", "total",
+    "no.", "code", "description", "qty", "quantity", "price", "status",
+)
+
+
+def _find_table_header(page_text: str) -> str | None:
+    """Return a table header line from this page, if one is present.
+
+    Heuristic, deliberately conservative: a header is a SHORT line (headers are
+    terse) containing at least THREE known column-ish words and no long prose.
+    Requiring three keeps ordinary sentences from being mistaken for headers.
+    """
+    for raw in page_text.splitlines()[:25]:  # headers live near the top
+        line = " ".join(raw.split())
+        if not (10 <= len(line) <= 160):
+            continue
+        low = line.lower()
+        hits = sum(1 for h in _HEADER_HINTS if h in low)
+        if hits >= 3:
+            return line
+    return None
+
+
 def extract_chunks_from_pdf_file(file_path: str) -> list[str]:
-    """Parse PDF page-by-page using PyMuPDF to keep memory strictly on disk and C-level."""
+    """Parse PDF page-by-page using PyMuPDF to keep memory strictly on disk and
+    C-level.
+
+    Chunks are built PER PAGE (rather than over one concatenated string) so each
+    page's table header can be carried onto its own chunks — see
+    _find_table_header. A page with no detectable header behaves exactly as
+    before. The last header seen carries forward to later pages, because tables
+    that span pages often print the header only once.
+    """
     doc = fitz.open(file_path)
-    full_text = ""
-    
-    for page in doc:
-        # Extract text natively (uses C-level memory, extremely efficient)
-        full_text += page.get_text("text") + "\n\n"
-    doc.close()
-    
-    return chunk_text(full_text)
+    all_chunks: list[str] = []
+    current_header: str | None = None
+
+    try:
+        for page in doc:
+            # Extract text natively (uses C-level memory, extremely efficient)
+            page_text = page.get_text("text")
+            if not page_text.strip():
+                continue
+
+            header = _find_table_header(page_text)
+            if header:
+                current_header = header
+
+            for chunk in chunk_text(page_text):
+                # Prepend the header unless this chunk already contains it (the
+                # chunk that holds the header line itself needs no duplicate).
+                if current_header and current_header not in chunk:
+                    all_chunks.append(f"[Columns: {current_header}] {chunk}")
+                else:
+                    all_chunks.append(chunk)
+    finally:
+        doc.close()
+
+    return all_chunks
 
 
 async def _hf_embedding_once(inputs):
