@@ -216,10 +216,18 @@ async def retriever_node(state: ResearchState) -> dict:
             seen_content.add(content_key)
         return True
 
-    for sub_query in refined_queries:
+    for rank_pos, sub_query in enumerate(refined_queries):
         query_embedding = await embed_query(sub_query)
         rows, mode = await _search_chunks(sub_query, query_embedding, state, match_count)
         modes.add(mode)
+
+        # Preserve the RPC's own ordering (2026-08-01 fix, see the sort below).
+        # hybrid_match_chunks returns rows in FUSED rank order — that ordering is
+        # the whole product of the search and must not be thrown away. We stamp
+        # each row with the position it arrived in so the merge can restore it.
+        for position, row in enumerate(rows):
+            row["_rank"] = position
+            row["_sub"] = rank_pos
 
         # Observability: dim should always be 384, and rows should be non-zero for a
         # populated collection (neither RPC applies a similarity threshold). If a
@@ -233,13 +241,24 @@ async def retriever_node(state: ResearchState) -> dict:
             if _is_new(row):
                 merged.append(row)
 
-    # The hybrid RPC already returns fusion-ordered rows, but merging several
-    # sub-queries needs one consistent order. similarity is the only score both
-    # paths report; keyword-only hits carry 0.0 (migration 021 documents why), so
-    # they sort last within the merge and survive on the strength of having been
-    # returned at all -- which is the point: they are the exact-term matches
-    # semantic search could not find.
-    merged.sort(key=lambda r: r.get("similarity", 0), reverse=True)
+    # THE 2026-08-01 BUG (live-found on the seating-list lookup, and it was the
+    # real reason "find my name" still failed after migrations 021+022):
+    #
+    #     merged.sort(key=lambda r: r.get("similarity", 0), reverse=True)
+    #
+    # `similarity` is the COSINE score, and a KEYWORD-ONLY hit legitimately has
+    # none -- the SQL reports 0.0 for it (documented in migration 021: inventing
+    # a score would be dishonest). So this sort took the exact-term matches --
+    # the entire reason hybrid search exists -- and pushed them BELOW every
+    # semantic filler row, where FINAL_TOP_N then cut them off. Measured on
+    # Clint's real document: his chunk arrived from the RPC ranked #1 of 32 and
+    # this line moved it to #31, so it never reached the synthesizer. The
+    # database was working; this line threw the answer away.
+    #
+    # Fix: keep the RPC's fused order. Rows are interleaved by their rank within
+    # each sub-query (all the #1s, then all the #2s, ...) so multi-query fan-out
+    # stays fair without ever re-scoring by a metric half the rows don't have.
+    merged.sort(key=lambda r: (r.get("_rank", 0), r.get("_sub", 0)))
 
     lead_chunks = []
     if intent == "meta":
@@ -262,16 +281,26 @@ async def retriever_node(state: ResearchState) -> dict:
 
     doc_spread = len({r.get("document_id") for r in final if r.get("document_id")})
     mode_label = "+".join(sorted(modes)) if modes else "none"
+    # Keyword-only hits report similarity 0.0 by design (they were found by
+    # exact-term match, not cosine). Counting them in the trace makes the
+    # keyword half's contribution VISIBLE -- if a name lookup ever fails again,
+    # this number says immediately whether the exact-term matches reached the
+    # synthesizer or were dropped somewhere between the RPC and here.
+    keyword_only = sum(1 for r in final if not r.get("similarity"))
     print(
         f"[ARGUS] retriever intent={intent!r} mode={mode_label} "
         f"sub_queries={len(refined_queries)} merged={len(merged)} "
-        f"returned={len(final)} across_docs={doc_spread}"
+        f"returned={len(final)} across_docs={doc_spread} keyword_only={keyword_only}"
     )
-    top_similarity = max((r.get("similarity", 0) for r in merged), default=0)
+    # Report the best cosine among rows that HAVE one; 0.0 placeholders from
+    # keyword-only rows would otherwise drag this to a meaningless number.
+    scored = [r.get("similarity", 0) for r in final if r.get("similarity")]
+    top_similarity = max(scored, default=0)
+    keyword_note = f", {keyword_only} exact-term" if keyword_only else ""
     return {
         "chunks": final,
         "trace_detail": (
-            f"{len(final)} chunks from {doc_spread} document(s), "
+            f"{len(final)} chunks from {doc_spread} document(s){keyword_note}, "
             f"{mode_label} search, top similarity {top_similarity:.2f}"
         ),
     }

@@ -127,10 +127,18 @@ student lists), low confidence / no answer, and multi-document collections behav
 **You should see:** seat number **1500**, and ideally the extras on that line — CICS - BSCS, LBA,
 Row 2, White. Then try another student's name from the list to be sure it isn't a fluke.
 
-**Why it failed before:** the keyword search required a chunk to contain *every* word of your
-question ("what", "seat", "number", "poyaoan"...). The chunk with your name doesn't contain the word
-"seat", so it matched **nothing** — verified on your live data. Migration 022 changes it to match
-any term and rank by rarity, which puts your chunk first by a 4.8x margin.
+**Why it failed before — TWO separate bugs, both now fixed:**
+1. *(migration 022)* The keyword search required a chunk to contain **every** word of your question.
+   The chunk with your name doesn't contain the word "seat", so it matched **nothing**.
+2. *(code fix, no migration)* Even once the database found your chunk and ranked it **#1**, the
+   retriever re-sorted results by cosine-similarity score — which keyword matches don't have (they
+   report 0.0) — so your chunk was pushed to **#31 of 32** and cut from the top 22. The database
+   found you; the code discarded you. The retriever now keeps the database's ranking.
+
+**Check the trace:** the Retriever step should now say something like
+`22 chunks from 1 document(s), 2 exact-term, hybrid search`. That **"exact-term"** count is the
+proof the keyword matches actually reached the AI. If it says `0 exact-term` on a name lookup,
+something regressed — tell me.
 
 > **📋 Report back:** "R1: PASS — found seat 1500" or "R1: FAIL — [exactly what you asked and what
 > it answered]".
