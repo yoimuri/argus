@@ -85,21 +85,72 @@ _HEADER_HINTS = (
 
 
 def _find_table_header(page_text: str) -> str | None:
-    """Return a table header line from this page, if one is present.
+    """Return this page's table header, if one is present.
 
-    Heuristic, deliberately conservative: a header is a SHORT line (headers are
-    terse) containing at least THREE known column-ish words and no long prose.
-    Requiring three keeps ordinary sentences from being mistaken for headers.
+    2026-08-04 REWRITE — the line-based version never fired on real PDFs.
+    It required the header to sit on its OWN short line (<=160 chars). That is
+    how a header looks when you type an example by hand; it is NOT how PyMuPDF
+    extracts a real table. Live evidence from this project's own database: the
+    seating list's first chunk was ONE continuous 400+ char run --
+        "... Final list of graduates 1 SEAT NO. NAME COLLEGE ROW NO. COLUMN NO.
+         SEAT COLOR 1 ALCANZO, Imelda Cautivar SGS - ..."
+    -- so the header is embedded mid-line and every candidate line blew straight
+    past the length limit. Result: 0 headers detected on a document that plainly
+    has one (verified: chunks_with_header = 0 after a re-upload on the deployed
+    fix). The detector was validated against a hand-written sample instead of
+    real extractor output, which is exactly the wrong way round.
+
+    This version searches the page TEXT for a run of consecutive column-ish
+    words, wherever it sits, which works for both layouts.
     """
-    for raw in page_text.splitlines()[:25]:  # headers live near the top
-        line = " ".join(raw.split())
-        if not (10 <= len(line) <= 160):
-            continue
-        low = line.lower()
-        hits = sum(1 for h in _HEADER_HINTS if h in low)
-        if hits >= 3:
-            return line
-    return None
+    # Look only near the start of the page: headers precede their table.
+    window = " ".join(page_text.split())[:1200]
+    if not window:
+        return None
+    low = window.lower()
+
+    # Find the earliest and latest positions of distinct header keywords within
+    # a short span. A real header packs >=3 of them close together; prose that
+    # happens to contain "name" and "date" pages apart will not.
+    positions: list[tuple[int, int, str]] = []
+    for hint in _HEADER_HINTS:
+        idx = low.find(hint)
+        if idx != -1:
+            positions.append((idx, idx + len(hint), hint))
+    if len(positions) < 3:
+        return None
+
+    positions.sort()
+    # Slide a window over the sorted hits and keep the tightest cluster of >=3.
+    best: tuple[int, int, int] | None = None  # (span, start, end)
+    for i in range(len(positions) - 2):
+        for j in range(i + 2, len(positions)):
+            start = positions[i][0]
+            end = positions[j][1]
+            span = end - start
+            # A header is compact: >=3 keywords inside ~120 characters.
+            if span <= 120 and (best is None or (j - i) > (best[2] - best[1])):
+                best = (span, i, j)
+    if best is None:
+        return None
+
+    _, i, j = best
+    start = positions[i][0]
+    end = positions[j][1]
+    header = window[start:end].strip()
+
+    # Trim any document-title text that precedes the real column run. The
+    # cluster can legitimately start on a title word ("Seating number Final list
+    # of graduates 1 SEAT NO. NAME ..."); the useful part for the model is the
+    # column names, so cut to the strongest column keyword if one appears later.
+    for anchor in ("seat no", "id no", "row no", "student", "employee", "no."):
+        pos = header.lower().find(anchor)
+        if pos > 0:
+            header = header[pos:].strip()
+            break
+
+    # Guard against a degenerate match (too short to be meaningful).
+    return header if len(header) >= 10 else None
 
 
 def extract_chunks_from_pdf_file(file_path: str) -> list[str]:
