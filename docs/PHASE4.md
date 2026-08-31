@@ -1383,7 +1383,44 @@ is in `supabase/migrations/024_security_perf_hardening.sql` and the CI workflow'
 **Not verified live:** migration 024's effects — it is Clint's paste. **Manual steps:** paste 024;
 enable leaked-password protection in Supabase Auth.
 
-#### Sprint 4.6c — still to build
+### Sprint 4.6c — Reading scanned PDFs (2026-08-31, 🟡 code-complete, not yet run live)
+
+Closes the last honest gap: a scanned / image-only PDF produced no text, so since 2026-08-01 it was
+politely rejected. Its pages are now rendered and read by a vision model, and the recovered text
+rejoins the normal chunk pipeline.
+
+**No new account, API key, or service** — it reuses `GROQ_API_KEY`.
+
+**The constraints that shape the design** (verified against Groq's current docs, not assumed):
+vision models `qwen/qwen3.6-27b` / `qwen3.8-27b`; **each image costs a flat 2048 input tokens**;
+free tier 8K tokens/min, 30 req/min, 200K tokens/day — **metered per model**. That last point is
+the important one: vision runs on a bucket the Q&A model (gpt-oss-20b) and report model
+(gpt-oss-120b) never touch, so OCR cannot degrade interactive questions. It gets its own
+`groq_vision_breaker` for the same reason report generation has one.
+
+The real throughput is ~2–3 pages/minute. Overrunning the per-minute meter does not error — the SDK
+backs off and the upload appears to hang — so `app/services/ocr.py` carries its own token pacer and
+a hard `MAX_OCR_PAGES` cap (default 8), keeping a scanned upload bounded rather than open-ended.
+
+**Behaviour:**
+- Pages with under 80 characters of extractable text are treated as image-only (not zero — scanners
+  often leave a stray page number).
+- Pages are rendered at 150 DPI **one at a time** and released before the network call, so peak
+  memory is a single page — this runs on a 512MB dyno.
+- Recovered text is spliced back **at its own page index**, preserving document order for
+  `chunk_index` and for report reading order.
+- OCR'd pages carry a `[Scanned page — text recovered by OCR]` marker; the synthesizer treats those
+  characters as less certain and says so when a requested figure rests only on OCR'd text.
+- A scan longer than the cap is read up to the cap and the upload response returns a `notice`
+  stating how many pages were read and how many were not — shown verbatim in the UI.
+- Failure of any single page skips that page rather than failing the upload.
+
+**Security:** OCR output is exactly as untrusted as extracted text and rejoins the same ingest path,
+so the pre-insert injection scan and quarantine apply unchanged. Nothing was exempted.
+
+**Verified:** backend compile + pyflakes clean, frontend build clean. **Not verified:** the render
+and vision calls have not been executed — PyMuPDF is absent from the local environment and a real
+run needs a scanned PDF and live quota. Status stays 🟡 until a scanned upload succeeds.
 
 **Owner clarifications (Clint, 2026-07-11 — this is the product's headline capability):** the
 point of ARGUS is generating meaningful, presentable output from messy/raw/unorganized reports.

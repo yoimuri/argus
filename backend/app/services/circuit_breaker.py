@@ -134,3 +134,11 @@ gemini_breaker = CircuitBreaker("gemini_chat", fail_threshold=5, failure_window_
 # perfectly healthy. Background batch work and interactive queries now fail
 # independently.
 groq_report_breaker = CircuitBreaker("groq_report", fail_threshold=5, failure_window_s=120, recover_timeout_s=60)
+
+# Sprint 4.6c (2026-08-31): guards the vision/OCR calls that read image-only PDF
+# pages. Separate for the same reason groq_report_breaker is separate -- OCR runs
+# during upload, on a different Groq model with its own rate-limit bucket, and a
+# scanned-PDF upload burning through vision quota must not open the circuit that
+# interactive Q&A depends on. Also fails independently of the report breaker: an
+# OCR outage should never make report generation look broken.
+groq_vision_breaker = CircuitBreaker("groq_vision", fail_threshold=4, failure_window_s=120, recover_timeout_s=90)

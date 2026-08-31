@@ -11,11 +11,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from app.middleware.auth import JWTAuthMiddleware
-from app.services.document_processor import extract_chunks_from_pdf_file, iter_embedded_chunk_batches
+from app.services.document_processor import extract_chunks_with_ocr, iter_embedded_chunk_batches
 from app.services.supabase_client import supabase_request
 from app.services.injection_guard import check_query, InjectionDetected
 from app.services.injection_patterns import matches_any
-from app.services.circuit_breaker import groq_breaker, groq_report_breaker, hf_breaker, hf_embedding_breaker, tavily_breaker, gemini_breaker, CircuitBreakerOpen
+from app.services.circuit_breaker import groq_breaker, groq_report_breaker, groq_vision_breaker, hf_breaker, hf_embedding_breaker, tavily_breaker, gemini_breaker, CircuitBreakerOpen
 from app.services import observability
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -295,6 +295,7 @@ async def circuit_breaker_health(request: Request):
     return {
         "groq": await groq_breaker.snapshot(),
         "groq_report": await groq_report_breaker.snapshot(),
+        "groq_vision": await groq_vision_breaker.snapshot(),
         "hf_prompt_guard": await hf_breaker.snapshot(),
         "hf_embedding": await hf_embedding_breaker.snapshot(),
         "tavily": await tavily_breaker.snapshot(),
@@ -565,10 +566,19 @@ async def upload_document(collection_id: str, req: DocumentUploadRequest, reques
         if header != b"%PDF":
             raise HTTPException(status_code=400, detail="File does not appear to be a valid PDF.")
 
-        # 4. Extract chunks using PyMuPDF
-        chunk_strings = extract_chunks_from_pdf_file(temp_path)
+        # 4. Extract chunks using PyMuPDF, with a vision/OCR pass over any page
+        #    that has no extractable text (Sprint 4.6c). A scanned PDF used to be
+        #    rejected here; now its pages are read from the rendered image and
+        #    rejoin the same pipeline, so the injection scan below applies to
+        #    OCR'd text exactly as it does to natively-extracted text.
+        chunk_strings, extract_summary = await extract_chunks_with_ocr(temp_path)
         if not chunk_strings:
-            raise HTTPException(status_code=400, detail="No text could be extracted from the PDF.")
+            raise HTTPException(
+                status_code=400,
+                detail=("No readable text could be extracted from this PDF, including by "
+                        "reading its pages as images. If it is a scan, it may be too low "
+                        "quality to transcribe."),
+            )
 
         # 5. Batch embed + shadow-scan + insert.
         # Sprint 2.3 (vector shadow detection): scan each chunk BEFORE it goes
@@ -637,13 +647,13 @@ async def upload_document(collection_id: str, req: DocumentUploadRequest, reques
         # is fine. That reads as "the AI is broken" when the real cause is an
         # unreadable upload.
         #
-        # Usual cause: a scanned / image-only PDF. PyMuPDF's get_text() returns
-        # nothing for pages that contain only images, so there is no text to
-        # chunk. (Reading text inside images needs OCR/vision -- that is Sprint
-        # 4.6c, not built yet, so the honest move today is to say so.)
-        # The other possible cause is that every chunk was injection-quarantined,
-        # which the message distinguishes so a security event isn't mistaken for
-        # a scanning problem.
+        # Since Sprint 4.6c a scanned page is no longer an automatic dead end --
+        # image-only pages are read by the vision model above. Reaching zero
+        # chunks now means either the injection scan quarantined everything, or
+        # OCR itself could not transcribe the pages (too low resolution, a photo
+        # of a photo, handwriting, or the vision breaker being open). The two
+        # messages stay distinct so a security event is never mistaken for a
+        # scanning problem.
         if chunks_created == 0:
             if quarantined > 0:
                 reason = (
@@ -652,9 +662,9 @@ async def upload_document(collection_id: str, req: DocumentUploadRequest, reques
                 )
             else:
                 reason = (
-                    "No readable text could be extracted from this PDF. It is most likely a "
-                    "scanned or image-only document. ARGUS reads text, not pictures of text, "
-                    "so please upload a text-based PDF."
+                    "No readable text could be extracted from this PDF. Its pages were also "
+                    "read as images and still produced no text, which usually means a very "
+                    "low-quality scan or handwriting. Try a clearer scan or a text-based PDF."
                 )
             # Raising here routes into the `except HTTPException` handler below,
             # which marks the row 'failed' (processing_started is True by now) --
@@ -706,11 +716,31 @@ async def upload_document(collection_id: str, req: DocumentUploadRequest, reques
         if os.path.exists(temp_path):
             os.remove(temp_path)
 
-    return {
+    # Sprint 4.6c: tell the caller the truth about a scan. `notice` is only
+    # present when there is something the user genuinely needs to know -- a
+    # document read from images (so answers carry OCR error risk), or a scan
+    # longer than the page cap where SOME pages were not read at all. Silence on
+    # a normal text PDF; the UI shows the notice verbatim when present.
+    result = {
         "document_id": document["id"],
         "chunks_created": chunks_created,
         "chunks_quarantined": quarantined,
+        "ocr_pages": extract_summary.get("ocr_pages", 0),
     }
+    if extract_summary.get("ocr_capped"):
+        result["notice"] = (
+            f"This looks like a scanned document. The first "
+            f"{extract_summary.get('ocr_pages', 0)} image pages were read by OCR, but "
+            f"{extract_summary.get('image_pages', 0)} pages needed it — the rest were not "
+            f"read. Split the file into smaller parts for full coverage."
+        )
+    elif extract_summary.get("ocr_pages"):
+        result["notice"] = (
+            f"{extract_summary['ocr_pages']} scanned page(s) were read by OCR. "
+            f"Machine-read text can contain recognition errors, so check quoted "
+            f"figures against the original."
+        )
+    return result
 
 
 @app.get("/collections/{collection_id}/documents")

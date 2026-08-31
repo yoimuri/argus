@@ -153,9 +153,23 @@ def _find_table_header(page_text: str) -> str | None:
     return header if len(header) >= 10 else None
 
 
+def _chunks_for_page(page_text: str, current_header: str | None) -> list[str]:
+    """Chunk one page's text, carrying the table header onto every chunk."""
+    out = []
+    for chunk in chunk_text(page_text):
+        # Prepend the header unless this chunk already contains it (the chunk
+        # that holds the header line itself needs no duplicate).
+        if current_header and current_header not in chunk:
+            out.append(f"[Columns: {current_header}] {chunk}")
+        else:
+            out.append(chunk)
+    return out
+
+
 def extract_chunks_from_pdf_file(file_path: str) -> list[str]:
-    """Parse PDF page-by-page using PyMuPDF to keep memory strictly on disk and
-    C-level.
+    """Text-only extraction. Kept as the synchronous entry point for callers
+    that must not perform network I/O; the upload path uses
+    extract_chunks_with_ocr() below so scanned pages are not silently lost.
 
     Chunks are built PER PAGE (rather than over one concatenated string) so each
     page's table header can be carried onto its own chunks — see
@@ -177,18 +191,72 @@ def extract_chunks_from_pdf_file(file_path: str) -> list[str]:
             header = _find_table_header(page_text)
             if header:
                 current_header = header
-
-            for chunk in chunk_text(page_text):
-                # Prepend the header unless this chunk already contains it (the
-                # chunk that holds the header line itself needs no duplicate).
-                if current_header and current_header not in chunk:
-                    all_chunks.append(f"[Columns: {current_header}] {chunk}")
-                else:
-                    all_chunks.append(chunk)
+            all_chunks.extend(_chunks_for_page(page_text, current_header))
     finally:
         doc.close()
 
     return all_chunks
+
+
+async def extract_chunks_with_ocr(file_path: str) -> tuple[list[str], dict]:
+    """Sprint 4.6c: text extraction, with a vision-model pass over pages that
+    have no extractable text (scanned / image-only pages).
+
+    Returns (chunks, summary). The summary is what lets the API tell the user the
+    truth about a partially-read scan:
+        {"pages": int, "image_pages": int, "ocr_pages": int, "ocr_capped": bool}
+
+    Page ORDER is preserved: OCR'd text is spliced back at its own page position
+    rather than appended, so a mixed document (text pages plus a scanned insert)
+    still reads in document order — which matters because the retriever's
+    chunk_index ordering and the report generator's reading order both depend
+    on it.
+    """
+    from app.services.ocr import MAX_OCR_PAGES, ocr_pages, page_needs_ocr
+
+    doc = fitz.open(file_path)
+    try:
+        page_texts: list[str] = []
+        image_pages: list[int] = []
+        for index, page in enumerate(doc):
+            text = page.get_text("text")
+            page_texts.append(text)
+            if page_needs_ocr(text):
+                image_pages.append(index)
+
+        summary = {
+            "pages": len(page_texts),
+            "image_pages": len(image_pages),
+            "ocr_pages": 0,
+            "ocr_capped": len(image_pages) > MAX_OCR_PAGES,
+        }
+
+        if image_pages:
+            print(f"[ARGUS] {len(image_pages)} of {len(page_texts)} pages have no "
+                  f"extractable text -> vision OCR")
+            recovered, _attempted = await ocr_pages(doc, image_pages)
+            summary["ocr_pages"] = len(recovered)
+            for index, text in recovered.items():
+                # Provenance marker: this text was machine-read from an image and
+                # can contain recognition errors. The answering model is told to
+                # weigh it accordingly, and a human reading a cited chunk can see
+                # where it came from. It is prepended per page (not per chunk) so
+                # it survives chunking without repeating on every fragment.
+                page_texts[index] = f"[Scanned page — text recovered by OCR] {text}"
+    finally:
+        doc.close()
+
+    all_chunks: list[str] = []
+    current_header: str | None = None
+    for page_text in page_texts:
+        if not page_text.strip():
+            continue
+        header = _find_table_header(page_text)
+        if header:
+            current_header = header
+        all_chunks.extend(_chunks_for_page(page_text, current_header))
+
+    return all_chunks, summary
 
 
 async def _hf_embedding_once(inputs):

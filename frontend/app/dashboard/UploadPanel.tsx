@@ -497,6 +497,10 @@ export default function UploadPanel() {
         document_id: string
         chunks_created: number
         chunks_quarantined: number
+        // Sprint 4.6c: present only when the document contained scanned pages
+        // read by OCR, or when a scan was longer than the OCR page cap.
+        ocr_pages?: number
+        notice?: string
       }>(`/collections/${collectionId}/documents`, {
         method: 'POST',
         body: JSON.stringify({ file_path: filePath, file_name: file.name, document_id: docId }),
@@ -508,11 +512,18 @@ export default function UploadPanel() {
         return
       }
       const quarantined = data.chunks_quarantined ?? 0
-      setStatus(
-        quarantined > 0
-          ? `Uploaded. ${data.chunks_created} chunks created. ${quarantined} chunk(s) quarantined as potential prompt injection and not stored.`
-          : `Uploaded. ${data.chunks_created} chunks created.`,
-      )
+      // The OCR notice is appended rather than replacing the count, because both
+      // facts matter: how much was indexed, and whether any of it was machine-read
+      // from an image (which carries transcription risk the user should know about
+      // before quoting a figure).
+      const parts = [`Uploaded. ${data.chunks_created} chunks created.`]
+      if (quarantined > 0) {
+        parts.push(
+          `${quarantined} chunk(s) quarantined as potential prompt injection and not stored.`,
+        )
+      }
+      if (data.notice) parts.push(data.notice)
+      setStatus(parts.join(' '))
       if (collectionId) setDocuments(await fetchDocuments(collectionId))
       // Clear the selection + preview on success so the same file can't be
       // re-submitted with a second click (an accidental-duplicate vector
