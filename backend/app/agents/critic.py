@@ -72,6 +72,23 @@ SYSTEM_PROMPT = (
     "noting that. Mark \"confidence\" as \"low\" if any claim in the draft "
     "lacks support in the chunks, OR if the draft itself says the context does "
     "not contain enough information to answer the question.\n\n"
+    # 2026-08-31: the critic must read tables the SAME way the synthesizer does,
+    # or the two agents disagree forever on list documents. Live case: the draft
+    # correctly answered "RENTAZIDA, Leo Gabriel Lebios -> seat 1505"; the critic
+    # read the NEXT record's number ("... White 1506 SABERON, ...") as if it
+    # belonged to RENTAZIDA and flagged the correct answer as unsupported,
+    # producing a Low-confidence badge on a right answer. A false "low" is not a
+    # harmless nag -- it also triggers a wasted re-retrieval pass and teaches the
+    # user to distrust correct output.
+    "READING FLATTENED TABLES. PDF extraction strips table borders, so a table "
+    "arrives as one continuous run of records with no separators. A chunk may "
+    "begin with '[Columns: ...]' naming the columns IN ORDER — use it. Records "
+    "follow one another directly, so for a layout like 'SEAT NO. NAME ...' the "
+    "number immediately BEFORE a name is that person's value, and the values "
+    "after the name fill the remaining columns until the NEXT record's number "
+    "begins. Do not attribute the following record's leading number to the "
+    "person before it. When the draft's reading of a record matches this "
+    "structure, it IS supported — mark it grounded.\n\n"
     "When \"confidence\" is \"low\", \"retry_queries\" must contain 1-2 short, "
     "concrete search queries that target exactly the missing information. "
     "When \"confidence\" is \"high\", \"retry_queries\" must be an empty list.\n\n"

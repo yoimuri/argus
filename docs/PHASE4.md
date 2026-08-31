@@ -1337,6 +1337,52 @@ size change applies at ingest only — existing documents keep their 800-char ch
 is exactly what those zero-chunk scanned PDFs would require. They now say so honestly instead of
 pretending to be ready.
 
+### Sprint 4.9 — Security, performance and CI polish (2026-08-31, 🟡 code-complete)
+
+An audit pass rather than a feature sprint, driven by Supabase's own database linter run against
+the live project plus a read of the application code. Full detail and honest severity for each item
+is in `supabase/migrations/024_security_perf_hardening.sql` and the CI workflow's own header.
+
+**Database (`migration 024`, one paste):**
+- `security_events` carried a `for all` policy beside its intended select/insert pair. Table grants
+  blocked writes today so it was **not exploitable**, but policy and grant disagreed — a future
+  `grant update` would have let the subject of a security log edit their own records. Policy now
+  matches the design: append and read your own events, nothing else.
+- Revoked `TRUNCATE`/`REFERENCES`/`TRIGGER` from `anon`/`authenticated` on every table (Supabase
+  default grants). **Not reachable through PostgREST**, which exposes no such verb — but TRUNCATE
+  bypasses RLS, so least privilege closes it before some future SQL path inherits it.
+- Revoked RPC `EXECUTE` on three SECURITY DEFINER **trigger** functions that Supabase's defaults
+  had published at `/rest/v1/rpc/…`.
+- Pinned `search_path` on both retrieval functions.
+- Wrapped `auth.uid()` as `(select auth.uid())` in every RLS policy so it is evaluated once per
+  query instead of once per row — the item with real runtime payoff, since retrieval scans
+  hundreds of `document_chunks` rows per question.
+- Added nine foreign-key indexes; `document_chunks(document_id)` is the significant one, since
+  report generation reads chunks one document at a time and was doing a sequential scan each time.
+
+**Application code:**
+- Closed a partial gap in PostgREST id validation: `_valid_uuid()` was applied at ten call sites but
+  missed `delete_collection`, `upload_document` and `list_documents`. **Defence in depth, not a
+  breach** — RLS scopes rows to the caller and PostgREST ANDs repeated filters, so injection could
+  only narrow a query, never widen it; the realistic impact was 500s instead of clean 404s.
+- Taught the **critic** the flattened-table reading rule the synthesizer already had. Live symptom:
+  a correct seat-number answer was badged Low confidence because the critic attributed the next
+  record's leading number to the previous person. The two agents now read tables identically.
+- Fixed two dead-code warnings, one of which discarded the body of a failed Storage fetch, leaving
+  such failures with no detail in the logs.
+
+**Dependencies and CI:**
+- 7 npm advisories → **0** (`npm audit fix`, plus Next 16.2.9 → 16.3.3 for the `sharp`/libvips
+  CVEs; `next/image` is unused so sharp never ran at runtime). Build verified after the upgrade.
+- Added `.github/workflows/ci.yml`: backend compile + pyflakes, frontend build, and an
+  `npm audit --audit-level=high` gate. Its header states plainly that it is a **build-and-lint
+  gate, not a test suite** — and it makes true a "CI audit gate" that earlier versions of these
+  docs had claimed without building.
+
+**Verified:** `compileall` + `pyflakes` clean (exit 0), `npm run build` clean, `npm audit` clean.
+**Not verified live:** migration 024's effects — it is Clint's paste. **Manual steps:** paste 024;
+enable leaked-password protection in Supabase Auth.
+
 #### Sprint 4.6c — still to build
 
 **Owner clarifications (Clint, 2026-07-11 — this is the product's headline capability):** the

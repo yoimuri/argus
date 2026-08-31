@@ -407,6 +407,19 @@ async def delete_collection(collection_id: str, request: Request):
     # Right-to-erasure (ADR-013): a user-initiated, complete delete of a
     # collection and everything under it — documents, chunks, and the actual
     # uploaded PDF files in Storage, not just DB rows.
+    #
+    # 2026-08-31 audit: every id that reaches a PostgREST filter is validated as
+    # a UUID first. This endpoint, upload_document and list_documents were the
+    # three that skipped it while ten others did it correctly. Honest scope —
+    # this is DEFENCE IN DEPTH, not a patched breach: RLS scopes every row to
+    # the caller, and PostgREST ANDs repeated filters, so an injected `&...`
+    # can only ever narrow a query, never widen it to another user's data. What
+    # it could do is produce malformed filters (500s instead of a clean 404),
+    # and it left the door open for a future query shape where widening IS
+    # possible. Validating here removes the whole class.
+    if not _valid_uuid(collection_id):
+        raise HTTPException(status_code=404, detail="Collection not found.")
+
     owned = await supabase_request(
         "GET", f"collections?id=eq.{collection_id}&user_id=eq.{request.state.user_id}&select=id",
         request.state.access_token,
@@ -444,6 +457,10 @@ async def delete_collection(collection_id: str, request: Request):
 
 @app.post("/collections/{collection_id}/documents")
 async def upload_document(collection_id: str, req: DocumentUploadRequest, request: Request):
+    # See delete_collection for why every interpolated id is UUID-checked.
+    if not _valid_uuid(collection_id):
+        raise HTTPException(status_code=404, detail="Collection not found.")
+
     owned = await supabase_request(
         "GET", f"collections?id=eq.{collection_id}&select=id", request.state.access_token
     )
@@ -526,7 +543,13 @@ async def upload_document(collection_id: str, req: DocumentUploadRequest, reques
         async with httpx.AsyncClient() as client:
             async with client.stream("GET", storage_url, headers=headers) as resp:
                 if resp.status_code != 200:
-                    error_text = await resp.aread()
+                    # The body was already being read but thrown away, so a
+                    # Storage failure left NO detail anywhere -- the user got a
+                    # bare status code and the logs got nothing. Log it (server
+                    # side only; the client keeps the generic message so a
+                    # Storage error can't leak bucket internals).
+                    error_text = (await resp.aread())[:300]
+                    print(f"[ARGUS] storage fetch failed {resp.status_code}: {error_text!r}")
                     raise HTTPException(status_code=400, detail=f"Storage fetch failed ({resp.status_code}).")
 
                 with open(temp_path, "wb") as f:
@@ -672,7 +695,7 @@ async def upload_document(collection_id: str, req: DocumentUploadRequest, reques
             status_code=503,
             detail=f"Embedding service is temporarily unavailable, retry in ~{cb_err.retry_in_s:.0f}s.",
         )
-    except Exception as e:
+    except Exception:
         import traceback
         traceback.print_exc()  # full detail stays in Render's logs only
         await _mark_document_failed(document, request.state.access_token)
@@ -692,6 +715,10 @@ async def upload_document(collection_id: str, req: DocumentUploadRequest, reques
 
 @app.get("/collections/{collection_id}/documents")
 async def list_documents(collection_id: str, request: Request):
+    # See delete_collection for why every interpolated id is UUID-checked.
+    if not _valid_uuid(collection_id):
+        raise HTTPException(status_code=404, detail="Collection not found.")
+
     owned = await supabase_request(
         "GET", f"collections?id=eq.{collection_id}&select=id", request.state.access_token
     )

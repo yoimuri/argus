@@ -1,0 +1,91 @@
+name: CI
+
+# Runs on every push and pull request to main.
+#
+# Scope, stated honestly: this is a BUILD-AND-LINT gate, not a test suite.
+# It proves the backend parses and has no undefined names, the frontend
+# type-checks and builds, and that no dependency carries a known high-severity
+# advisory. It does NOT prove behaviour — ARGUS's real verification is the live
+# walkthrough in docs/ (the agent pipeline needs Groq/HF/Supabase credentials
+# and a real document to mean anything, which is not something to run on every
+# push against free-tier quotas).
+#
+# History note: earlier versions of this project's docs claimed a "CI audit
+# gate" that did not exist. This file is that claim made true, and it is
+# deliberately described as what it is rather than what would sound better.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend:
+    name: Backend — compile + lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install linters
+        # Only the linters. The app's own requirements (langgraph, PyMuPDF,
+        # groq...) are heavy and are not needed to parse or lint the source —
+        # py_compile and pyflakes both work on the AST without importing.
+        run: pip install pyflakes
+
+      - name: Compile every module
+        working-directory: backend
+        run: python -m compileall -q app main.py
+
+      - name: Lint (undefined names, unused imports)
+        working-directory: backend
+        run: python -m pyflakes app main.py
+
+  frontend:
+    name: Frontend — build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build
+        working-directory: frontend
+        # Placeholder values: the build only needs these to exist so
+        # module-level client construction doesn't throw. Every route is
+        # server-rendered on demand (no static prerender reaches Supabase), and
+        # NEXT_PUBLIC_* values are public by definition — the real ones live in
+        # Vercel's project settings and are never needed to prove a build.
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
+          NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: placeholder-anon-key
+          NEXT_PUBLIC_API_URL: https://placeholder.onrender.com
+        run: npm run build
+
+  audit:
+    name: Dependencies — no high-severity advisories
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: npm audit (fails on high or critical)
+        working-directory: frontend
+        run: npm audit --audit-level=high
