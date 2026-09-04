@@ -270,6 +270,38 @@ async def _document_still_exists(document_id, access_token) -> bool:
         return True
 
 
+async def _delete_storage_object(client, storage_path: str, token: str, context: str) -> bool:
+    """Delete one uploaded PDF from Storage, reporting whether it actually went.
+
+    Added 2026-09-04 after finding 65 of 83 stored files orphaned. All three
+    delete paths (single document, whole collection, account purge) had the same
+    shape: `await client.delete(...)` with the result discarded and only
+    transport errors caught. httpx does not raise on 4xx, so an RLS refusal was
+    indistinguishable from success — and RLS refused every time, because
+    storage.objects had no DELETE policy (added in migration 025).
+
+    The file surviving a delete the user asked for is a data-retention failure,
+    not noise, so a non-2xx is logged loudly. Still best-effort by design: the DB
+    delete must proceed regardless, since that is what removes the content from
+    retrieval. Returns True only on a confirmed delete (or an already-gone 404).
+    """
+    try:
+        resp = await client.delete(
+            f"{SUPABASE_URL}/storage/v1/object/documents/{storage_path}",
+            headers={"Authorization": f"Bearer {token}", "apikey": SUPABASE_KEY},
+        )
+        if resp.status_code == 404:
+            return True  # already gone: the desired end state
+        if resp.status_code >= 400:
+            print(f"[ARGUS] STORAGE DELETE FAILED ({context}) {resp.status_code} "
+                  f"for {storage_path}: {resp.text[:200]}")
+            return False
+        return True
+    except Exception as storage_err:
+        print(f"[ARGUS] storage delete error ({context}) for {storage_path}: {storage_err}")
+        return False
+
+
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
@@ -433,6 +465,15 @@ async def delete_collection(collection_id: str, request: Request):
     # Purge the underlying Storage objects first. Best-effort: a missing or
     # already-gone file must not block deleting the DB rows — the DB delete is
     # the part that actually removes the data from RLS-visible access.
+    #
+    # 2026-09-04: this loop USED to swallow HTTP failures completely. httpx does
+    # not raise on a 4xx, and the except clause only caught transport errors, so
+    # a refused delete looked identical to a successful one. It was refused every
+    # single time: storage.objects had no DELETE policy, so RLS denied it. Result
+    # — 65 of 83 stored PDFs were orphaned, still sitting in the bucket after
+    # their owners deleted them, while the code above advertises right-to-erasure.
+    # Migration 025 adds the missing policy; this logs the status so the same
+    # class of silent failure cannot hide again.
     documents = await supabase_request(
         "GET", f"documents?collection_id=eq.{collection_id}&select=storage_path", token,
     )
@@ -441,13 +482,7 @@ async def delete_collection(collection_id: str, request: Request):
             storage_path = doc.get("storage_path")
             if not storage_path:
                 continue
-            try:
-                await client.delete(
-                    f"{SUPABASE_URL}/storage/v1/object/documents/{storage_path}",
-                    headers={"Authorization": f"Bearer {token}", "apikey": SUPABASE_KEY},
-                )
-            except Exception as storage_err:
-                print(f"[ARGUS] could not delete storage object {storage_path}: {storage_err}")
+            await _delete_storage_object(client, storage_path, token, "delete collection")
 
     # Deleting the collection row cascades to documents and document_chunks
     # (on delete cascade in 001_core_schema.sql) — one delete clears the tree.
@@ -781,13 +816,7 @@ async def delete_document(document_id: str, request: Request):
     storage_path = rows[0].get("storage_path")
     if storage_path:
         async with httpx.AsyncClient() as client:
-            try:
-                await client.delete(
-                    f"{SUPABASE_URL}/storage/v1/object/documents/{storage_path}",
-                    headers={"Authorization": f"Bearer {token}", "apikey": SUPABASE_KEY},
-                )
-            except Exception as storage_err:
-                print(f"[ARGUS] could not delete storage object {storage_path}: {storage_err}")
+            await _delete_storage_object(client, storage_path, token, "delete document")
 
     # documents row delete cascades to document_chunks (001_core_schema.sql),
     # which is what stops the old PDF's content from being retrievable.
@@ -1059,13 +1088,7 @@ async def delete_account_data(request: Request):
                 storage_path = doc.get("storage_path")
                 if not storage_path:
                     continue
-                try:
-                    await client.delete(
-                        f"{SUPABASE_URL}/storage/v1/object/documents/{storage_path}",
-                        headers={"Authorization": f"Bearer {token}", "apikey": SUPABASE_KEY},
-                    )
-                except Exception as storage_err:
-                    print(f"[ARGUS] account purge: storage object {storage_path} not deleted: {storage_err}")
+                await _delete_storage_object(client, storage_path, token, "account purge")
         await supabase_request("DELETE", f"collections?id=eq.{coll_id}", token)
 
     await supabase_request("DELETE", f"research_sessions?user_id=eq.{user_id}", token)
