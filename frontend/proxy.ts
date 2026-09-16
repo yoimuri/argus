@@ -12,6 +12,14 @@ const IDLE_TIMEOUT_MS = 30 * 60 * 1000 // 30 minutes
 function isPublicPath(pathname: string): boolean {
   return (
     pathname === '/' ||
+    // Vercel's daily cron calls this with no session, to keep Supabase from
+    // pausing the project (see app/api/keepalive/route.ts). Without this entry
+    // the guard below would bounce it to /login, the handler would never run,
+    // and the database would keep counting toward its 7-day pause while the
+    // cron history showed a redirect that looks harmless.
+    // Matched EXACTLY, never as a prefix: `/api` stays protected as a whole, so
+    // adding a route under it later cannot accidentally inherit public access.
+    pathname === '/api/keepalive' ||
     pathname.startsWith('/login') ||
     pathname.startsWith('/auth')
   )
