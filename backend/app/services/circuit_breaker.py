@@ -96,11 +96,15 @@ class CircuitBreaker:
 # Thresholds from BLUEPRINT.md's breaker table (Groq row).
 groq_breaker = CircuitBreaker("groq", fail_threshold=5, failure_window_s=120, recover_timeout_s=60)
 
-# ADR-012: guards the HF prompt-injection classifier call in injection_guard.py.
-# Separate from groq_breaker because it's a different upstream (HuggingFace, not
-# Groq) with its own independent failure mode — Groq being down shouldn't open
-# this one and vice versa.
-hf_breaker = CircuitBreaker("hf_prompt_guard", fail_threshold=5, failure_window_s=120, recover_timeout_s=60)
+# ADR-012: guards the prompt-injection classifier call in injection_guard.py.
+# Separate from groq_breaker, and STILL separate after the 2026-10-15 migration
+# moved this classifier onto Groq: the point was never "a different vendor", it
+# is that a guard outage and an inference outage are different failure modes.
+# injection_guard.py treats this breaker opening as "skip the AI layer, let
+# regex carry", which must not be triggered by the Q&A pipeline struggling.
+# Renamed from hf_breaker/"hf_prompt_guard" when the provider changed — a name
+# that encodes a vendor goes stale the moment the vendor does.
+injection_guard_breaker = CircuitBreaker("injection_guard", fail_threshold=5, failure_window_s=120, recover_timeout_s=60)
 
 # ADR-017 (Sprint 3b): guards the Tavily web-search call in web_scout.py. Same
 # thresholds as the other two — no scale evidence yet to justify a different
@@ -108,15 +112,15 @@ hf_breaker = CircuitBreaker("hf_prompt_guard", fail_threshold=5, failure_window_
 # never blocks or 500s (see web_scout.py's fail-open path).
 tavily_breaker = CircuitBreaker("tavily", fail_threshold=5, failure_window_s=120, recover_timeout_s=60)
 
-# Sprint 4.1 (D7, BACKLOG 6): guards the HF feature-extraction call in
-# document_processor.py. Deliberately its OWN instance, separate from
-# hf_breaker above -- injection_guard.py:36-41 treats hf_breaker opening as
-# "skip the AI classifier layer, fall back to regex-only", which is a safe
-# degradation for the security guard. Sharing this breaker would mean an
-# embedding-endpoint outage (upload/query embedding calls) could trip that
-# same breaker and silently downgrade the injection guard as a side effect --
-# two unrelated failure modes must not share one circuit.
-hf_embedding_breaker = CircuitBreaker("hf_embedding", fail_threshold=5, failure_window_s=120, recover_timeout_s=60)
+# Sprint 4.1 (D7, BACKLOG 6): guards the embedding call in
+# document_processor.py (Cloudflare Workers AI since 2026-10-15). Deliberately
+# its OWN instance, separate from injection_guard_breaker above -- that breaker
+# opening means "skip the AI classifier layer, fall back to regex-only", a safe
+# degradation for the security guard. Sharing one circuit would let an embedding
+# outage silently downgrade the injection guard as a side effect; two unrelated
+# failure modes must not share one breaker.
+# Renamed from hf_embedding_breaker/"hf_embedding" with the provider move.
+embedding_breaker = CircuitBreaker("embedding", fail_threshold=5, failure_window_s=120, recover_timeout_s=60)
 
 # Sprint 4.5 (ADR-021): guards the Gemini call behind the public project-Q&A
 # chatbot. Its own instance -- a Gemini outage must degrade the chatbot to a

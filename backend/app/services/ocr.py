@@ -11,10 +11,11 @@ chunk pipeline.
 THE CONSTRAINTS THAT SHAPE EVERY NUMBER HERE (verified against Groq's docs on
 2026-08-31, not recalled):
 
-  * Vision models: qwen/qwen3.6-27b (up to 5 images per request) and
-    qwen/qwen3.8-27b (up to 3). We send ONE page per request -- batching pages
-    into one call would make a single failure lose several pages and makes the
-    per-page provenance marker impossible.
+  * Vision model: qwen/qwen3.8-27b (up to 3 images per request). We send ONE
+    page per request -- batching pages into one call would make a single
+    failure lose several pages and makes the per-page provenance marker
+    impossible. (The original qwen/qwen3.6-27b was retired 2026-09-14;
+    re-verified against the live catalog 2026-10-15.)
   * EVERY IMAGE COSTS 2048 INPUT TOKENS, flat, regardless of page content.
   * Free tier, per model: 8,000 tokens/minute, 30 requests/minute, 200,000
     tokens/day.
@@ -45,9 +46,11 @@ from groq import AsyncGroq
 
 from app.services.circuit_breaker import groq_vision_breaker
 
-# Verified available on 2026-08-31 (console.groq.com/docs/vision). Env-overridable
-# so a model deprecation is a config change on Render, not a redeploy.
-VISION_MODEL = os.getenv("GROQ_VISION_MODEL", "qwen/qwen3.6-27b")
+# qwen3.6-27b was RETIRED by Groq on 2026-09-14 and this silently broke OCR for a
+# month (nobody had uploaded a scan). Swapped to its documented replacement,
+# verified present in the live catalog on 2026-10-15. Env-overridable so the next
+# retirement is a config change on Render, not a redeploy.
+VISION_MODEL = os.getenv("GROQ_VISION_MODEL", "qwen/qwen3.8-27b")
 
 # Hard cap on pages OCR'd per document. At ~2-3 pages/minute this bounds a
 # scanned upload to roughly two minutes of vision work. Raising it does not just

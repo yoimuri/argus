@@ -15,7 +15,7 @@ from app.services.document_processor import extract_chunks_with_ocr, iter_embedd
 from app.services.supabase_client import supabase_request
 from app.services.injection_guard import check_query, InjectionDetected
 from app.services.injection_patterns import matches_any
-from app.services.circuit_breaker import groq_breaker, groq_report_breaker, groq_vision_breaker, hf_breaker, hf_embedding_breaker, tavily_breaker, gemini_breaker, CircuitBreakerOpen
+from app.services.circuit_breaker import groq_breaker, groq_report_breaker, groq_vision_breaker, injection_guard_breaker, embedding_breaker, tavily_breaker, gemini_breaker, CircuitBreakerOpen
 from app.services import observability
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -328,8 +328,8 @@ async def circuit_breaker_health(request: Request):
         "groq": await groq_breaker.snapshot(),
         "groq_report": await groq_report_breaker.snapshot(),
         "groq_vision": await groq_vision_breaker.snapshot(),
-        "hf_prompt_guard": await hf_breaker.snapshot(),
-        "hf_embedding": await hf_embedding_breaker.snapshot(),
+        "injection_guard": await injection_guard_breaker.snapshot(),
+        "embedding": await embedding_breaker.snapshot(),
         "tavily": await tavily_breaker.snapshot(),
         "gemini_chat": await gemini_breaker.snapshot(),
         "langfuse": observability.snapshot(),
@@ -985,7 +985,7 @@ async def research(request: Request):
         # HF embedding breaker open (Sprint 4.1, D7/GATE-22): the retriever's
         # embed_query call raises this straight out of the graph -- a clean
         # 503 with a retry hint, not a 500. See circuit_breaker.py for why
-        # embedding gets its own breaker separate from hf_breaker.
+        # embedding gets its own breaker separate from injection_guard_breaker.
         await _mark_session_error(session_id, request.state.access_token)
         raise HTTPException(
             status_code=503,

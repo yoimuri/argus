@@ -15,21 +15,32 @@ interface LangfuseSnapshot {
   disabled: boolean
 }
 
+// Keys mirror /status/breakers exactly. This list had drifted: it was missing
+// groq_report, groq_vision and gemini_chat (added in later sprints), so the SOC
+// page silently under-reported the system's health. Labels are provider-neutral
+// where the provider can change — the 2026-10-15 embedding migration is exactly
+// why "HF embeddings" was the wrong thing to hardcode.
 interface BreakerHealth {
   groq: BreakerSnapshot
-  hf_prompt_guard: BreakerSnapshot
-  hf_embedding: BreakerSnapshot
+  groq_report: BreakerSnapshot
+  groq_vision: BreakerSnapshot
+  injection_guard: BreakerSnapshot
+  embedding: BreakerSnapshot
   tavily: BreakerSnapshot
+  gemini_chat: BreakerSnapshot
   langfuse: LangfuseSnapshot
 }
 
 const POLL_MS = 20_000
 
 const BREAKER_LABELS: Record<keyof Omit<BreakerHealth, 'langfuse'>, string> = {
-  groq: 'Groq (LLM inference)',
-  hf_prompt_guard: 'HF prompt-injection guard',
-  hf_embedding: 'HF embeddings',
+  groq: 'LLM inference (Q&A)',
+  groq_report: 'LLM inference (reports)',
+  groq_vision: 'Vision / OCR',
+  injection_guard: 'Prompt-injection guard',
+  embedding: 'Embeddings',
   tavily: 'Tavily (web search)',
+  gemini_chat: 'Public chatbot',
 }
 
 // Status palette computed via the dataviz skill's validator (docs/PHASE4.md

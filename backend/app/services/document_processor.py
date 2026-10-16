@@ -3,17 +3,47 @@ import re
 import httpx
 import fitz  # PyMuPDF
 
-from app.services.circuit_breaker import hf_embedding_breaker
+from app.services.circuit_breaker import embedding_breaker
 
-HF_TOKEN = os.environ["HF_TOKEN"]
-HF_EMBEDDING_URL = "https://router.huggingface.co/hf-inference/models/sentence-transformers/all-MiniLM-L6-v2/pipeline/feature-extraction"
+# ── Embeddings provider: Cloudflare Workers AI (migrated 2026-10-15) ─────────
+#
+# WHY WE MOVED. Embeddings ran on HuggingFace's serverless Inference API until
+# HF removed the free tier: free accounts now receive ZERO monthly credits, and
+# every call returns `402 Payment Required — "You have no remaining credits."`
+# That did not just stop uploads. embed_query() runs for EVERY sub-query of
+# EVERY question (retriever.py), and embedding failure has no fallback by
+# design, so the whole product was down. Confirmed in production on 2026-10-15:
+# the same resume that indexed into 14 chunks on 2026-08-30 produced 0 chunks
+# and a 500. ARGUS is a free-tier project by requirement, so the fix is a
+# provider with a real free tier, not a subscription.
+#
+# WHY bge-small-en-v1.5 SPECIFICALLY. It outputs **384 dimensions**, the exact
+# width of the existing `vector(384)` pgvector column — so this migration needs
+# NO schema change. That is the whole reason this model was chosen over the
+# larger bge variants (768/1024), which would have forced a column migration on
+# top of everything else.
+#
+# WHAT THIS COSTS US. bge-small is a DIFFERENT model, so its vectors live in a
+# different space from the old all-MiniLM-L6-v2 ones. Old and new vectors cannot
+# be compared, which means every stored chunk must be re-embedded — see
+# `scripts/reembed.py`. The chunk TEXT is already in the database, so that is an
+# in-place batch job, not a re-upload of any PDF.
+CF_ACCOUNT_ID = os.getenv("CF_ACCOUNT_ID", "")
+CF_API_TOKEN = os.getenv("CF_API_TOKEN", "")
+CF_EMBED_MODEL = os.getenv("CF_EMBED_MODEL", "@cf/baai/bge-small-en-v1.5")
+CF_EMBED_URL = (
+    f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}"
+    f"/ai/run/{CF_EMBED_MODEL}"
+)
 
 # Chunking (retuned Sprint 4.8, 2026-08-01 -- ADR-025).
 #
-# WHY 600, not the previous 800: all-MiniLM-L6-v2 has a hard input limit of 256
-# word-pieces and TRUNCATES silently beyond it. 800 characters of ordinary prose
-# is ~200 tokens (fits), but 800 characters of DENSE text -- table rows, a list
-# of names, an ID column, a resume's skills block -- tokenizes far higher,
+# WHY 600, not the previous 800 (reasoning from the ORIGINAL all-MiniLM-L6-v2
+# provider, kept because the conclusion still holds): that model had a hard
+# input limit of 256 word-pieces and TRUNCATED silently beyond it. 800
+# characters of ordinary prose is ~200 tokens (fits), but 800 characters of
+# DENSE text -- table rows, a list of names, an ID column, a resume's skills
+# block -- tokenizes far higher,
 # because names/numbers/codes fragment into several word-pieces each. Those
 # chunks were being embedded from their first ~256 tokens only, so the tail of
 # every dense chunk was invisible to semantic search while still occupying a
@@ -34,6 +64,12 @@ HF_EMBEDDING_URL = "https://router.huggingface.co/hf-inference/models/sentence-t
 #
 # NOTE: chunk size applies at INGEST time. Documents already uploaded keep their
 # old 800-char chunks until they are re-uploaded.
+#
+# 2026-10-15: the provider is now Cloudflare's bge-small-en-v1.5, whose input
+# limit is 512 tokens rather than 256. 600 characters is therefore comfortably
+# inside the window with roughly double the previous headroom, so the value is
+# left alone — it was chosen for the tighter constraint and still satisfies the
+# looser one. Changing it would invalidate every stored chunk for no gain.
 CHUNK_SIZE = 600
 CHUNK_OVERLAP = 200
 EMBED_BATCH_SIZE = 8
@@ -259,80 +295,89 @@ async def extract_chunks_with_ocr(file_path: str) -> tuple[list[str], dict]:
     return all_chunks, summary
 
 
-async def _hf_embedding_once(inputs):
+async def _cf_embed_once(texts: list[str]) -> list[list[float]]:
+    """One Cloudflare Workers AI call. Always sends a LIST and always returns a
+    list of vectors, so the batch and single-text paths share one shape and
+    there is no "sometimes flat, sometimes nested" ambiguity to resolve later
+    (the old HF path had exactly that, and it cost a BACKLOG bug).
+    """
+    if not CF_ACCOUNT_ID or not CF_API_TOKEN:
+        raise ValueError(
+            "CF_ACCOUNT_ID / CF_API_TOKEN are not set — embeddings cannot run. "
+            "Set both on the backend host."
+        )
+
     async with httpx.AsyncClient(timeout=30) as client:
         response = await client.post(
-            HF_EMBEDDING_URL,
-            headers={"Authorization": f"Bearer {HF_TOKEN}"},
-            json={"inputs": inputs},
+            CF_EMBED_URL,
+            headers={"Authorization": f"Bearer {CF_API_TOKEN}"},
+            json={"text": texts},
         )
         response.raise_for_status()
-        result = response.json()
+        payload = response.json()
 
-    # HF's cold start (~20s model load) returns a 200 with an {"error": "..."}
-    # body, which raise_for_status() does not catch. Checked once here so both
-    # callers below (embed_chunks and embed_query) get it for free -- until
-    # Sprint 4.1, embed_chunks had NO validation at all, so this dict would
-    # silently reach iter_embedded_chunk_batches's zip() and iterate the
-    # dict's KEYS as if they were embedding vectors (BACKLOG 6).
-    if isinstance(result, dict) and "error" in result:
-        raise ValueError(f"HF embedding error response: {result['error']}")
-    return result
+    # Cloudflare's v4 envelope is {"success":bool,"errors":[...],"result":{...}}.
+    # A failed call can still return HTTP 200 with success=false, which
+    # raise_for_status() would not catch -- the same class of trap as HF's
+    # cold-start 200-with-an-error-body. Checked explicitly.
+    if not payload.get("success", False):
+        raise ValueError(f"Cloudflare embedding error: {str(payload.get('errors'))[:300]}")
+
+    vectors = (payload.get("result") or {}).get("data")
+    if not isinstance(vectors, list) or not vectors:
+        raise ValueError(f"Cloudflare embedding returned no data: {str(payload)[:300]}")
+
+    # Validate EVERY vector, not just the first. A silently wrong-width vector
+    # poisons retrieval in a way that looks like bad answers rather than an
+    # error, which is the hardest kind of bug to trace back to its cause.
+    for v in vectors:
+        if not isinstance(v, list) or len(v) != EMBED_DIM or not all(isinstance(x, (int, float)) for x in v):
+            raise ValueError(
+                f"Cloudflare embedding returned a vector that is not {EMBED_DIM} floats "
+                f"(got {len(v) if isinstance(v, list) else type(v).__name__}). "
+                f"Check CF_EMBED_MODEL — the pgvector column is vector({EMBED_DIM})."
+            )
+    return vectors
 
 
-async def _hf_embedding_with_retry(inputs):
-    """One retry before raising -- HF cold starts are common enough that a
-    bare first-attempt failure is often transient, not a real outage.
+async def _cf_embed_with_retry(texts: list[str]) -> list[list[float]]:
+    """One retry before raising, for the same reason the HF path had one: a
+    single transient network blip should not count as a provider outage.
 
-    Retries INSIDE this function, which is itself the single unit passed to
-    hf_embedding_breaker.call() by _call_hf_embedding below -- so a real HF
-    outage counts as ONE breaker failure per request, not two. Wrapping it
-    the other way (breaker around each individual attempt) would double-count
-    every real outage and reach the fail_threshold twice as fast as intended.
+    The retry lives INSIDE the unit passed to embedding_breaker.call(), so a
+    real outage counts as ONE breaker failure per request rather than two --
+    wrapping it the other way would trip the threshold twice as fast as
+    intended.
     """
     try:
-        return await _hf_embedding_once(inputs)
+        return await _cf_embed_once(texts)
     except Exception as first_err:
-        print(f"[ARGUS] HF embedding call failed, retrying once: {first_err!r}")
-        return await _hf_embedding_once(inputs)
+        print(f"[ARGUS] embedding call failed, retrying once: {first_err!r}")
+        return await _cf_embed_once(texts)
 
 
-async def _call_hf_embedding(inputs):
-    return await hf_embedding_breaker.call(_hf_embedding_with_retry, inputs)
+async def _call_embedding(texts: list[str]) -> list[list[float]]:
+    return await embedding_breaker.call(_cf_embed_with_retry, texts)
 
 
 async def embed_chunks(chunks: list[str]) -> list[list[float]]:
-    return await _call_hf_embedding(chunks)
+    vectors = await _call_embedding(chunks)
+    # Guard the zip() in iter_embedded_chunk_batches: a short result would
+    # silently drop the tail of a batch, losing chunks with no error at all.
+    if len(vectors) != len(chunks):
+        raise ValueError(
+            f"embedding count mismatch: sent {len(chunks)} chunks, got {len(vectors)} vectors"
+        )
+    return vectors
 
 
 async def embed_query(text: str) -> list[float]:
-    result = await _call_hf_embedding(text)
-
-    # HF's feature-extraction endpoint returns either a flat [384] vector or a
-    # nested [[384]] (a single pooled row) for one input string. Resolve both to the
-    # vector, but only accept a nested shape when it is exactly one row: a multi-row
-    # 2-D array is token-level output (no pooling), which we must NOT silently collapse
-    # to its first token. Leaving vector=None there routes it into the raise below.
-    if isinstance(result, list) and result and isinstance(result[0], list):
-        vector = result[0] if len(result) == 1 else None
-    else:
-        vector = result
-
-    # Fail loud on anything that is not a real 384-float vector. Cold-start returns an
-    # {"error": "...model loading..."} dict, and token-level output returns a multi-row
-    # array; the old code passed either straight through as the "embedding", silently
-    # poisoning retrieval (wrong/garbage vector) or getting rejected downstream as a
-    # confusing empty answer. Raising here surfaces the real cause in the logs instead.
-    # The retriever/synthesizer have no fallback for a bad embedding by design: a broken
-    # embedding must not be allowed to look like "no results".
-    if not isinstance(vector, list) or len(vector) != EMBED_DIM or not all(isinstance(x, (int, float)) for x in vector):
-        preview = repr(result)[:300]
-        raise ValueError(
-            f"embed_query got an unexpected HF response (not a {EMBED_DIM}-float vector). "
-            f"Raw payload preview: {preview}"
-        )
-
-    return vector
+    """Single-text embedding for the retriever. Kept as its own function (same
+    signature as before) so every caller upstream is unchanged by the provider
+    switch. _cf_embed_once already validated the width, so there is no
+    shape-guessing left to do here."""
+    vectors = await _call_embedding([text])
+    return vectors[0]
 
 
 async def iter_embedded_chunk_batches(
