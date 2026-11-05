@@ -70,3 +70,38 @@ escalation, tool description manipulation). No action needed now, Sprint 2.5 is 
 logic only, no real MCP server exists yet. **Check this guidance specifically when Phase
 5's actual MCP server gets built**, not before, it isn't actionable against code that
 doesn't exist yet.
+
+---
+
+## November 5, 2026
+
+Triggered by the October 2026 run of Next.js and dependency advisories. Each one was checked
+against ARGUS's actual code, then patched. Status: 🟡 code-complete, not verified on the live
+app until the update is deployed and re-checked.
+
+### Next.js 16.3.3, critical remote code execution advisories
+
+`npm audit` (frontend) flagged several critical advisories against `next`, including
+GHSA-2464-fhr4-w9xw (image optimizer, through `sharp`), GHSA-673q-mjm6-r5xr (`use cache`
+functions) and GHSA-vcvr-r3jv-pc5j (`next/og`). ARGUS uses none of `use cache`, `next/og`,
+server actions or `next/image` in its own code, so the named triggers were likely not reachable,
+but the advisories say to upgrade regardless and neither one says whether Vercel hosting is
+protected.
+**Verdict: fixed.** Next 16.4.5 and matching `eslint-config-next`, plus `npm audit fix`.
+`npm audit --omit=dev` now reports 0. 8 moderate findings remain in dev-only ESLint tooling, which
+never reaches the deployed app. `npm audit fix --force` was not used. The production build passes.
+
+### PyJWT 2.13.0, 15 advisories
+
+`pip-audit` flagged 15 advisories. PyJWT is what `backend/app/middleware/auth.py` uses to verify
+login tokens, so all of them were read against that file. The serious ones (algorithm confusion,
+empty HMAC keys) need an application that accepts HMAC algorithms or builds keys from
+attacker-supplied material. ARGUS pins `algorithms=["ES256"]` and takes keys from the Supabase
+JWKS endpoint, so those preconditions do not hold here. A few do touch the `PyJWKClient` flow
+ARGUS uses.
+**Verdict: no auth bypass found for this configuration, upgraded anyway to 2.15.0.** `pip-audit`
+now reports no known vulnerabilities. The real middleware was run locally against a fake JWKS
+endpoint: a valid token passed, and wrong audience, expired, wrong signing key, forged HS256,
+unknown key id, a signature with junk characters, a garbage token and a missing header were all
+rejected with 401. The real project JWKS also parses under 2.15.0 and does not redirect, which
+matters because this release range changed redirect handling.

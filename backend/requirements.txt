@@ -1,6 +1,6 @@
 fastapi==0.137.2
 uvicorn[standard]==0.48.0
-PyJWT[crypto]==2.13.0
+PyJWT[crypto]==2.15.0
 # Bumped from 1.24.7 (fix batch #3, ADR-023): CVE-2026-3029 (path traversal /
 # arbitrary file write, fixed in 1.26.7) plus two years of upstream MuPDF
 # parser fixes — this library parses UNTRUSTED user PDFs, so it stays current.
