@@ -45,7 +45,9 @@ the app for reading comfort). No migration.
   your Windows reduced-motion setting (Settings → Accessibility → Visual effects
   → Animation effects OFF), which the old code turned into a blank canvas.
   DECISION (yours): the animation now plays for EVERYONE regardless of that
-  setting — same design for all users, no motion toggle.
+  setting — same design for all users. 2026-11-15: a visible **Animation**
+  switch was added (landing header, login page, dashboard header) as the way
+  out for visitors who don't want motion.
 - Steps: open the deployed landing page on your PC WITHOUT changing any Windows
   setting (leave animations however they are).
 - Expected: the network drifts and pulses, the aurora glows drift, the radar
@@ -55,6 +57,16 @@ the app for reading comfort). No migration.
   The motion is kept gentle (slow drift, soft pulse, no flashing) so it's not a
   hazard, but be aware some visitors set that preference for medical reasons —
   this is a deliberate design choice, documented in CONTINUITY/PHASE4.
+
+**T24 — The Animation switch turns motion off and remembers it (2026-11-15).**
+- Steps: (1) On the landing page, click **Animation** in the header so the
+  switch goes grey. (2) Reload. (3) Open /login, then sign in and open the
+  dashboard. (4) Click the switch again.
+- Expected: (1) the network freezes into one still picture (still visible, not
+  blank) and the aurora glows stop drifting; all sections stay visible.
+  (2) after reload it is still off, with no burst of motion before it settles.
+  (3) the login page and the dashboard header show the same switch, still off,
+  and their background is still. (4) motion comes back everywhere.
 
 **T21 — The animation is actually BOLD, not a faint whisper (2026-07-17).**
 - Steps: with Windows animations ON, open the landing page on the deployed site.

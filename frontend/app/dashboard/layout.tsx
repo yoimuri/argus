@@ -8,6 +8,7 @@ import DeletionNotice from '@/components/settings/DeletionNotice'
 import ChatWidget from '@/components/landing/ChatWidget'
 import SessionKeepAlive from '@/components/auth/SessionKeepAlive'
 import EyeNetworkBackground from '@/components/effects/EyeNetworkBackground'
+import MotionSwitch from '@/components/effects/MotionSwitch'
 
 // D1: shared nav for every /dashboard/* route, hosts the auth check (dual-
 // guard alongside proxy.ts -- see proxy.ts's own comment) so individual
@@ -84,7 +85,8 @@ export default async function DashboardLayout({
             ARGUS
           </Link>
           <DashboardNav />
-          <div className="ml-auto">
+          <div className="ml-auto flex items-center gap-3">
+            <MotionSwitch />
             <ProfileMenu email={user.email ?? 'unknown'} />
           </div>
         </div>

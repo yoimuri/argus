@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useRef } from 'react'
+import { motionIsOff } from '@/components/effects/motion'
 
 // Reveal-on-scroll wrapper for the landing page. See globals.css (.reveal[data-reveal])
 // for the safety design: content is visible by default, this component only arms
@@ -23,8 +24,8 @@ export default function Reveal({
     const el = ref.current
     if (!el) return
 
-    // Reduced motion: reveal immediately, skip the observer entirely.
-    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    // Reduced motion or the motion switch off: reveal immediately, skip the observer entirely.
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches || motionIsOff()) {
       el.setAttribute('data-reveal', 'shown')
       return
     }

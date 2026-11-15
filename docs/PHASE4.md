@@ -1259,6 +1259,12 @@ aurora CSS was un-gated to match. **This overrides an accessibility preference s
 reasons** — mitigated by keeping the motion gentle (slow drift, shallow pulse, no flashing; 28-34s
 aurora) so it isn't a hazard. Flagged to Clint; he chose it knowingly. `renderStatic()` remains as a
 fallback. Verified motion runs under `reducedMotion:'reduce'` (frame hashes differ).
+**Motion switch added 2026-11-15:** motion stays forced on, and a visible **Animation** switch
+(`components/effects/MotionSwitch.tsx`) on the landing header, login page and dashboard header lets a
+visitor turn it off. The choice is saved in `localStorage` (`argus-motion`) and re-applied before paint
+as a `motion-off` class on `<html>`; the canvas draws its `renderStatic()` still frame, and one CSS
+rule stops every other animation and transition. Without this, auto-playing motion longer than 5
+seconds with no way to stop it fails WCAG 2.2.2 (Pause, Stop, Hide). Test: **T24**.
 
 **Hero toned down.** Clint: "transparency shouldn't be too high... not taking the spotlight too much,
 especially on landing." The bold pass over-corrected the faint bug. Hero tuning pulled back

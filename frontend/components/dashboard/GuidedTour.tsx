@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { X, ArrowRight, ArrowLeft, Compass } from 'lucide-react'
+import { motionIsOff } from '@/components/effects/motion'
 
 // Interactive guided tour (Sprint 4.7, #6). A spotlight walkthrough: it dims the
 // app, cuts a "hole" over one real UI element at a time (via a huge box-shadow
@@ -74,7 +75,7 @@ export default function GuidedTour({ className }: { className?: string }) {
       setRect(null)
       return
     }
-    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches || motionIsOff()
     el.scrollIntoView({ block: 'center', behavior: reduce ? 'auto' : 'smooth' })
     setRect(el.getBoundingClientRect())
   }, [i])

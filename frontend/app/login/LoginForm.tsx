@@ -6,6 +6,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { ArrowLeft, Mail, Lock, Loader2, Eye } from 'lucide-react'
 import { createClient } from '@/utils/supabase/client'
 import EyeNetworkBackground from '@/components/effects/EyeNetworkBackground'
+import MotionSwitch from '@/components/effects/MotionSwitch'
 
 export default function LoginForm() {
   const [email, setEmail] = useState('')
@@ -122,13 +123,16 @@ export default function LoginForm() {
       <main className="relative mx-auto flex w-full max-w-sm flex-1 flex-col justify-center px-4 py-16">
       {/* Back to the public landing page (live review 2026-07-11: the login
           page was a dead end). */}
-      <Link
-        href="/"
-        className="mb-6 inline-flex items-center gap-1.5 text-xs text-ink-muted transition-colors hover:text-ink"
-      >
-        <ArrowLeft size={14} strokeWidth={1.75} aria-hidden />
-        Back to ARGUS
-      </Link>
+      <div className="mb-6 flex items-center justify-between gap-3">
+        <Link
+          href="/"
+          className="inline-flex items-center gap-1.5 text-xs text-ink-muted transition-colors hover:text-ink"
+        >
+          <ArrowLeft size={14} strokeWidth={1.75} aria-hidden />
+          Back to ARGUS
+        </Link>
+        <MotionSwitch />
+      </div>
 
       <div className="rise rounded-2xl border border-hairline bg-surface-raised p-6 shadow-sm">
         <div className="mb-5 flex flex-col items-center text-center">

@@ -6,6 +6,7 @@ import ContactModal from '@/components/landing/ContactModal'
 import ChatWidget from '@/components/landing/ChatWidget'
 import EyeNetworkBackground from '@/components/effects/EyeNetworkBackground'
 import AuroraGlow from '@/components/effects/AuroraGlow'
+import MotionSwitch from '@/components/effects/MotionSwitch'
 
 // The public landing page (Sprint 4.4, D12). Until now `/` force-redirected to
 // `/dashboard`, so anyone without an account -- a recruiter following the repo
@@ -111,6 +112,7 @@ export default async function Landing() {
             </a>
           </nav>
           <div className="ml-auto flex items-center gap-3">
+            <MotionSwitch />
             <AuthLink
               initialAuthed={authed}
               authedLabel="Go to dashboard →"

@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from 'react'
 import { useTheme } from '@/components/theme/ThemeProvider'
+import { motionIsOff, useMotionOff } from './motion'
 
 // The signature animated background, v4 (two CHARACTERS, 2026-07-17).
 //
@@ -164,6 +165,7 @@ export default function EyeNetworkBackground({
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const { resolvedTheme: appTheme } = useTheme()
   const resolvedTheme = theme ?? appTheme
+  const motionOff = useMotionOff()
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -181,10 +183,15 @@ export default function EyeNetworkBackground({
     // system's own prefers-color-scheme reads). We only stop obeying
     // reduced-motion for THIS canvas. Guardrail: the field is deliberately
     // gentle (slow drift, shallow pulse, no flashing) so "always on" is never a
-    // seizure/vestibular hazard. renderStatic() stays as a fallback.
+    // seizure/vestibular hazard. 2026-11-15: the visible MotionSwitch is the
+    // way out -- when a visitor turns animation off, this draws one still
+    // frame (renderStatic) instead of animating.
     const FORCE_MOTION = true
+    // Reads the class directly (not just the hook value) so the very first run
+    // after a reload with "off" saved is already still, with no motion frame.
+    // `motionOff` stays in the deps so flipping the switch re-runs this.
     const reduceMotion = FORCE_MOTION
-      ? false
+      ? motionIsOff()
       : window.matchMedia('(prefers-reduced-motion: reduce)').matches
 
     const tuning = TUNING[intensity]
@@ -529,7 +536,7 @@ export default function EyeNetworkBackground({
       window.removeEventListener('mousemove', onMouseMove)
       document.documentElement.removeEventListener('mouseleave', onMouseLeave)
     }
-  }, [intensity, resolvedTheme])
+  }, [intensity, resolvedTheme, motionOff])
 
   return (
     <canvas

@@ -320,6 +320,30 @@ body {
 .aurora-a { animation: aurora-a 28s ease-in-out infinite; }
 .aurora-b { animation: aurora-b 34s ease-in-out infinite; }
 
+/* Motion switch OFF (2026-11-15, components/effects/MotionSwitch.tsx): the
+   visitor's way out of the forced motion. Stops every CSS animation and
+   transition on the page. `animation: none` (not the 0.01ms trick) so nothing
+   is left parked on an invisible first keyframe: .rise only fades inside its
+   keyframe, so with no animation it simply shows. Reveal sections are forced
+   visible for the same reason. The canvas network reads the same class in JS. */
+html.motion-off { scroll-behavior: auto; }
+.motion-off *,
+.motion-off *::before,
+.motion-off *::after {
+  animation: none !important;
+  transition-duration: 0s !important;
+  scroll-behavior: auto !important;
+}
+.motion-off .reveal[data-reveal] {
+  opacity: 1 !important;
+  transform: none !important;
+}
+.motion-off .animate-\[report-progress_1\.6s_ease-in-out_infinite\] {
+  transform: none;
+  width: 100%;
+  opacity: 0.5;
+}
+
 /* Skeleton shimmer: a light sweep across a token-coloured block, calmer than a
    hard pulse for >300ms loads (ui-ux-pro-max progressive-loading). */
 @keyframes shimmer { 100% { transform: translateX(100%); } }

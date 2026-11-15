@@ -35,6 +35,11 @@ export const metadata: Metadata = {
 // just no longer what new visitors start on.
 const THEME_INIT_SCRIPT = `(function(){try{var t=localStorage.getItem("argus-theme");var pref=(t==="light"||t==="dark"||t==="system")?t:"dark";var resolved=(pref==="light"||pref==="dark")?pref:(window.matchMedia&&window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light");document.documentElement.setAttribute("data-theme",resolved);document.documentElement.setAttribute("data-theme-pref",pref)}catch(e){}})();`;
 
+// Motion switch (components/effects/motion.ts): re-applies a saved "animation
+// off" choice before paint, so the page never flashes motion first. Must match
+// MOTION_KEY / MOTION_OFF_CLASS there.
+const MOTION_INIT_SCRIPT = `(function(){try{if(localStorage.getItem("argus-motion")==="off")document.documentElement.classList.add("motion-off")}catch(e){}})();`;
+
 export default async function RootLayout({
   children,
 }: Readonly<{
@@ -55,6 +60,7 @@ export default async function RootLayout({
     >
       <head>
         <script nonce={nonce} dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
+        <script nonce={nonce} dangerouslySetInnerHTML={{ __html: MOTION_INIT_SCRIPT }} />
       </head>
       <body className="min-h-full flex flex-col">
         <ThemeProvider>{children}</ThemeProvider>
